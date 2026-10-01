@@ -1,0 +1,23 @@
+{
+  "name": "jellytank",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "gen": "python3 tools/gen.py",
+    "riv:verify": "python3 tools/gen.py && ${RIVE:-$HOME/.rive/bin/rive} rive --verify",
+    "riv:build": "python3 tools/gen.py && ${RIVE:-$HOME/.rive/bin/rive} rive --once && cp rive/build/jellytank.riv public/jellytank.riv",
+    "riv:shot": "python3 tools/gen.py && ${RIVE:-$HOME/.rive/bin/rive} rive --screenshot --advance=60",
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.0"
+  },
+  "dependencies": {
+    "@rive-app/webgl2": "^2.42.1"
+  }
+}

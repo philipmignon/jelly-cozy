@@ -6957,6 +6957,16 @@ def journal_portrait(k, p):
     return m
 
 
+def hw_ghost_portrait(k):
+    """The ghost morph as the tank draws it: the usual tentacles faded back (HW_GHOST_FADE) under the Ghost bell."""
+    m = Px()
+    for (x, y), c in species_tent(k, 3, 0, TR_NEUTRAL, "h").d.items():
+        m.over(x, y, (*c[:3], round(c[3] * HW_GHOST_FADE)))
+    for (x, y), c in species_body(k, 3, 0, "g").d.items():
+        m.over(x, y, c)
+    return m
+
+
 def data_url(px):
     import base64
     x0, y0, x1, y1 = px.bbox()
@@ -6969,6 +6979,7 @@ for k in range(len(SPECIES)):
     port = journal_portrait(k, "h")
     journal_art[str(k)] = data_url(port)
     journal_art[f"{k}m"] = data_url(journal_portrait(k, "m"))
+    journal_art[f"{k}g"] = data_url(hw_ghost_portrait(k))  # ---- Halloween event ---- the journal's ghost row
     sil = Px()  # a dark silhouette: the body solid (even glassy ones), strands as they are, a touch firmer
     body = species_body(k, 3, 0, "h")
     for (x, y), c in port.d.items():

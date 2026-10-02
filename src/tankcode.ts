@@ -14,6 +14,8 @@
  * Zero bits pad to a whole byte, then a 16-bit Fletcher checksum; the bytes go out as base64url.
  * v11: a tank with a theme other than the Reef writes version 2, which adds the theme after the tier;
  * a Reef tank still writes version 1, so its code is exactly what it was before themes.
+ * v12: a tank with a ghost morph (morph id 2) writes version 3 (Reef) or 4 (themed): each jelly's morph is
+ * 2 bits (its id) instead of 1. Tanks without one keep versions 1 and 2, so their codes don't change.
  */
 import { DECOR_N, HELPER_N, MAX_SLOTS, P, POLYP_ANCHORS, SETTLE_SPOTS, SPECIES_N, THEME_N, TIER_N, UPSIDE, decorClampX, maxJelliesOf } from "./species";
 import { NAMES, cleanName } from "./names";
@@ -21,6 +23,11 @@ import { NAMES, cleanName } from "./names";
 export const CODE_VERSION = 1;
 /** v11: codes for themed tanks */
 export const CODE_VERSION_THEMED = 2;
+/** v12: codes with 2-bit morph ids (a ghost in the tank), Reef and themed */
+export const CODE_VERSION_MORPHS = 3;
+export const CODE_VERSION_MORPHS_THEMED = 4;
+/** v12: morph ids a code carries (0 none, 1 classic, 2 ghost) */
+const MORPH_IDS = 3;
 /** Characters a custom name packs in 6 bits; anything else costs 27. */
 export const NAME_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ";
 const ESC = 63;
@@ -29,7 +36,8 @@ export interface CodeJelly {
   slot: number;
   k: number;
   g: number;
-  morph: boolean;
+  /** v12: morph id, 0 none, 1 classic, 2 ghost (v7..v11: a boolean, true = classic) */
+  morph: number;
   /** polyp: its rock anchor; settled upside-down (juvenile/adult): its sand spot; otherwise -1 */
   place: number;
   name: string;
@@ -186,6 +194,7 @@ export function validTank(t: TankCode): boolean {
     slots.add(j.slot);
     if (!Number.isInteger(j.k) || j.k < 0 || j.k >= SPECIES_N || !Number.isInteger(j.g) || j.g < 0 || j.g > 3) return false;
     if (cleanName(j.name) !== j.name) return false;
+    if (!Number.isInteger(j.morph) || j.morph < 0 || j.morph >= MORPH_IDS) return false;
     if (j.g === 0) {
       const a = POLYP_ANCHORS[j.place];
       if (!a || a.tier > t.tier || anchors.has(j.place)) return false;
@@ -204,7 +213,8 @@ export function encodeTank(t: TankCode): string {
   if (!validTank(t)) throw new Error("not a valid tank");
   const w = new Bits();
   const theme = t.theme ?? 0;
-  w.put(theme ? CODE_VERSION_THEMED : CODE_VERSION, 4);
+  const wide = t.jellies.some((j) => j.morph > 1);
+  w.put(wide ? (theme ? CODE_VERSION_MORPHS_THEMED : CODE_VERSION_MORPHS) : theme ? CODE_VERSION_THEMED : CODE_VERSION, 4);
   w.put(t.tier, 2);
   if (theme) w.put(theme, 2);
   for (let i = 0; i < HELPER_N; i++) w.put(t.helpers[i] ? 1 : 0, 1);
@@ -216,7 +226,8 @@ export function encodeTank(t: TankCode): string {
     w.put(j.slot, 3);
     w.put(j.k, 4);
     w.put(j.g, 2);
-    w.put(j.morph ? 1 : 0, 1);
+    if (wide) w.put(j.morph, 2);
+    else w.put(j.morph ? 1 : 0, 1);
     if (hasPlace(j.k, j.g)) w.put(j.place, 3);
     putName(w, j.name);
   }
@@ -235,11 +246,13 @@ export function decodeTank(code: unknown): TankCode | null {
   try {
     const r = new Reader(bytes);
     const version = r.get(4);
-    if (version !== CODE_VERSION && version !== CODE_VERSION_THEMED) return null;
+    if (version < CODE_VERSION || version > CODE_VERSION_MORPHS_THEMED) return null;
+    const themed = version === CODE_VERSION_THEMED || version === CODE_VERSION_MORPHS_THEMED;
+    const wide = version >= CODE_VERSION_MORPHS;
     const tier = r.get(2);
-    const theme = version === CODE_VERSION_THEMED ? r.get(2) : 0;
-    // one spelling per code: a Reef tank is always written as version 1
-    if (version === CODE_VERSION_THEMED && theme === 0) return null;
+    const theme = themed ? r.get(2) : 0;
+    // one spelling per code: a Reef tank is always written as version 1 (or 3)
+    if (themed && theme === 0) return null;
     const helpers = Array.from({ length: HELPER_N }, () => r.get(1) === 1);
     const owned = Array.from({ length: DECOR_N }, () => r.get(1) === 1);
     const decor = owned.map((o) => (o ? r.get(9) * P : null));
@@ -249,13 +262,16 @@ export function decodeTank(code: unknown): TankCode | null {
       const slot = r.get(3);
       const k = r.get(4);
       const g = r.get(2);
-      const morph = r.get(1) === 1;
+      const morph = r.get(wide ? 2 : 1);
+      if (morph >= MORPH_IDS) return null;
       const place = hasPlace(k, g) ? r.get(3) : -1;
       const name = getName(r);
       if (name === null) return null;
       jellies.push({ slot, k, g, morph, place, name });
     }
     if (!r.done()) return null;
+    // ...and 2-bit morphs only when there's a ghost to carry
+    if (wide !== jellies.some((j) => j.morph > 1)) return null;
     for (let i = 1; i < jellies.length; i++) if (jellies[i]!.slot <= jellies[i - 1]!.slot) return null;
     const t: TankCode = theme ? { tier, theme, helpers, decor, jellies } : { tier, helpers, decor, jellies };
     return validTank(t) ? t : null;

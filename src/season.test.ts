@@ -3,6 +3,7 @@ import {
   GHOST_MORPH, SEASONS, SEASON_DECOR_KEY, activeSeason, inSeason, readSeasonDecor, seasonAt, seasonOverride, seasonalMorph,
   writeSeasonDecor, type Season,
 } from "./season";
+import { MORPH_GHOST } from "./species";
 
 const at = (y: number, m: number, d: number, h = 12) => new Date(y, m - 1, d, h).getTime();
 
@@ -55,6 +56,7 @@ describe("seasons", () => {
 
   it("seasonalMorph: the ghost (2) during Halloween, else null", () => {
     expect(GHOST_MORPH).toBe(2);
+    expect(GHOST_MORPH).toBe(MORPH_GHOST); // season.ts and the sim's morph ids agree
     expect(seasonalMorph(at(2026, 10, 20))).toBe(2);
     expect(seasonalMorph(new Date(2026, 10, 2))).toBe(2);
     expect(seasonalMorph(at(2026, 12, 20))).toBe(null);

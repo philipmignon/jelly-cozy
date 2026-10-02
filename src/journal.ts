@@ -4,14 +4,15 @@
  * the facts live here.
  */
 import { SPECIES_NAMES } from "./species";
-import { FOOD_NAMES, favouriteFood, type Species } from "./sim";
+import { FOOD_NAMES, MORPH_CLASSIC, MORPH_GHOST, favouriteFood, morphSeen, type Species } from "./sim";
 
 export interface JournalPage {
   seen: boolean;
   raised: number;
   firstAdultAt: number | null;
   firstName: string | null;
-  morphSeen: boolean;
+  /** v12: a bitmask of the morph ids raised (morphSeen(page, id)) */
+  morphSeen: number;
 }
 
 /** One real fact per species, plain and short. */
@@ -30,6 +31,16 @@ const MORPHS = [
   "Golden moon", "Midnight blubber", "Albino", "Gold comb", "Strawberry", "Pastel nettle",
   "Sapphire crystal", "Neon flower hat", "Blue lion's mane",
 ];
+/** v12: the seasonal ghost morph's name per species ("Ghost moon"). */
+const GHOSTS = [
+  "Ghost moon", "Ghost blubber", "Ghost upside-down", "Ghost comb", "Ghost fried egg", "Ghost nettle",
+  "Ghost crystal", "Ghost flower hat", "Ghost lion's mane",
+];
+/** v12: the morph rows, in order: id, label, names, portrait key suffix (ART[`${k}${suffix}`]). */
+const MORPH_ROWS = [
+  { id: MORPH_CLASSIC, label: "Rare colour", names: MORPHS, art: "m" },
+  { id: MORPH_GHOST, label: "Ghost colour", names: GHOSTS, art: "g" },
+] as const;
 
 // the portraits are generated; until they exist the book shows a placeholder dot
 const ART: Record<string, string> = (() => {
@@ -67,7 +78,12 @@ const CSS = `
 .jt-book-fact { margin: 0; color: #45261a; }
 .jt-book-stats { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; margin: 0; color: #693c24; text-transform: uppercase; font-size: 11px; }
 .jt-book-stats dd { margin: 0; color: #2b1712; }
-.jt-book-morph { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 2px dashed #d9bf94; border-radius: 6px; font-size: 11px; text-transform: uppercase; color: #8e5632; }
+.jt-book-morphs { display: grid; gap: 4px; }
+.jt-book-morphs[hidden] { display: none; }
+.jt-book-morph { display: flex; align-items: center; gap: 8px; min-height: 24px; padding: 4px 8px; border: 2px dashed #d9bf94; border-radius: 6px; font-size: 11px; text-transform: uppercase; color: #8e5632; }
+.jt-book-morph b { font-weight: normal; color: #a78560; }
+.jt-book-morph.found b { color: #8e5632; }
+.jt-book-morph.ghost.found { border-color: #8f86c8; color: #3c3466; background: #ece8ff; }
 .jt-book-morph img { image-rendering: pixelated; }
 .jt-book-morph.found { border-style: solid; border-color: #e09a28; color: #6b3a12; background: #fff2c8; }
 .jt-book-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -105,7 +121,7 @@ export function createJournal(pages: () => JournalPage[]): Journal {
     <h3 class="jt-book-name"></h3>
     <p class="jt-book-fact"></p>
     <dl class="jt-book-stats"></dl>
-    <div class="jt-book-morph"><img alt=""><span></span></div>
+    <div class="jt-book-morphs">${MORPH_ROWS.map((m) => `<div class="jt-book-morph${m.id === MORPH_GHOST ? " ghost" : ""}"><img alt=""><span><b>${m.label}:</b> <i></i></span></div>`).join("")}</div>
     <div class="jt-book-nav"><button type="button" class="prev" aria-label="Previous page">&lt;</button>
       <div><div class="jt-book-dots"></div><div class="jt-book-count"></div></div>
       <button type="button" class="next" aria-label="Next page">&gt;</button></div>
@@ -122,11 +138,11 @@ export function createJournal(pages: () => JournalPage[]): Journal {
     };
   };
   fit($<HTMLImageElement>(".jt-book-plate img"), 260, 156);
-  fit($<HTMLImageElement>(".jt-book-morph img"), 60, 40);
+  book.querySelectorAll<HTMLImageElement>(".jt-book-morph img").forEach((img) => fit(img, 60, 40));
 
   const render = () => {
     const all = pages();
-    const p = all[page] ?? { seen: false, raised: 0, firstAdultAt: null, firstName: null, morphSeen: false };
+    const p = all[page] ?? { seen: false, raised: 0, firstAdultAt: null, firstName: null, morphSeen: 0 };
     const known = p.seen;
     const plate = $<HTMLElement>(".jt-book-plate");
     plate.classList.toggle("unknown", !known);
@@ -146,13 +162,18 @@ export function createJournal(pages: () => JournalPage[]): Journal {
     $<HTMLElement>(".jt-book-stats").replaceChildren(
       ...stats.flatMap(([k, v]) => [Object.assign(document.createElement("dt"), { textContent: k }), Object.assign(document.createElement("dd"), { textContent: v })]),
     );
-    const morph = $<HTMLElement>(".jt-book-morph");
-    morph.hidden = !known;
-    morph.classList.toggle("found", p.morphSeen);
-    const mimg = $<HTMLImageElement>(".jt-book-morph img");
-    mimg.hidden = !p.morphSeen || !ART[`${page}m`];
-    mimg.src = ART[`${page}m`] ?? "";
-    $<HTMLElement>(".jt-book-morph span").textContent = p.morphSeen ? `Rare colour found: ${MORPHS[page]}` : "A rare colour exists. Keep raising them.";
+    // v12: one row per morph: its name and portrait once one has been raised, "???" until then
+    $<HTMLElement>(".jt-book-morphs").hidden = !known;
+    book.querySelectorAll<HTMLElement>(".jt-book-morph").forEach((row, i) => {
+      const m = MORPH_ROWS[i]!;
+      const found = morphSeen(p, m.id);
+      const art = ART[`${page}${m.art}`];
+      row.classList.toggle("found", found);
+      const mimg = row.querySelector("img") as HTMLImageElement;
+      mimg.hidden = !found || !art;
+      mimg.src = found && art ? art : "";
+      (row.querySelector("i") as HTMLElement).textContent = found ? m.names[page] ?? "" : "???";
+    });
     $<HTMLElement>(".jt-book-dots").replaceChildren(
       ...all.map((q, i) => {
         const d = document.createElement("i");

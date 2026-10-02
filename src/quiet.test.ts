@@ -38,11 +38,11 @@ const run = (s: State, seconds: number, dt = 1 / 60) => {
 };
 const count = (events: SimEvent[], type: string, slot?: number) => events.filter((e) => e.type === type && (slot === undefined || e.slot === slot)).length;
 const jelly = (k: Species, g: Stage, extra: Partial<SaveJelly> = {}): SaveJelly => ({
-  k, g, gp: [0, 4, 12, 30][g]!, care: 0, fullness: 0.7, affection: 0.4, anchor: -1, spot: -1, name: "Mochi", born: 0, content: 0, morph: false,
+  k, g, gp: [0, 4, 12, 30][g]!, care: 0, fullness: 0.7, affection: 0.4, anchor: -1, spot: -1, name: "Mochi", born: 0, content: 0, morph: 0,
   ...extra,
 });
 const tank = (slots: (SaveJelly | null)[], extra: Partial<Save> = {}): Save => ({
-  v: 9, foods: [true, false, false], themes: [true, false, false, false], theme: 0,
+  v: 10, foods: [true, false, false], themes: [true, false, false, false], theme: 0,
   slots: Array.from({ length: 7 }, (_, i) => slots[i] ?? null),
   dollars: 0, murk: 0, spots: [], night: false, lamp: null,
   owned: [false, false, false, false, false], helpers: [false, false, false], decorX: DECOR.map((d) => d.x),

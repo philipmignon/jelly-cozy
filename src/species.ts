@@ -573,6 +573,15 @@ export const CRAB_SPEED = 11;
 export const NAME_MAX = 12;
 /** v7: a new jelly (a baby, or a bought polyp) is a rare colour morph this often. ?fast=1 doesn't change it. */
 export const MORPH_CHANCE = 0.1;
+/** v12 morph ids (SaveJelly.morph): 0 none, 1 classic (the v7 rare palette), 2 ghost (the Halloween palette). */
+export const MORPH_NONE = 0;
+export const MORPH_CLASSIC = 1;
+export const MORPH_GHOST = 2;
+export const MORPH_IDS = 3;
+/** v12: a morph parent's baby is the same morph this often (otherwise it rolls like a plain parent's). */
+export const MORPH_INHERIT = 0.5;
+/** v12: while a season offers a morph (SimOptions.seasonalMorph), a baby that rolled plain is that morph this often. */
+export const SEASON_MORPH_CHANCE = 0.08;
 
 // ---------------------------------------------------------------- polish round
 

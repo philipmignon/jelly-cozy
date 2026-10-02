@@ -139,13 +139,13 @@ const jelly = (k: Species, g: Stage, extra: Partial<SaveJelly> = {}): SaveJelly 
   name: "Mochi",
   born: 0,
   content: 0,
-  morph: false,
+  morph: 0,
   ...extra,
 });
 /** v8: a save's glass carries spots adding up to its murk (default 0.1) unless `spots` is given */
 const spotsFor = (murk: number, tier = 0) => spotsForMurk(murk, glassRightOf(TIERS[tier]!.worldW), seeded(77)).map(({ x, y, dirt, v }) => ({ x, y, dirt, v }));
 const tank = (slots: (SaveJelly | null)[], extra: Partial<Save> = {}): Save => ({
-  v: 9,
+  v: 10,
   foods: [true, false, false],
   themes: [true, false, false, false],
   theme: 0,
@@ -658,7 +658,7 @@ describe("shop", () => {
 describe("saves", () => {
   it("a new game is one moon polyp and no dollars", () => {
     const save = loadSave(null, 5000);
-    expect(save.v).toBe(9);
+    expect(save.v).toBe(10);
     expect(save.dollars).toBe(0);
     expect(save.slots.length).toBe(7);
     expect(save.slots[0]).toMatchObject({ k: 0, g: 0, anchor: 0 });
@@ -672,7 +672,7 @@ describe("saves", () => {
   it("migrates a v1 save to one adult moon plus a 10-dollar welcome", () => {
     const v1 = { v: 1 as const, fullness: 0.55, murk: 0.2, affection: 0.66, night: true, lastSeen: 1000 };
     const save = migrateV1(v1);
-    expect(save).toMatchObject({ v: 9, dollars: 10, night: true, lastSeen: 1000, tier: 0, cam: 0 });
+    expect(save).toMatchObject({ v: 10, dollars: 10, night: true, lastSeen: 1000, tier: 0, cam: 0 });
     // v8: the old murk becomes a few spots on the glass that add up to it
     expect(save.murk).toBeCloseTo(0.2, 9);
     expect(save.spots.length).toBeGreaterThan(0);
@@ -1242,7 +1242,7 @@ describe("saves v3", () => {
       lastSeen: now,
     };
     const save = loadSave(JSON.stringify(v2), now);
-    expect(save).toMatchObject({ v: 9, dollars: 77, helpers: [false, false, false], pearlDay: "", owned: [true, false, false, true, false], tier: 0, cam: 0 });
+    expect(save).toMatchObject({ v: 10, dollars: 77, helpers: [false, false, false], pearlDay: "", owned: [true, false, false, true, false], tier: 0, cam: 0 });
     expect(save.decorX).toEqual(DECOR.map((d) => d.x));
     const [a, b] = [save.slots[0]!, save.slots[1]!];
     expect(a).toMatchObject({ k: 0, g: 3, born: now, content: 0, fullness: 0.8 });
@@ -1259,7 +1259,7 @@ describe("saves v3", () => {
   it("migrates a v1 save straight to v5", () => {
     const v1 = { v: 1, fullness: 0.55, murk: 0.2, affection: 0.66, night: false, lastSeen: 1000 };
     const save = loadSave(JSON.stringify(v1), 5000);
-    expect(save).toMatchObject({ v: 9, dollars: 10, helpers: [false, false, false], pearlDay: "", tier: 0, cam: 0 });
+    expect(save).toMatchObject({ v: 10, dollars: 10, helpers: [false, false, false], pearlDay: "", tier: 0, cam: 0 });
     expect(save.decorX).toEqual(DECOR.map((d) => d.x));
     expect(save.slots[0]).toMatchObject({ k: 0, g: 3, born: 5000, content: 0 });
     expect(NAMES).toContain(save.slots[0]!.name);
@@ -2363,7 +2363,7 @@ describe("v5: saves", () => {
   it("migrates a v4 save (v: 3 or 4) to v5: small tank, camera at 0", () => {
     for (const v of [3, 4]) {
       const save = loadSave(JSON.stringify(v4({ v })), 1000);
-      expect(save).toMatchObject({ v: 9, tier: 0, cam: 0, dollars: 88, helpers: [false, true, false] });
+      expect(save).toMatchObject({ v: 10, tier: 0, cam: 0, dollars: 88, helpers: [false, true, false] });
       expect(save.slots.length).toBe(7);
       expect(save.slots[0]).toMatchObject({ name: "Pudding", k: 0, g: 3 });
       expect(save.slots[1]).toMatchObject({ name: "Taffy", anchor: 1 });
@@ -2377,7 +2377,7 @@ describe("v5: saves", () => {
     const s = createState(tank([jelly(0, 3)], { tier: 2, dollars: 5 }), seeded());
     panBy(s, -363);
     const saved = toSave(s, 10);
-    expect(saved).toMatchObject({ v: 9, tier: 2, cam: -363 });
+    expect(saved).toMatchObject({ v: 10, tier: 2, cam: -363 });
     const loaded = loadSave(JSON.stringify(saved), 10);
     expect(loaded).toEqual(saved);
     expect(camX(createState(loaded, seeded()))).toBe(-363);
@@ -2394,7 +2394,7 @@ describe("v5: saves", () => {
 
   it("the demo save is still the small tank and still works", () => {
     const save = demoSave(at(14));
-    expect(save).toMatchObject({ v: 9, tier: 0, cam: 0 });
+    expect(save).toMatchObject({ v: 10, tier: 0, cam: 0 });
     const s = createState(loadSave(JSON.stringify(save), at(14)), seeded());
     expect([view(s).wallX, view(s).camX, view(s).panL, view(s).panR]).toEqual([720, 0, 0, 0]);
     feed(s);
@@ -2545,22 +2545,22 @@ describe("v7: colour morphs", () => {
       const s = createState(tank([jelly(0, 3, { fullness: 1, affection: 1, content: BABY_SECONDS - 0.01 })], { murk: 0 }), () => r);
       const ev = run(s, 0.1);
       expect(count(ev, "baby")).toBe(1);
-      expect(s.slots[1]!.morph).toBe(want);
+      expect(s.slots[1]!.morph).toBe(want ? 1 : 0);
     }
   });
 
   it("a morph is fixed for life: it grows, saves and loads as a morph", () => {
-    const s = createState(tank([jelly(5, 0, { anchor: 0, morph: true })]), seeded());
+    const s = createState(tank([jelly(5, 0, { anchor: 0, morph: 1 })]), seeded());
     s.slots[0]!.gp = 30;
     run(s, 1);
     expect(s.slots[0]!.g).toBe(3);
     const back = createState(loadSave(JSON.stringify(toSave(s, 0)), 0), seeded());
-    expect(back.slots[0]!.morph).toBe(true);
-    expect(jellyInfo(back, 0)!.morph).toBe(true);
+    expect(back.slots[0]!.morph).toBe(1);
+    expect(jellyInfo(back, 0)!.morph).toBe(1);
   });
 
   it("view: morph = 1 and healthy = 0 for a morph; pale overrides; flush draws over it", () => {
-    const s = createState(tank([jelly(1, 3, { morph: true, fullness: 1, affection: 1 }), jelly(1, 3, { fullness: 1, affection: 1 })], { murk: 0 }), seeded());
+    const s = createState(tank([jelly(1, 3, { morph: 1, fullness: 1, affection: 1 }), jelly(1, 3, { fullness: 1, affection: 1 })], { murk: 0 }), seeded());
     let v = view(s);
     expect([v.j0morph, v.j0healthy, v.j0pale]).toEqual([1, 0, 0]);
     expect([v.j1morph, v.j1healthy, v.j1pale]).toEqual([0, 1, 0]);
@@ -2579,8 +2579,8 @@ describe("v7: colour morphs", () => {
     const old = { ...tank([jelly(0, 3), jelly(3, 1)]), v: 5 } as Record<string, unknown>;
     delete old.journal;
     const save = loadSave(JSON.stringify(old), 0);
-    expect(save.v).toBe(9);
-    expect(save.slots.filter(Boolean).map((j) => j!.morph)).toEqual([false, false]);
+    expect(save.v).toBe(10);
+    expect(save.slots.filter(Boolean).map((j) => j!.morph)).toEqual([0, 0]);
   });
 });
 
@@ -2591,8 +2591,8 @@ describe("v7: the jelly journal", () => {
     const s = createState(tank([jelly(0, 3, { name: "Pudding" })], { dollars: 1000, lastSeen: T0 }), () => 0.5);
     let jn = journal(s);
     expect(jn.length).toBe(9);
-    expect(jn[0]).toMatchObject({ seen: true, morphSeen: false });
-    expect(jn[1]).toEqual({ seen: false, raised: 0, firstAdultAt: null, firstName: null, morphSeen: false });
+    expect(jn[0]).toMatchObject({ seen: true, morphSeen: 0 });
+    expect(jn[1]).toEqual({ seen: false, raised: 0, firstAdultAt: null, firstName: null, morphSeen: 0 });
     buy(s, 0); // a blubber polyp
     expect(journal(s)[1]!.seen).toBe(true);
     const b = s.slots.findIndex((j) => j?.k === 1);
@@ -2609,11 +2609,11 @@ describe("v7: the jelly journal", () => {
     s.rand = () => 0.01; // ...and this one is a morph
     buy(s, 0);
     const b2 = s.slots.findIndex((j, i) => j?.k === 1 && i !== b);
-    expect(s.slots[b2]!.morph).toBe(true);
-    expect(journal(s)[1]!.morphSeen).toBe(true);
+    expect(s.slots[b2]!.morph).toBe(1);
+    expect(journal(s)[1]!.morphSeen).toBe(1);
     s.slots[b2]!.gp = 30;
     run(s, 2);
-    expect(journal(s)[1]).toMatchObject({ raised: 2, firstName: name, firstAdultAt: first, morphSeen: true });
+    expect(journal(s)[1]).toMatchObject({ raised: 2, firstName: name, firstAdultAt: first, morphSeen: 1 });
     // and it all survives a save; rehoming doesn't forget
     rehome(s, b);
     const back = createState(loadSave(JSON.stringify(toSave(s, T0)), T0), seeded());
@@ -2631,8 +2631,8 @@ describe("v7: the jelly journal", () => {
     } as Record<string, unknown>;
     delete old.journal;
     const save = loadSave(JSON.stringify(old), NOW);
-    expect(save.journal[0]).toEqual({ seen: true, raised: 2, firstAdultAt: NOW, firstName: "Taffy", morphSeen: false });
-    expect(save.journal[1]).toEqual({ seen: true, raised: 0, firstAdultAt: null, firstName: null, morphSeen: false });
+    expect(save.journal[0]).toEqual({ seen: true, raised: 2, firstAdultAt: NOW, firstName: "Taffy", morphSeen: 0 });
+    expect(save.journal[1]).toEqual({ seen: true, raised: 0, firstAdultAt: null, firstName: null, morphSeen: 0 });
     expect(save.journal.slice(2).every((e) => !e.seen && e.raised === 0)).toBe(true);
     // a v1 save's adult moon is in it too
     const v1 = loadSave(JSON.stringify({ v: 1, fullness: 0.5, murk: 0.2, affection: 0.3, night: false, lastSeen: NOW }), NOW);
@@ -2643,10 +2643,10 @@ describe("v7: the jelly journal", () => {
 
   it("repairs a damaged v7 journal, and marks what's in the tank as seen", () => {
     const saved = toSave(createState(tank([jelly(4, 2)]), seeded()), 0);
-    const bad = { ...saved, journal: [{ seen: "yes", raised: -3, firstAdultAt: "x", firstName: 7, morphSeen: 1 }, null, 5] };
+    const bad = { ...saved, journal: [{ seen: "yes", raised: -3, firstAdultAt: "x", firstName: 7, morphSeen: "1" }, null, 5] };
     const save = loadSave(JSON.stringify(bad), 0);
     expect(save.journal.length).toBe(9);
-    expect(save.journal[0]).toEqual({ seen: false, raised: 0, firstAdultAt: null, firstName: null, morphSeen: false });
+    expect(save.journal[0]).toEqual({ seen: false, raised: 0, firstAdultAt: null, firstName: null, morphSeen: 0 });
     expect(save.journal[4]!.seen).toBe(true);
   });
 });
@@ -2800,10 +2800,10 @@ describe("v7: tank share codes", () => {
     createState(
       tank(
         [
-          jelly(8, 3, { name: LONG[0]!, morph: true }),
+          jelly(8, 3, { name: LONG[0]!, morph: 1 }),
           jelly(6, 3, { name: LONG[1]! }),
           jelly(2, 3, { name: LONG[2]!, spot: 5 }),
-          jelly(0, 0, { name: LONG[3]!, anchor: 6, morph: true }),
+          jelly(0, 0, { name: LONG[3]!, anchor: 6, morph: 1 }),
           jelly(7, 2, { name: LONG[4]! }),
           jelly(3, 1, { name: LONG[5]! }),
           jelly(5, 3, { name: LONG[6]! }),
@@ -2825,7 +2825,7 @@ describe("v7: tank share codes", () => {
       expect(back.helpers).toEqual(s.helpers);
       s.owned.forEach((o, n) => o && expect(back.decorX[n]).toBe(s.decorX[n]));
       expect(back.slots.map((j) => j && [j.k, j.g, j.morph, j.name, j.anchor, j.spot])).toEqual(s.slots.map((j) => j && [j.k, j.g, j.morph, j.name, j.anchor, j.spot]));
-      expect(save).toMatchObject({ v: 9, dollars: 0, lastSeen: at(12), cam: 0 });
+      expect(save).toMatchObject({ v: 10, dollars: 0, lastSeen: at(12), cam: 0 });
       expect(pearlShowing(back)).toBe(false);
     }
   });
@@ -3206,7 +3206,7 @@ describe("v8: dirt spots", () => {
     put(s, 0, 300, 399, 0.7, 2);
     put(s, 3, 600, 801, 0.2, 1);
     const saved = toSave(s, 1000);
-    expect(saved.v).toBe(9);
+    expect(saved.v).toBe(10);
     expect(saved.spots).toEqual([
       { x: 300, y: 399, dirt: 0.7, v: 2 },
       { x: 600, y: 801, dirt: 0.2, v: 1 },
@@ -3218,7 +3218,7 @@ describe("v8: dirt spots", () => {
     const old = { ...tank([jelly(0, 3)], { murk: 0.5, lastSeen: 1000 }), v: 7 } as Record<string, unknown>;
     delete old.spots;
     const m = loadSave(JSON.stringify(old), 1000);
-    expect(m.v).toBe(9);
+    expect(m.v).toBe(10);
     expect(m.murk).toBeCloseTo(0.5, 9);
     expect(m.spots.length).toBeGreaterThanOrEqual(3);
     expect(m.spots.length).toBeLessThanOrEqual(12);
@@ -3679,7 +3679,7 @@ describe("v11: tank themes", () => {
     openShop(s);
     buy(s, 19);
     const saved = toSave(s, 5000);
-    expect(saved).toMatchObject({ v: 9, theme: 3, themes: [true, false, false, true], foods: [true, false, true] });
+    expect(saved).toMatchObject({ v: 10, theme: 3, themes: [true, false, false, true], foods: [true, false, true] });
     const back = createState(loadSave(JSON.stringify(saved), 5000), seeded());
     expect([back.theme, back.themes, back.foods]).toEqual([3, [true, false, false, true], [true, false, true]]);
     expect(themeHot(back)).toEqual([0, 0, 0, 1]);
@@ -3694,10 +3694,10 @@ describe("v11: tank themes", () => {
     delete v8.themes;
     delete v8.theme;
     const m = loadSave(JSON.stringify(v8), 2000);
-    expect(m).toMatchObject({ v: 9, theme: 0, themes: [true, false, false, false], foods: [true, false, false] });
+    expect(m).toMatchObject({ v: 10, theme: 0, themes: [true, false, false, false], foods: [true, false, false] });
     const v1 = loadSave(JSON.stringify({ v: 1, fullness: 0.5, murk: 0.2, affection: 0.5, night: false, lastSeen: 1000 }), 2000);
-    expect(v1).toMatchObject({ v: 9, theme: 0, themes: [true, false, false, false], foods: [true, false, false] });
-    expect(defaultSave(0)).toMatchObject({ v: 9, theme: 0, foods: [true, false, false] });
+    expect(v1).toMatchObject({ v: 10, theme: 0, themes: [true, false, false, false], foods: [true, false, false] });
+    expect(defaultSave(0)).toMatchObject({ v: 10, theme: 0, foods: [true, false, false] });
   });
 
   it("share codes carry the theme; a Reef tank's code is unchanged (version 1)", () => {

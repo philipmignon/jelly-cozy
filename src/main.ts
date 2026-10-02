@@ -10,7 +10,8 @@ import { SHELL_DOLLARS, connectFriends, giftLines, liveId, type Friends, type Gi
 import { captionDate, capture, downloadsCapability, flash, photoFilename, savePng, toPng } from "./photo";
 import { clearVisit, createBackupPanel, createSharePanel, noteAfterReload, pendingVisit, showNote, showVisitBar, takeNote } from "./share";
 import { createOverlay, type JellyCardInfo } from "./overlay";
-import { activeSeason, readSeasonDecor, writeSeasonDecor } from "./season";
+import { activeSeason, readSeasonDecor, seasonalMorph, writeSeasonDecor } from "./season";
+import { createRequestNote, type RequestNote } from "./requestnote";
 import { SPECIES_NAMES, TAB_N } from "./species";
 import { createSpriteGroups, eventGroup, groupsFor, jellyGroups, speciesGroup, useSpriteGroups } from "./spritegroups";
 import {
@@ -59,6 +60,9 @@ import {
   openShop,
   pearlCentre,
   renameJelly,
+  requests,
+  MORPH_CLASSIC,
+  MORPH_GHOST,
   setTab,
   step,
   syncClock,
@@ -226,7 +230,13 @@ async function main() {
     : DEMO
       ? { save: demoSave(Date.now()), away: null }
       : loadGame(raw, Date.now(), { growthMultiplier });
-  const state = createState(loaded.save, Math.random, { growthMultiplier: DEMO ? 1 : growthMultiplier });
+  // v12: daily requests only in the player's own tank (not the demo, not someone else's)
+  // daily requests and seasonal (ghost) births only in the player's own tank: not the demo, not someone else's
+  const state = createState(loaded.save, Math.random, {
+    growthMultiplier: DEMO ? 1 : growthMultiplier,
+    requests: !READ_ONLY,
+    ...(READ_ONLY ? {} : { seasonalMorph: (now: number) => seasonalMorph(now, location.search) }),
+  });
   const audio = createTankAudio();
   const overlay = createOverlay();
   const book = createJournal(() => journal(state));
@@ -262,7 +272,7 @@ async function main() {
   /** the jellies' groups (species, and a ghost's event art) plus the wanted event's; `near` = only those on screen */
   const tankGroups = (near = Infinity) => {
     const { x0, x1 } = viewSpan(state);
-    const js = state.slots.flatMap((j) => (j && j.x > x0 - near && j.x < x1 + near ? [{ k: j.k }] : []));
+    const js = state.slots.flatMap((j) => (j && j.x > x0 - near && j.x < x1 + near ? [{ k: j.k, morph: j.morph }] : []));
     return groupsFor(js, wantedEvent());
   };
   /** species the shop would sell this tank right now: worth having before they're bought */
@@ -329,7 +339,8 @@ async function main() {
   };
   const cardInfo = (slot: number): JellyCardInfo | null => {
     const i = jellyInfo(state, slot);
-    return i && { name: i.name, species: `${SPECIES[i.k] ?? ""}${i.morph ? " · rare colour" : ""}`, stage: STAGES[i.g] ?? "", ageDays: i.ageDays, fullness: i.fullness, mood: i.mood, rehome: rehomeInfo(state, slot) };
+    const morph = i?.morph === MORPH_CLASSIC ? " · rare colour" : i?.morph === MORPH_GHOST ? " · ghost colour" : "";
+    return i && { name: i.name, species: `${SPECIES[i.k] ?? ""}${morph}`, stage: STAGES[i.g] ?? "", ageDays: i.ageDays, fullness: i.fullness, mood: i.mood, rehome: rehomeInfo(state, slot) };
   };
 
   // ---------------------------------------------------------------- buttons in the .riv
@@ -414,10 +425,11 @@ async function main() {
   let dragging = -1;
   let settings: { readonly isOpen: boolean } | null = null;
   let backupOpen = () => false; // set once the backup panel exists
-  let menuWasOpen = false; // the press that closes the menu shouldn't also pet, pour or pan
-  canvas.addEventListener("pointerdown", () => (menuWasOpen = !!settings?.isOpen), true);
+  let reqNote: RequestNote | null = null; // v12: today's requests (none in read-only tanks)
+  let menuWasOpen = false; // the press that closes the menu (or the requests note) shouldn't also pet, pour or pan
+  canvas.addEventListener("pointerdown", () => (menuWasOpen = !!settings?.isOpen || !!reqNote?.isOpen), true);
   const inTank = (y: number) =>
-    y < K.cabTop && !isShopOpen(state) && !overlay.busy && overlay.cardSlot === null && !book.isOpen && !sharePanel.isOpen && !backupOpen() && !menuWasOpen;
+    y < K.cabTop && !isShopOpen(state) && !overlay.busy && overlay.cardSlot === null && !book.isOpen && !sharePanel.isOpen && !backupOpen() && !reqNote?.isOpen && !menuWasOpen;
   // the held tool: a press in the water sprinkles or scrubs instead of petting/panning
   const SPRINKLE_MS = 110;
   let lastPour = 0;
@@ -438,7 +450,7 @@ async function main() {
     }
     toolAt = { x, y };
   };
-  const toolWater = (y: number) => y < K.cabTop && !isShopOpen(state) && !overlay.busy && !book.isOpen && !sharePanel.isOpen && !backupOpen() && !menuWasOpen;
+  const toolWater = (y: number) => y < K.cabTop && !isShopOpen(state) && !overlay.busy && !book.isOpen && !sharePanel.isOpen && !backupOpen() && !reqNote?.isOpen && !menuWasOpen;
 
   attachGestures(canvas, (cx, cy) => toArtboard(canvas, cx, cy), {
     toolDown(x, y) {
@@ -653,6 +665,11 @@ async function main() {
     }
   };
 
+  if (!READ_ONLY) {
+    reqNote = createRequestNote(canvas, client, { opened: () => (settingsUi.close(), audio.play("ui")) });
+    reqNote.update(requests(state)?.items ?? null);
+  }
+
   // ---------------------------------------------------------------- the frame loop
 
   // "unlock" chime the first time each shop item becomes affordable this session
@@ -714,6 +731,7 @@ async function main() {
   let last = performance.now();
   let loadedFrame = false;
   let cardTick = 0;
+  let reqTick = 0;
   rive.on(EventType.Advance, () => {
     if (!loadedFrame && groupsSettled) {
       loadedFrame = true;
@@ -775,6 +793,14 @@ async function main() {
           audio.play("unlock");
           persist(state);
           break;
+        case "requestDone":
+          // v12: a daily request finished: a chime, the note bobs, and its "+N" (the next event) floats under it
+          audio.play("unlock");
+          buzz([20, 40, 20]);
+          reqNote?.update(requests(state)?.items ?? null);
+          if (e.request !== undefined) reqNote?.celebrate(e.request);
+          persist(state);
+          break;
         case "visitorArrived":
           audio.play("cleaned");
           break;
@@ -786,6 +812,7 @@ async function main() {
           let at: { x: number; y: number } | null = null;
           if (e.x !== undefined && e.y !== undefined) at = wclient(e.x, e.y - 40);
           else if (lastKind === "dug") at = wclient(state.crab.x, state.crab.y - 40);
+          else if (lastKind === "requestDone" && reqNote) at = reqNote.anchor();
           else if (lastKind === "pearl") {
             const p = pearlCentre(state);
             at = wclient(p.x, p.y - 20);
@@ -809,7 +836,7 @@ async function main() {
     if (groupsSettled) groups.want(tankGroups());
     state.slots.forEach((j, s) => {
       if (!j) return;
-      const need = jellyGroups({ k: j.k }); // its species' art, and a ghost's event art
+      const need = jellyGroups(j); // its species' art, and a ghost's event art (morph 2: ev-halloween)
       const missing = need.filter((g) => !groups.isReady(g));
       if (missing.length) {
         for (const g of missing) hiddenFor.add(g);
@@ -825,6 +852,8 @@ async function main() {
     audio.setNight(v.nightShade ?? 0);
     audio.setMurk(state.murk);
     if (overlay.cardSlot !== null && (cardTick = (cardTick + 1) % 15) === 0) overlay.updateCard(cardInfo(overlay.cardSlot));
+    // v12: the note follows the requests' progress (and a new day's list after midnight)
+    if (reqNote && (reqTick = (reqTick + 1) % 12) === 0) reqNote.update(requests(state)?.items ?? null);
   });
 
   setInterval(() => persist(state), 5000);

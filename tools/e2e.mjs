@@ -6,11 +6,11 @@
  *   npm run e2e        (needs Google Chrome; screenshots land in shots/e2e-*.png)
  */
 import { spawn } from "node:child_process";
-import { readFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import puppeteer from "puppeteer-core";
 
 const K = JSON.parse(readFileSync(new URL("../src/contract.json", import.meta.url)));
-const PORT = 5198;
+const PORT = Number(process.env.E2E_PORT) || 5198;
 const VIEW = { width: 480, height: 856 };
 const S = Math.min(VIEW.width / K.W, VIEW.height / K.H);
 const OX = (VIEW.width - K.W * S) / 2;
@@ -33,6 +33,131 @@ function startServer() {
     p.stdout.on("data", (d) => String(d).includes("Local") && resolve(p));
     p.on("exit", (c) => reject(new Error(`vite exited ${c}`)));
   });
+}
+
+/**
+ * The synced copy as the artifact runs it: window.__JELLYTANK_SYNC and a fake window.claude (db + user)
+ * injected before the page loads. The fake db lives in localStorage, so it outlasts reloads, and the
+ * signed-in user is whoever localStorage.__fakeUser names: players take turns in one fresh profile.
+ * It refuses writes outside the writer's own tanks/<id>, gifts/<id> and data/users/<id>, as the rules do.
+ */
+function fakeClaude() {
+  window.__JELLYTANK_SYNC = true;
+  const load = () => JSON.parse(localStorage.getItem("__fakedb") || "{}");
+  const store = (d) => localStorage.setItem("__fakedb", JSON.stringify(d));
+  const me = () => localStorage.getItem("__fakeUser");
+  const own = (path) => {
+    const s = path.split("/");
+    return s[0] === "tanks" || s[0] === "gifts" ? s[1] === me() : s[0] === "data" && s[2] === me();
+  };
+  const readable = (path) => path.split("/")[0] !== "data" || path.split("/")[2] === me();
+  const snap = (path) => {
+    const d = load()[path];
+    const ok = d !== undefined && readable(path);
+    return { exists: ok, id: path.split("/").pop(), data: () => (ok ? d : undefined), metadata: { fromCache: false, hasPendingWrites: false } };
+  };
+  const db = {
+    doc: (path) => ({
+      id: path.split("/").pop(),
+      path,
+      get: async () => snap(path),
+      set: async (data) => {
+        if (!own(path)) throw { code: "invalid_argument", message: "write refused" };
+        const d = load();
+        d[path] = JSON.parse(JSON.stringify(data));
+        store(d);
+      },
+    }),
+    collection: (path) => {
+      const filters = [];
+      const q = {
+        where(field, _op, value) {
+          filters.push([field, value]);
+          return q;
+        },
+        async get() {
+          const n = path.split("/").length + 1;
+          const docs = Object.keys(load())
+            .filter((p) => p.startsWith(`${path}/`) && p.split("/").length === n)
+            .map(snap)
+            .filter((s) => s.exists && filters.every(([f, v]) => Array.isArray(s.data()[f]) && s.data()[f].includes(v)));
+          return { docs, size: docs.length, empty: !docs.length };
+        },
+      };
+      return q;
+    },
+  };
+  const user = { id: async () => me(), can: async () => true };
+  window.claude = { use: async (n) => (n === "db" ? db : n === "user" ? user : null) };
+}
+
+/** Navigations here wait for the DOM only (window.__tank says when the tank is up), not for web fonts. */
+const DCL = { waitUntil: "domcontentloaded" };
+
+/** Live visits and gifts on the synced copy: A publishes, B visits A's live tank and leaves a shell, A claims it. */
+async function friendsFlow(browser) {
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  page.setDefaultNavigationTimeout(90_000);
+  await page.setViewport({ ...VIEW, deviceScaleFactor: 1 });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.evaluateOnNewDocument(fakeClaude);
+  const as = async (user) => {
+    await page.evaluate((u) => {
+      localStorage.setItem("__fakeUser", u);
+      localStorage.setItem("jellytank:tips", "1");
+    }, user);
+    await page.reload(DCL);
+    await page.waitForFunction(() => window.__tank && window.__tank.t > 0.5, { timeout: 15000 });
+  };
+  const db = () => page.evaluate(() => JSON.parse(localStorage.getItem("__fakedb") || "{}"));
+  await page.goto(`http://localhost:${PORT}/`, DCL);
+  await as("u_a");
+
+  // A's tank goes up as a live tank, and A's share panel offers the live code
+  const published = await page.waitForFunction(() => (JSON.parse(localStorage.getItem("__fakedb") || "{}")["tanks/u_a"] || {}).code, { timeout: 8000 }).then(() => true, () => false);
+  check("sync: my tank is published live", published);
+  await page.click(".jt-gear");
+  await page.click(".jt-menu-share");
+  await sleep(150);
+  const liveCode = await page.evaluate(() => document.querySelector(".jt-gift-live")?.textContent ?? "");
+  check("sync: the share panel offers a live code", liveCode === "JTLIVE1.u_a", liveCode);
+  await page.click(".jt-share .x");
+
+  // B pastes it: A's tank, read-only, with a gift button
+  await as("u_b");
+  await page.click(".jt-gear");
+  await page.click(".jt-menu-share");
+  await page.evaluate((c) => { document.querySelector("#jt-visit-code").value = c; }, liveCode);
+  await Promise.all([page.waitForNavigation(DCL), page.click(".jt-share .go")]);
+  await page.waitForFunction(() => window.__tank && window.__tank.t > 0.5, { timeout: 15000 });
+  const giftBtn = await page.waitForSelector(".jt-gift-open:not([hidden])", { timeout: 5000 }).then(() => true, () => false);
+  check("sync: a live visit shows the gift button", giftBtn && (await page.evaluate(() => !!document.querySelector(".jt-visit-bar"))));
+  await page.click(".jt-gift-open");
+  await page.click(".jt-gift-shell");
+  await page.waitForFunction(() => /Gift left/.test(document.querySelector(".jt-gift-note")?.textContent ?? ""), { timeout: 5000 }).catch(() => {});
+  await page.screenshot({ path: "shots/e2e-11-gift.png" });
+  const gifts = (await db())["gifts/u_b"];
+  check("sync: the shell is left in B's gift document for A", gifts?.to?.includes("u_a") && gifts.sent.u_a?.[0]?.kind === "shell", JSON.stringify(gifts));
+  check("sync: one gift a day", await page.evaluate(() => document.querySelector(".jt-gift-open").disabled));
+  await Promise.all([page.waitForNavigation(DCL), page.click(".jt-visit-bar .back")]);
+  await page.waitForFunction(() => window.__tank && window.__tank.t > 0.5, { timeout: 15000 });
+
+  // A opens their tank: the shell is claimed once, with a note
+  const before = await page.evaluate(() => JSON.parse(localStorage.getItem("jellytank:v5")).dollars);
+  await as("u_a");
+  const noted = await page.waitForFunction(() => /left you a shell/.test(document.querySelector(".jt-away:not([hidden])")?.textContent ?? ""), { timeout: 8000 }).then(() => true, () => false);
+  await page.screenshot({ path: "shots/e2e-12-gift-claimed.png" });
+  const after = await page.evaluate(() => window.__tank.dollars);
+  check("sync: the recipient gets the gift note and +5", noted && after >= before + 5, `${before} -> ${after}`);
+  check("sync: the claim is marked", ((await db())["data/users/u_a/gifts"]?.seen ?? {}).u_b > 0);
+  await page.click("#jt-away-ok");
+  await as("u_a");
+  await sleep(3000);
+  check("sync: a gift is claimed only once", !(await page.evaluate(() => /shell/.test(document.querySelector(".jt-away:not([hidden])")?.textContent ?? ""))));
+  check("sync: no page errors", errors.length === 0, errors.join(" | "));
+  await ctx.close();
 }
 
 async function main() {
@@ -296,6 +421,48 @@ async function main() {
     const m1 = await page.evaluate(() => document.querySelector(".jt-menu-music").getAttribute("aria-checked"));
     check("the menu stays open after a toggle", await page.evaluate(() => !document.querySelector(".jt-menu").hidden));
     check("music button toggles", m0 !== m1, `${m0} -> ${m1}`);
+
+    // photo mode: no window.claude here, so the PNG goes out through an <a download> link; catch its blob
+    await page.evaluate(() => {
+      window.__photoHref = null;
+      HTMLAnchorElement.prototype.click = function () {
+        if (this.download) window.__photoHref = this.href;
+      };
+    });
+    await page.click(".jt-menu-photo");
+    const gotPhoto = await page.waitForFunction(() => window.__photoHref, { timeout: 5000 }).then(() => true, () => false);
+    const photo = gotPhoto
+      ? await page.evaluate(async () => {
+          const blob = await (await fetch(window.__photoHref)).blob();
+          const bmp = await createImageBitmap(blob);
+          const c = new OffscreenCanvas(bmp.width, bmp.height);
+          const ctx = c.getContext("2d");
+          ctx.drawImage(bmp, 0, 0);
+          const px = ctx.getImageData(0, 0, bmp.width, bmp.height).data;
+          const colours = new Set();
+          let lit = 0;
+          for (let i = 0; i < px.length; i += 4 * 97) {
+            colours.add((px[i] << 16) | (px[i + 1] << 8) | px[i + 2]);
+            if (px[i] + px[i + 1] + px[i + 2] > 120) lit++;
+          }
+          const b64 = await new Promise((r) => {
+            const fr = new FileReader();
+            fr.onload = () => r(String(fr.result).split(",")[1]);
+            fr.readAsDataURL(blob);
+          });
+          return { type: blob.type, w: bmp.width, h: bmp.height, colours: colours.size, lit, b64 };
+        })
+      : null;
+    if (photo) {
+      writeFileSync(new URL("../shots/e2e-8c-photo.png", import.meta.url), Buffer.from(photo.b64, "base64"));
+      delete photo.b64;
+    }
+    check(
+      "take a photo: a portrait, non-blank PNG",
+      !!photo && photo.type === "image/png" && photo.h > photo.w && photo.w > 300 && photo.colours > 200 && photo.lit > 200,
+      JSON.stringify(photo),
+    );
+    await page.click(".jt-gear");
     await page.click(".jt-menu-share");
     await sleep(150);
     const code = await page.evaluate(() => document.querySelector("#jt-my-code").value);
@@ -374,10 +541,13 @@ async function main() {
     const bar = await page.evaluate(() => !!document.querySelector(".jt-visit-bar"));
     check("visiting shows the read-only banner", bar);
     await shot("10-visiting");
-    await Promise.all([page.waitForNavigation(), page.click(".jt-visit-bar button")]);
+    await Promise.all([page.waitForNavigation(), page.click(".jt-visit-bar .back")]);
     await page.waitForFunction(() => window.__tank && window.__tank.t > 0.5, { timeout: 15000 });
     check("back to my tank", !(await page.evaluate(() => !!document.querySelector(".jt-visit-bar"))));
     check("no page errors", errors.length === 0, errors.join(" | "));
+
+    await page.close(); // one swiftshader tank at a time
+    await friendsFlow(browser);
   } finally {
     await browser.close();
     server.kill();

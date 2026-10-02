@@ -349,11 +349,17 @@ async function main() {
     // daily pearl in the clam
     const clam = K.decor[3];
     const d0 = s.dollars;
+    const scene = () => page.evaluate(() => {
+      const t = window.__tank;
+      const v = t.visit;
+      return { visit: v ? { kind: v.kind, x: Math.round(v.x), y: Math.round(v.y), on: +v.on.toFixed(2) } : null, shopSlid: +(t.t - t.shop.t0).toFixed(2), tool: t.tool, card: !!document.querySelector(".jt-card:not([hidden])") };
+    });
+    const pearlScene = await scene();
     await click(clam.x + K.pearl.dx, clam.y + K.pearl.dy);
     s = await st();
     const pearlGone = await page.evaluate(() => !window.__tank.pearlWas && window.__tank.pearlDay !== "");
     // +15 for the pearl; a jelly finishing a meal in the same moment can add +1
-    check("tap the pearl: +15", s.dollars >= d0 + 15 && s.dollars <= d0 + 17 && pearlGone, `${d0} -> ${s.dollars}`);
+    check("tap the pearl: +15", s.dollars >= d0 + 15 && s.dollars <= d0 + 17 && pearlGone, `${d0} -> ${s.dollars}${pearlGone ? "" : ` ${JSON.stringify(pearlScene)}`}`);
 
     // long-press the anchor and drag it along the sand
     const anchor = K.decor[1];
@@ -542,9 +548,12 @@ async function main() {
     const sx = OX + (spot.x + cam2) * S, sy = OY + spot.y * S;
     await page.mouse.move(sx, sy);
     await page.mouse.down();
-    for (let k = 0; k < 220; k++) {
+    // the sponge scrubs by distance per delivered pointer move; at headless swiftshader's ~11 fps the moves
+    // coalesce per frame, so keep rubbing (up to twice as long) until the spot is clean rather than a fixed count
+    for (let k = 0; k < 440; k++) {
       await page.mouse.move(sx + Math.sin(k * 0.9) * 40 * S, sy + Math.cos(k * 0.7) * 16 * S);
       await sleep(16);
+      if (k >= 219 && k % 20 === 19 && (await page.evaluate(() => (window.__tank.spots[0]?.dirt ?? 0) < 0.05))) break;
     }
     await shot("6b-scrubbing");
     await page.mouse.up();
@@ -555,12 +564,13 @@ async function main() {
     await click(...button("clean"));
 
     const j = s.slots.find((x) => x && x.g > 0) ?? s.slots[0];
+    const petScene = await scene();
     for (let k = 0; k < 4; k++) {
       const at = await page.evaluate(() => { const x = window.__tank.slots[0]; return { x: x.x, y: x.y }; });
       await tapWater(at.x, at.y - 40); // the bell sits above the rim origin
     }
     const tagsShown = await page.evaluate(() => document.querySelectorAll(".jt-tag").length);
-    check("petting again doesn't stack name tags", tagsShown === 1, `tags=${tagsShown}`);
+    check("petting again doesn't stack name tags", tagsShown === 1, `tags=${tagsShown}${tagsShown ? "" : ` ${JSON.stringify(petScene)}`}`);
     await sleep(300);
     s = await st();
     await sleep(12000);

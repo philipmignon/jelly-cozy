@@ -40,6 +40,8 @@
  *                       queued by `scrubAt()`, with a sparkle there and its "earned" (+1, same x, y)
  *   "themed"  theme     (v11) a tank theme was bought or picked again (queued by `buy()` / `setTheme()`);
  *                       the shop slides shut so the new look shows
+ *   "requestDone" request, amount  (v12) a daily request was finished (index into requests(s).items); its "earned"
+ *                       (no slot, no x/y) comes straight after it. Daily requests run only with SimOptions.requests
  *   "ate" also carries `fav: true` (v11) when the pellet was the jelly's favourite food: double growth,
  *                       a little more fullness and a bigger happy flush
  *
@@ -97,6 +99,12 @@ import {
   MAX_SLOTS,
   MOON,
   MORPH_CHANCE,
+  MORPH_CLASSIC,
+  MORPH_GHOST,
+  MORPH_IDS,
+  MORPH_INHERIT,
+  MORPH_NONE,
+  SEASON_MORPH_CHANCE,
   NIGHT_FROM,
   OPEN_SAND,
   OPEN_SANDS,
@@ -203,12 +211,15 @@ import {
   type VisitorKind,
 } from "./visitors";
 import { decodeTank, encodeTank, hasPlace, type TankCode } from "./tankcode";
+import { SPRINKLE_NEAR, advance, copyRequests, planRequests, requestText, requestsOf, rewardOf, type DailyRequests, type Deed, type Request, type RequestKind } from "./requests";
 
 export { K, clamp, sandAt, specProps, SHOP_ITEMS, POLYP_ANCHORS, SETTLE_SPOTS, DECOR, TAB_ITEMS, NAMES, OPEN_SAND, OPEN_SANDS, TIERS, MAX_SLOTS, geomOf };
 export type { Species, Stage, Snail, Walker, Cam, Visit, VisitorKind, Spot, SaveSpot, FoodKind };
 export { favouriteFood, FOOD_NAMES, FOOD_KINDS, THEME_N, THEME_NAMES, foodItem, themeItem };
 export { SPOT_N, murkOf, spotsForMurk };
 export { VISITORS };
+export { MORPH_NONE, MORPH_CLASSIC, MORPH_GHOST, requestText, rewardOf };
+export type { DailyRequests, Request, RequestKind };
 
 // ---------------------------------------------------------------- saves
 
@@ -239,8 +250,9 @@ export interface SaveJelly {
   born: number;
   /** growth-scaled seconds of content time (adult, mood > 0.7) towards the next baby */
   content: number;
-  /** v7: a rare colour morph (1 in 10 births), fixed for life */
-  morph: boolean;
+  /** v12: its colour morph, fixed for life: 0 none, 1 classic (v7's rare colour, 1 in 10 births), 2 ghost (a season's).
+   *  v7..v9 saves wrote a boolean (true = classic); loading takes either */
+  morph: number;
 }
 
 /** v7: what the jelly journal knows about one species (journal(s)[k]). */
@@ -253,8 +265,8 @@ export interface JournalEntry {
   firstAdultAt: number | null;
   /** that first adult's name */
   firstName: string | null;
-  /** ever owned its colour morph */
-  morphSeen: boolean;
+  /** v12: the colour morphs ever owned, a bitmask by morph id (bit id - 1: 1 classic, 2 ghost); v7..v9 saves wrote a boolean */
+  morphSeen: number;
 }
 
 /** The lamp button's override of the clock: show `night` until `until` (epoch ms, the next 07:00 or 19:00). */
@@ -299,6 +311,8 @@ export interface Save {
   /** v9: tank themes owned (index = theme; Reef always true) and the one in use */
   themes: boolean[];
   theme: number;
+  /** v12 (optional): today's daily requests and how far along they are; absent until the first is planned */
+  requests?: DailyRequests;
 }
 
 // ---------------------------------------------------------------- state
@@ -361,10 +375,11 @@ export interface Jelly {
   name: string;
   born: number;
   content: number;
-  morph: boolean;
+  /** v12: morph id (0 none, 1 classic, 2 ghost) */
+  morph: number;
 }
 
-export type SimEventType = "ate" | "pulse" | "cleaned" | "grew" | "adult" | "earned" | "baby" | "dug" | "shrimpAte" | "pearlReady" | "pearl" | "rehomed" | "upgraded" | "revealed" | "visitorArrived" | "visitorTapped" | "visitorLeft" | "spotCleaned" | "themed";
+export type SimEventType = "ate" | "pulse" | "cleaned" | "grew" | "adult" | "earned" | "baby" | "dug" | "shrimpAte" | "pearlReady" | "pearl" | "rehomed" | "upgraded" | "revealed" | "visitorArrived" | "visitorTapped" | "visitorLeft" | "spotCleaned" | "themed" | "requestDone";
 export interface SimEvent {
   type: SimEventType;
   slot?: number;
@@ -384,6 +399,8 @@ export interface SimEvent {
   food?: FoodKind;
   /** v11 "themed": the theme now in use */
   theme?: number;
+  /** v12 "requestDone": which of today's requests (index into requests(s).items) */
+  request?: number;
 }
 
 export interface State {
@@ -459,6 +476,11 @@ export interface State {
   foods: boolean[];
   themes: boolean[];
   theme: number;
+  /** v12: today's requests (null until planned; kept as loaded while requests are off) and whether they run */
+  requests: DailyRequests | null;
+  requestsOn: boolean;
+  /** v12: SimOptions.seasonalMorph */
+  seasonalMorph: ((now: number) => number | null) | null;
 }
 
 /** v8: what the player has in hand. v11: "shrimp" (the brine shrimp jar) and "plankton" (the bottle) are foods too. */
@@ -476,6 +498,13 @@ export const isFoodTool = (tool: Tool) => foodKindOf(tool) >= 0;
 export interface SimOptions {
   /** ×20 when the URL has ?fast=1 */
   growthMultiplier?: number;
+  /**
+   * v12: the morph an active season offers babies (MORPH_GHOST around Halloween), or null when no season is on.
+   * A baby that rolled plain is that morph SEASON_MORPH_CHANCE of the time. Called with the sim clock (epoch ms).
+   */
+  seasonalMorph?: (now: number) => number | null;
+  /** v12: run the daily requests (the host's own tank). Off by default: the demo, visits and tests don't get them. */
+  requests?: boolean;
 }
 
 /** v1 geometry, kept for reference: the moon adult. */
@@ -518,7 +547,7 @@ const THEME_FX_Y = 480;
 /** pan hints fade in/out over this long, s */
 const HINT_TIME = 0.25;
 
-const freshJelly = (k: Species, g: Stage, name: string, born: number, morph = false): SaveJelly => ({
+const freshJelly = (k: Species, g: Stage, name: string, born: number, morph = MORPH_NONE): SaveJelly => ({
   k,
   g,
   gp: GROWTH[g],
@@ -535,7 +564,17 @@ const freshJelly = (k: Species, g: Stage, name: string, born: number, morph = fa
 
 // ---------------------------------------------------------------- the jelly journal (v7)
 
-const blankEntry = (): JournalEntry => ({ seen: false, raised: 0, firstAdultAt: null, firstName: null, morphSeen: false });
+const blankEntry = (): JournalEntry => ({ seen: false, raised: 0, firstAdultAt: null, firstName: null, morphSeen: 0 });
+
+/** v12: a saved morph as an id: v7..v9's true is the classic one; anything unknown is none. */
+export const morphOf = (v: unknown): number => (v === true ? MORPH_CLASSIC : typeof v === "number" && Number.isInteger(v) && v > 0 && v < MORPH_IDS ? v : MORPH_NONE);
+/** v12: a morph id's bit in JournalEntry.morphSeen (0 for none). */
+export const morphBit = (id: number): number => (id > MORPH_NONE && id < MORPH_IDS ? 1 << (id - 1) : 0);
+/** v12: a saved morphSeen as a bitmask: v7..v9's true is the classic one. */
+const morphSeenOf = (v: unknown): number =>
+  v === true ? morphBit(MORPH_CLASSIC) : typeof v === "number" && Number.isInteger(v) && v > 0 ? v & ((1 << (MORPH_IDS - 1)) - 1) : 0;
+/** v12: has this journal entry seen morph `id`? */
+export const morphSeen = (e: Pick<JournalEntry, "morphSeen">, id: number): boolean => (e.morphSeen & morphBit(id)) !== 0;
 export const emptyJournal = (): JournalEntry[] => Array.from({ length: SPECIES_N }, blankEntry);
 
 /** A journal built from the jellies in a tank: each is seen; adults count as raised, first raised at `now`. */
@@ -545,7 +584,7 @@ export function journalFrom(slots: readonly (SaveJelly | null)[], now: number): 
     if (!j) continue;
     const e = jn[j.k]!;
     e.seen = true;
-    if (j.morph) e.morphSeen = true;
+    e.morphSeen |= morphBit(morphOf(j.morph));
     if (j.g === ADULT) {
       e.raised++;
       if (e.firstAdultAt === null) {
@@ -569,13 +608,13 @@ function journalOf(raw: unknown, slots: readonly (SaveJelly | null)[], now: numb
       raised,
       firstAdultAt: Number.isFinite(at) ? at : null,
       firstName: cleanName(o.firstName),
-      morphSeen: o.morphSeen === true,
+      morphSeen: morphSeenOf(o.morphSeen),
     };
   });
   for (const j of slots) {
     if (!j) continue;
     jn[j.k]!.seen = true;
-    if (j.morph) jn[j.k]!.morphSeen = true;
+    jn[j.k]!.morphSeen |= morphBit(morphOf(j.morph));
   }
   return jn;
 }
@@ -589,7 +628,7 @@ export const journal = (s: State): JournalEntry[] => copyJournal(s.journal);
 function noteJelly(s: State, j: Jelly): void {
   const e = s.journal[j.k]!;
   e.seen = true;
-  if (j.morph) e.morphSeen = true;
+  e.morphSeen |= morphBit(j.morph);
 }
 
 /** A repeatable 0..1 from a timestamp, so loading the same save twice names jellies the same. */
@@ -718,7 +757,7 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
       name,
       born: finite(o.born, now),
       content: clamp(finite(o.content, 0), 0, BABY_SECONDS),
-      morph: o.morph === true,
+      morph: morphOf(o.morph),
     });
   }
   const ownedIn = Array.isArray(raw.owned) ? raw.owned : [];
@@ -747,8 +786,12 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
     foods,
     themes,
     theme: themeOf(raw.theme, themes),
+    ...requestsField(requestsOf(raw.requests)),
   };
 }
+
+/** v12: the optional `requests` save field: only there once a day has been planned. */
+const requestsField = (r: DailyRequests | null): { requests?: DailyRequests } => (r ? { requests: copyRequests(r) } : {});
 
 // ---------------------------------------------------------------- day and night
 
@@ -1014,7 +1057,7 @@ function makeJelly(sj: SaveJelly, slot: number, slots: (Jelly | null)[], tier: n
     name: sj.name,
     born: sj.born,
     content: sj.content,
-    morph: sj.morph === true,
+    morph: morphOf(sj.morph),
   };
   if (j.mode === "fixed") {
     const ok =
@@ -1107,6 +1150,9 @@ export function createState(save: Save, rand: () => number = Math.random, opts: 
     foods: ownedList(save.foods, FOOD_KINDS),
     themes: ownedList(save.themes, THEME_N),
     theme: 0,
+    requests: requestsOf(save.requests),
+    requestsOn: opts.requests === true,
+    seasonalMorph: opts.seasonalMorph ?? null,
   };
   state.theme = themeOf(save.theme, state.themes);
   for (const j of jellies(state)) noteJelly(state, j);
@@ -1139,6 +1185,7 @@ export function toSave(s: State, now: number): Save {
     foods: [...s.foods],
     themes: [...s.themes],
     theme: s.theme,
+    ...requestsField(s.requests),
   };
 }
 
@@ -1409,6 +1456,9 @@ export function sprinkle(s: State, x: number, y: number, kind?: FoodKind): numbe
   }
   pour.tokens -= n;
   if (n > 0) pour.last = s.t;
+  // v12: pellets sprinkled by a decoration count towards a "sprinkle by the castle" request
+  if (n > 0 && s.requestsOn)
+    s.owned.forEach((o, d) => o && Math.abs(x - (s.decorX[d] ?? DECOR[d]!.x)) <= SPRINKLE_NEAR && requestDeed(s, { kind: "sprinkle", decor: d, n }, s.queued));
   return n;
 }
 
@@ -1586,12 +1636,25 @@ export type BuyResult = "bought" | "cantAfford" | "tankFull" | "owned" | "needsM
 /** A unique name for a new jelly. */
 const newName = (s: State) => pickName(jellies(s).map((j) => j.name), s.rand());
 
+/**
+ * v12: the morph a new polyp gets. Bought (no parent): the base 1-in-10 classic roll. A baby: its parent's
+ * morph MORPH_INHERIT of the time; otherwise (and always for a plain parent) the base roll, then, while a
+ * season offers a morph (SimOptions.seasonalMorph), SEASON_MORPH_CHANCE of that. Draws only from s.rand.
+ */
+function birthMorph(s: State, parent: Jelly | null): number {
+  if (parent && parent.morph !== MORPH_NONE && s.rand() < MORPH_INHERIT) return parent.morph;
+  if (s.rand() < MORPH_CHANCE) return MORPH_CLASSIC;
+  if (!parent || !s.seasonalMorph) return MORPH_NONE;
+  const season = morphOf(s.seasonalMorph(s.clock));
+  return season !== MORPH_NONE && s.rand() < SEASON_MORPH_CHANCE ? season : MORPH_NONE;
+}
+
 /** Put a new polyp of species k into a free slot at a free rock anchor; null if there's no room (the tier's max). */
-function addPolyp(s: State, k: Species): { slot: number; j: Jelly } | null {
+function addPolyp(s: State, k: Species, parent: Jelly | null = null): { slot: number; j: Jelly } | null {
   const slot = s.slots.findIndex((j) => !j);
   const anchor = freeAnchor(s.slots, s.tier);
   if (slot < 0 || anchor < 0 || jellyCount(s) >= maxJellies(s)) return null;
-  const morph = s.rand() < MORPH_CHANCE;
+  const morph = birthMorph(s, parent);
   const j = makeJelly({ ...freshJelly(k, POLYP, newName(s), s.clock, morph), anchor }, slot, s.slots, s.tier, rightGlass(s));
   s.slots[slot] = j;
   noteJelly(s, j);
@@ -1709,8 +1772,8 @@ export interface JellyInfo {
   ageDays: number;
   fullness: number;
   mood: number;
-  /** v7: a rare colour morph */
-  morph: boolean;
+  /** v12: its morph id (0 none, 1 classic, 2 ghost) */
+  morph: number;
 }
 
 export function jellyInfo(s: State, slot: number): JellyInfo | null {
@@ -1795,6 +1858,54 @@ export function dayKey(ms: number): string {
 /** Today's pearl is in the clam: the clam is owned and today's isn't collected. */
 export const pearlShowing = (s: State) => s.owned[CLAM] === true && s.pearlDay !== dayKey(s.clock);
 
+// ---------------------------------------------------------------- daily requests (v12)
+
+/** What the tank has now, for planning a day's requests (./requests.ts). */
+const requestTank = (s: State) => ({
+  species: jellies(s).map((j) => j.k),
+  foods: s.foods,
+  decor: s.owned,
+  pearl: pearlShowing(s),
+});
+
+/** Plan today's requests if the day has turned (or none were planned yet). Unfinished ones from another day just go. */
+function rollRequests(s: State): DailyRequests | null {
+  if (!s.requestsOn) return null;
+  const today = dayKey(s.clock);
+  if (!s.requests || s.requests.day !== today) s.requests = planRequests(today, requestTank(s));
+  return s.requests;
+}
+
+/** Count a deed towards today's requests; each one it finishes pays its reward once ("requestDone", then "earned"). */
+function requestDeed(s: State, deed: Deed, out: SimEvent[]): void {
+  const day = rollRequests(s);
+  if (!day) return;
+  for (const i of advance(day, deed)) {
+    const amount = rewardOf(day.items[i]!);
+    out.push({ type: "requestDone", request: i, amount });
+    earn(s, amount, out);
+  }
+}
+
+/** The step's events that requests count: pellets eaten, spots scrubbed, the pearl, a visitor greeted. */
+function stepRequests(s: State, events: SimEvent[]): void {
+  if (!rollRequests(s)) return;
+  for (const e of events.slice()) {
+    const j = e.slot === undefined ? null : s.slots[e.slot];
+    if (e.type === "ate" && j && e.food !== undefined) requestDeed(s, { kind: "ate", k: j.k, food: e.food }, events);
+    else if (e.type === "spotCleaned") requestDeed(s, { kind: "scrub" }, events);
+    else if (e.type === "pearl") requestDeed(s, { kind: "pearl" }, events);
+    else if (e.type === "visitorTapped") requestDeed(s, { kind: "visitor" }, events);
+  }
+}
+
+/** Today's requests (a copy), each with its line and reward; null when requests are off (demo, visits). */
+export function requests(s: State): { day: string; items: (Request & { text: string; reward: number })[] } | null {
+  const day = rollRequests(s);
+  if (!day) return null;
+  return { day: day.day, items: copyRequests(day).items.map((r) => ({ ...r, text: requestText(r), reward: rewardOf(r) })) };
+}
+
 /** Where the pearl is (follows the clam). */
 export function pearlCentre(s: State): { x: number; y: number } {
   return { x: (s.decorX[CLAM] ?? DECOR[CLAM]!.x) + PEARL.dx, y: decorBaseY(s, CLAM) + PEARL.dy };
@@ -1851,6 +1962,7 @@ export function tap(s: State, x: number, y: number): "visitor" | "pearl" | "pet"
       pj.petReadyAt = s.t + PET_COOLDOWN;
       earn(s, EARN.pet, s.queued, pet);
     }
+    requestDeed(s, { kind: "pet" }, s.queued);
     return "pet";
   }
   let call: Jelly | null = null;
@@ -2469,6 +2581,8 @@ export function step(s: State, dt: number): SimEvent[] {
   const pearl = pearlShowing(s);
   if (pearl && !s.pearlWas) events.push({ type: "pearlReady" });
   s.pearlWas = pearl;
+  // v12: today's requests (planned on the first step of a day) count what just happened
+  stepRequests(s, events);
 
   return events;
 }
@@ -2583,7 +2697,7 @@ function babies(s: State, dt: number, events: SimEvent[]): void {
     if (!j || j.g !== ADULT || moodOf(s, j) <= BABY_MOOD) return;
     j.content = Math.min(BABY_SECONDS, j.content + dt * s.growthMultiplier);
     if (j.content < BABY_SECONDS) return;
-    const born = addPolyp(s, j.k);
+    const born = addPolyp(s, j.k, j);
     if (!born) return; // full: hold at the threshold
     j.content = 0;
     j.wiggleT0 = s.t;
@@ -2618,7 +2732,7 @@ const NEEDS17 = K.props.includes("needs17");
 function writeSlot(v: View, s: State, slot: number, j: Jelly | null, night: number): void {
   const p = `j${slot}`;
   if (!j) {
-    for (const name of ["on", "x", "y", "healthy", "pale", "flush", "glow", "morph", "rot"]) v[p + name] = 0;
+    for (const name of ["on", "x", "y", "healthy", "pale", "flush", "glow", "morph", "ghost", "rot"]) v[p + name] = 0;
     for (let i = 0; i < SPECIES_N; i++) v[`${p}k${i}`] = 0;
     for (let i = 0; i < 4; i++) v[`${p}g${i}`] = 0;
     for (const g of ["bf", "tf"]) for (let i = 0; i < FRAME_N; i++) v[`${p}${g}${i}`] = 0;
@@ -2652,12 +2766,14 @@ function writeSlot(v: View, s: State, slot: number, j: Jelly | null, night: numb
   }
   v[p + "rot"] = Math.round(j.tilt.out * 1e4) / 1e4;
   for (let i = 0; i < TRAIL_N; i++) v[`${p}tr${i}`] = i === j.trail ? 1 : 0;
-  // palettes: pale overrides the morph colours; flush is drawn over whichever shows
+  // palettes: pale overrides the morph colours; flush is drawn over whichever shows. v12: one switch per morph id
   const pale = m < 0.35 ? 1 : 0;
-  const morph = j.morph && !pale ? 1 : 0;
+  const morph = j.morph === MORPH_CLASSIC && !pale ? 1 : 0;
+  const ghost = j.morph === MORPH_GHOST && !pale ? 1 : 0;
   v[p + "pale"] = pale;
   v[p + "morph"] = morph;
-  v[p + "healthy"] = pale || morph ? 0 : 1;
+  v[p + "ghost"] = ghost;
+  v[p + "healthy"] = pale || morph || ghost ? 0 : 1;
   // rosy flush over whichever body is showing, fading out in steps; a favourite meal holds it longer (v11)
   const fp = (s.t - j.wiggleT0) / FLUSH_TIME;
   const lp = (s.t - j.loveT0) / LOVE_FLUSH_TIME;

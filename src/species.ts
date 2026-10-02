@@ -572,6 +572,15 @@ export const CRAB_SPEED = 11;
 export const NAME_MAX = 12;
 /** v7: a new jelly (a baby, or a bought polyp) is a rare colour morph this often. ?fast=1 doesn't change it. */
 export const MORPH_CHANCE = 0.1;
+/** v12 morph ids (SaveJelly.morph): 0 none, 1 classic (the v7 rare palette), 2 ghost (the Halloween palette). */
+export const MORPH_NONE = 0;
+export const MORPH_CLASSIC = 1;
+export const MORPH_GHOST = 2;
+export const MORPH_IDS = 3;
+/** v12: a morph parent's baby is the same morph this often (otherwise it rolls like a plain parent's). */
+export const MORPH_INHERIT = 0.5;
+/** v12: while a season offers a morph (SimOptions.seasonalMorph), a baby that rolled plain is that morph this often. */
+export const SEASON_MORPH_CHANCE = 0.08;
 
 // ---------------------------------------------------------------- polish round
 
@@ -753,7 +762,7 @@ export function specProps(foodN = K.foodN): string[] {
   out.push("toolShrimp", "toolPlankton", "haveShrimp", "havePlankton", "b4y", "b5y");
   for (let t = 0; t < THEME_N; t++) out.push(`theme${t}`);
   for (let s = 0; s < MAX_SLOTS; s++) {
-    out.push(`j${s}on`, `j${s}x`, `j${s}y`, `j${s}morph`);
+    out.push(`j${s}on`, `j${s}x`, `j${s}y`, `j${s}morph`, `j${s}ghost`);
     for (let i = 0; i < SPECIES_N; i++) out.push(`j${s}k${i}`);
     for (let i = 0; i < 4; i++) out.push(`j${s}g${i}`);
     // v10: 8 pulse frames and 8 tentacle ripple frames (4-frame stages use the first four)

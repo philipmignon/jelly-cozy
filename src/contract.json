@@ -1611,6 +1611,7 @@
   "j0on",
   "j0x",
   "j0y",
+  "j0ghost",
   "j1morph",
   "j1tf0",
   "j1tf1",
@@ -1654,6 +1655,7 @@
   "j1on",
   "j1x",
   "j1y",
+  "j1ghost",
   "j2morph",
   "j2tf0",
   "j2tf1",
@@ -1697,6 +1699,7 @@
   "j2on",
   "j2x",
   "j2y",
+  "j2ghost",
   "j3morph",
   "j3tf0",
   "j3tf1",
@@ -1740,6 +1743,7 @@
   "j3on",
   "j3x",
   "j3y",
+  "j3ghost",
   "j4morph",
   "j4tf0",
   "j4tf1",
@@ -1783,6 +1787,7 @@
   "j4on",
   "j4x",
   "j4y",
+  "j4ghost",
   "j5morph",
   "j5tf0",
   "j5tf1",
@@ -1826,6 +1831,7 @@
   "j5on",
   "j5x",
   "j5y",
+  "j5ghost",
   "j6morph",
   "j6tf0",
   "j6tf1",
@@ -1869,6 +1875,7 @@
   "j6on",
   "j6x",
   "j6y",
+  "j6ghost",
   "fxX",
   "fxY",
   "fxS",
@@ -2158,7 +2165,8 @@
    "rot",
    "on",
    "x",
-   "y"
+   "y",
+   "ghost"
   ]
  }
 }

@@ -10,7 +10,7 @@ import { readFileSync, mkdirSync } from "node:fs";
 import puppeteer from "puppeteer-core";
 
 const K = JSON.parse(readFileSync(new URL("../src/contract.json", import.meta.url)));
-const PORT = 5198;
+const PORT = Number(process.env.E2E_PORT) || 5198;
 const VIEW = { width: 480, height: 856 };
 const S = Math.min(VIEW.width / K.W, VIEW.height / K.H);
 const OX = (VIEW.width - K.W * S) / 2;
@@ -70,6 +70,9 @@ async function main() {
       await sleep(140);
     };
     const shot = (name) => page.screenshot({ path: `shots/e2e-${name}.png` });
+    // the shop has finished sliding up (sim time, so a slow frame rate doesn't leave the tabs mid-slide)
+    const shopUp = () =>
+      page.waitForFunction(() => { const t = window.__tank; return t.shop.open && t.t - t.shop.t0 > 0.45; }, { timeout: 8000 }).then(() => sleep(150), () => {});
 
     // first-run tips: four bubbles, each with a Next / Got it button
     await page.waitForSelector(".jt-tip:not([hidden])", { timeout: 8000 }).catch(() => {});
@@ -96,6 +99,46 @@ async function main() {
     s = await st();
     check("lamp flips back", s.night === night0);
 
+    // v12 daily requests: the note in the hood opens a short list; finishing one pays through earn
+    const reqShown = await page.waitForFunction(() => { const b = document.querySelector(".jt-req-btn"); return b && !b.hidden; }, { timeout: 3000 }).then(() => true, () => false);
+    check("the requests note is pinned in the hood", reqShown);
+    await page.click(".jt-req-btn");
+    await sleep(200);
+    const reqList = await page.evaluate(() => ({
+      open: !document.querySelector(".jt-req-panel").hidden,
+      items: [...document.querySelectorAll(".jt-req-item")].map((li) => li.textContent.replace(/\s+/g, " ").trim()),
+      sim: window.__tank.requests?.items.length ?? 0,
+    }));
+    check("tapping the note opens today's requests", reqList.open && reqList.items.length >= 1 && reqList.items.length <= 2 && reqList.items.length === reqList.sim, JSON.stringify(reqList.items));
+    await shot("11-requests");
+    // while it's open the tank doesn't take taps: a press on the water just closes it
+    const polypAt = await page.evaluate(() => ({ x: window.__tank.slots[0].x, y: window.__tank.slots[0].y }));
+    const aff0 = await page.evaluate(() => window.__tank.slots[0].affection);
+    await tapWater(polypAt.x, polypAt.y - 30);
+    const afterBlocked = await page.evaluate(() => ({ open: !document.querySelector(".jt-req-panel").hidden, aff: window.__tank.slots[0].affection }));
+    check("a tap outside closes the note without petting", !afterBlocked.open && afterBlocked.aff <= aff0 + 1e-6, JSON.stringify(afterBlocked));
+    // swap in a "pet twice" request and finish it
+    await page.evaluate(() => { window.__tank.requests.items = [{ kind: "pet", target: -1, n: 2, progress: 0, done: false }]; });
+    await sleep(400);
+    const dReq = (await st()).dollars;
+    for (let k = 0; k < 2; k++) {
+      await tapWater(polypAt.x, polypAt.y - 30);
+      await sleep(150);
+    }
+    const reqDone = await page.waitForFunction(() => window.__tank.requests.items[0].done, { timeout: 3000 }).then(() => true, () => false);
+    await sleep(300);
+    const reqUi = await page.evaluate(() => ({ bubble: !!document.querySelector(".jt-req-done"), badge: document.querySelector(".jt-req-badge").textContent }));
+    check("petting finishes a request: it pays +5 once, the note says so", reqDone && (await st()).dollars >= dReq + 5 && reqUi.bubble && reqUi.badge === "✓", `${dReq} -> ${(await st()).dollars} ${JSON.stringify(reqUi)}`);
+    await page.click(".jt-req-btn");
+    await sleep(200);
+    check("a finished request shows its check and 2/2", await page.evaluate(() => { const li = document.querySelector(".jt-req-item"); return li.classList.contains("done") && /2\/2/.test(li.textContent); }));
+    await shot("11b-request-done");
+    await page.click(".jt-req-x");
+    const dPaid = (await st()).dollars;
+    await tapWater(polypAt.x, polypAt.y - 30);
+    await sleep(300);
+    check("and isn't paid twice", (await st()).dollars <= dPaid + 1);
+
     // Feed picks up the food can; taps in the water sprinkle flakes right there
     await click(...button("feed"));
     const pickedUp = await page.waitForFunction(() => window.__tank.tool === "food", { timeout: 3000 }).then(() => true, () => false);
@@ -120,7 +163,7 @@ async function main() {
 
     await page.evaluate(() => { window.__tank.dollars = 300; });
     await click(...button("shop"));
-    await sleep(700);
+    await shopUp();
     s = await st();
     check("shop opens", s.shop === true);
     await shot("4-shop");
@@ -227,7 +270,7 @@ async function main() {
     // tank upgrade: buy MEDIUM on the TANK tab, the wall slides out, then swipe to pan
     await page.evaluate(() => { window.__tank.dollars = 600; });
     await click(...button("shop"));
-    await sleep(600);
+    await shopUp();
     await click(...centre(K.shopTabs[3]));
     await page.waitForFunction(() => window.__tank.tab === 3, { timeout: 3000 }).then(() => sleep(400)).catch(() => {});
     await click(...centre(K.shopCards[12]));
@@ -241,7 +284,7 @@ async function main() {
     // supplies: buy brine shrimp, pick the jar off the shelf, pour; then buy and apply a theme
     await page.evaluate(() => { window.__tank.dollars = Math.max(window.__tank.dollars, 600); });
     await click(...button("shop"));
-    await sleep(600);
+    await shopUp();
     await click(...centre(K.shopTabs[2]));
     await page.waitForFunction(() => window.__tank.tab === 2, { timeout: 3000 }).then(() => sleep(400)).catch(() => {});
     await click(...centre(K.shopCards[18]));
@@ -288,6 +331,17 @@ async function main() {
     await page.click(".jt-book .next");
     const secondPage = await page.evaluate(() => document.querySelector(".jt-book-name").textContent);
     check("journal pages turn (blubber owned)", /blubber/i.test(secondPage), secondPage);
+    // v12: the morph rows: classic and ghost, "???" until raised
+    const rows = await page.evaluate(() => [...document.querySelectorAll(".jt-book-morph")].map((r) => r.textContent.replace(/\s+/g, " ").trim()));
+    const seenBits = await page.evaluate(() => window.__tank.journal[1].morphSeen); // a blubber baby may have been the rare colour
+    check("journal lists both morphs, unknown as ???", rows.length === 2 && rows.every((r, i) => /\?\?\?/.test(r) === !(seenBits & (1 << i))), JSON.stringify(rows));
+    await page.click(".jt-book .prev");
+    await page.evaluate(() => { window.__tank.journal[0].morphSeen |= 2; });
+    await page.click(".jt-book .next");
+    await page.click(".jt-book .prev");
+    const ghostRow = await page.evaluate(() => { const r = document.querySelector(".jt-book-morph.ghost"); return { found: r.classList.contains("found"), text: r.textContent }; });
+    check("a raised ghost morph shows in the journal", ghostRow.found && /ghost moon/i.test(ghostRow.text), JSON.stringify(ghostRow));
+    await page.click(".jt-book .next");
     await shot("9-journal");
     await page.click(".jt-book-x");
     await page.click(".jt-gear");
@@ -373,6 +427,7 @@ async function main() {
     await page.waitForFunction(() => window.__tank && window.__tank.t > 0.5, { timeout: 15000 });
     const bar = await page.evaluate(() => !!document.querySelector(".jt-visit-bar"));
     check("visiting shows the read-only banner", bar);
+    check("no requests note in someone else's tank", await page.evaluate(() => !document.querySelector(".jt-req-btn:not([hidden])") && window.__tank.requestsOn === false));
     await shot("10-visiting");
     await Promise.all([page.waitForNavigation(), page.click(".jt-visit-bar button")]);
     await page.waitForFunction(() => window.__tank && window.__tank.t > 0.5, { timeout: 15000 });

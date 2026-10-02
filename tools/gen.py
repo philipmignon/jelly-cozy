@@ -5460,6 +5460,7 @@ JAB, JSM, JSTYLE, JSHEEN = nid(), nid(), nid(), nid()
 jelly_art = jelly_comp()
 for key in ("on", "x", "y"):  # placement props, written by the host like the rest (bound on the NestedArtboard)
     jprop(key)
+jprop("ghost")  # [morph inheritance] the ghost morph's palette switch (j{s}ghost; the ghost art binds it)
 # Tank: one nested Jelly property per slot, and one Jelly instance per slot (its defaults: slot 0 on, at SLOT_XY)
 jslot_pid = [nid() for _ in range(SLOTS)]
 jslot_vmi = [nid() for _ in range(SLOTS)]

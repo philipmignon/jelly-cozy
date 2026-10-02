@@ -1,3 +1,9 @@
 node_modules
 dist
 rive/build
+pub
+shots
+screenshot-*.png
+pubtest
+rive/img
+rive/tank.rml

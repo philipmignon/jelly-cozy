@@ -1,14 +1,218 @@
 /**
- * The tank simulation. Pure: no DOM, no Rive. Everything is in logical
- * pixels (the 144x256 grid); `view()` converts to artboard units for the
- * view model.
+ * The tank simulation. Pure: no DOM, no Rive. Units are artboard px (the
+ * artboard is 720x1284); `view()` snaps positions to the P-pixel grid so the
+ * sprites stay crisp.
+ *
+ * WORLD vs SCREEN (v5): the tank is 720 / 1080 / 1440 wide by tier and the
+ * screen shows 720 of it. Every sim position (jellies, food, helpers, decor,
+ * the pearl, ripple, sparkle, dirt spots) is a WORLD x in 0..worldW; the art draws them
+ * inside the World node, offset by `camX` (≤ 0). The night, murk, vignette and
+ * the held can / sponge (v8) are screen-space. Taps, long-presses and drags take
+ * world x: the host converts with screenToWorld(s, x); things it floats over
+ * the canvas (name tags, pops) go back through worldToScreen(s, x).
+ *
+ * Up to 7 jellies live in slots 0..6 (3 / 5 / 7 by tier). Murk, night, food,
+ * dollars and decor are tank-wide. Species/stage/world tables live in ./species.ts.
+ *
+ * EVENTS (for main.ts to wire sound to): `step()` returns SimEvent[], each
+ * `{ type, slot?, stage?, amount? }`:
+ *   "ate"     slot      a jelly caught a pellet
+ *   "pulse"   slot      a swimming pulse-jelly started a pulse (not comb juvenile/adult, polyps or settled)
+ *   "cleaned"           the cleaning sweep finished
+ *   "grew"    slot, stage  a jelly reached a new stage (1 ephyra, 2 juvenile, 3 adult); one per stage
+ *   "adult"   slot      it just became an adult (fires after its "grew")
+ *   "earned"  amount, slot?, x?, y?  dollars were added (meal, clean, pet, stage reward, rehoming)
+ *   "baby"    slot, parent  an adult released a polyp of its species into `slot`
+ *   "dug"     amount    the hermit crab turned up a sand dollar (an "earned" comes with it)
+ *   "shrimpAte"         the cleaner shrimp ate a pellet off the sand
+ *   "pearlReady"        today's pearl appeared in the clam (once per day; also on the first step after load)
+ *   "pearl"   amount    the pearl was collected (queued by `tap()`, with its "earned")
+ *   "rehomed" slot, x, y  a jelly left for a new home (queued by `rehome()`, then its "earned",
+ *                       which also carries x, y: the slot is already empty when they come out)
+ *   "upgraded" tier     a bigger tank was bought (queued by `buy()`); the shop closes, the wall
+ *                       starts sliding out once it's shut and the camera follows it
+ *   "revealed" tier, x, y  the wall reached the new width; a sparkle goes off at x, y (world)
+ *   "visitorArrived" kind  a visitor (VISITORS: "turtle" | "seahorse" | "diver") came into view
+ *   "visitorTapped" kind, amount, x, y  it was tapped (once per visit; queued by `tap()`, with its
+ *                       "earned", which carries the same x, y: the visitor's middle, world)
+ *   "visitorLeft" kind  it has gone (faded out)
+ *   "spotCleaned" x, y  (v8) a dirt spot that had dirt >= 0.4 was scrubbed off the glass (world x, y);
+ *                       queued by `scrubAt()`, with a sparkle there and its "earned" (+1, same x, y)
+ *   "themed"  theme     (v11) a tank theme was bought or picked again (queued by `buy()` / `setTheme()`);
+ *                       the shop slides shut so the new look shows
+ *   "ate" also carries `fav: true` (v11) when the pellet was the jelly's favourite food: double growth,
+ *                       a little more fullness and a bigger happy flush
+ *
+ * v11 FOODS: flakes (the can, always owned), brine shrimp (a jar) and plankton (a bottle) are bought in the
+ * shop and stand on the tool shelf; each is a tool ("food" | "shrimp" | "plankton"; isFoodTool()), and
+ * sprinkle() pours whichever one is in hand. Every species has a favourite (favouriteFood(k)).
+ * v11 THEMES: s.theme 0 Reef, 1 Kelp Forest, 2 Coral Garden, 3 Arctic recolours the world backdrop
+ * (theme0..3 one-hot); bought in the shop (TANK tab), re-picked by tapping an owned card (setTheme).
+ *
+ * v8 TOOLS: `s.tool` is "none" | "food" | "sponge". The host picks them up and puts them down
+ * (setTool / toggleTool), moves the held item with setCursor (SCREEN coordinates), and, with the can,
+ * calls sprinkle(world x, y) on a tap and every ~110 ms of a drag; with the sponge, scrubAt(world x, y,
+ * distance moved). Dirt lives in spots on the glass (./dirt.ts); murk = clamp(sum(dirt) / 6).
+ * Pets and the pearl earn inside `tap()`; those events are queued and come
+ * out of the next `step()`. `buy()` and `tap()` report through their return
+ * values.
  */
-import contract from "./contract.json";
+import {
+  ADULT,
+  BOTTOM_DWELLERS,
+  FAV_CHASE,
+  FAV_MEAL,
+  FLAKES,
+  FOOD_KINDS,
+  FOOD_NAMES,
+  MEAL,
+  THEME_N,
+  THEME_NAMES,
+  favouriteFood,
+  foodItem,
+  themeItem,
+  SPECIES_N,
+  AWAY_GROWTH_CAP,
+  AWAY_LINES_MAX,
+  AWAY_SUMMARY_MIN,
+  BABY_MOOD,
+  BABY_SECONDS,
+  CARE_SECONDS,
+  CLAM,
+  COMB,
+  CRAB,
+  CRAB_SIZE,
+  DAY_FROM,
+  DECOR,
+  DECOR_N,
+  DIG_REWARD,
+  EARN,
+  EPHYRA,
+  GROWTH,
+  HELPER_N,
+  JUVENILE,
+  K,
+  LURE_RADIUS,
+  MAX_DOLLARS,
+  MAX_SLOTS,
+  MOON,
+  MORPH_CHANCE,
+  NIGHT_FROM,
+  OPEN_SAND,
+  OPEN_SANDS,
+  P,
+  PEARL,
+  PEARL_REWARD,
+  PET_COOLDOWN,
+  POLYP,
+  POLYP_ANCHORS,
+  POLYP_SWAY,
+  REHOME_PAY,
+  SETTLED_PULSE,
+  SETTLE_SPOTS,
+  SHOP_CLOSED_Y,
+  SHOP_ITEMS,
+  SHOP_OPEN_Y,
+  SHRIMP,
+  SNAIL,
+  SNAIL_FLOOR,
+  STAGE_REWARD,
+  TAB_HIDDEN_Y,
+  TAB_ITEMS,
+  TAB_N,
+  TIERS,
+  TIER_N,
+  TRAIL_FAN,
+  TRAIL_L,
+  TRAIL_N,
+  TRAIL_NEUTRAL,
+  TRAIL_R,
+  TRAIL_STREAM,
+  UPSIDE,
+  buttonCentre,
+  clamp,
+  decorClampX,
+  decorY,
+  geomOf,
+  glassRightOf,
+  maxJelliesOf,
+  openSandsOf,
+  sandAt,
+  snap,
+  specProps,
+  shopCardCentre,
+  swimOf,
+  trailOf,
+  trailsOf,
+  worldWOf,
+  type Geom,
+  type FoodKind,
+  type Species,
+  type TrailParams,
+  type Stage,
+} from "./species";
+import { helperWorld, newCrab, newShrimp, newSnail, stepCrab, stepShrimp, stepSnail, type HelperWorld, type RestingFood, type Snail, type Walker } from "./helpers";
+import { EDGE_SCROLL, EDGE_ZONE, FLING_MAX, FLING_REST, VIEW_W, camLo, easeTime, newCam, stepCam, type Cam } from "./camera";
+import { NAMES, cleanName, pickName } from "./names";
+import { TENT_WAVES_PER_PULSE, bodyFramesOf, newTilt, pulseFrame, pulseFrame4, stepTilt, tentFrame, tentFramesOf, type Tilt } from "./motion";
+import {
+  DIVER_REACH,
+  DIVER_SCRUB,
+  PAY_DIRT,
+  ROT_HURRY,
+  SCRUB_PER_PX,
+  SCRUB_REACH,
+  SCRUB_STEP_MAX,
+  SNAIL_SCRUB,
+  SPOT_GAP_MIN,
+  SPOT_GAP_SPREAD,
+  SPOT_KINDS,
+  SPOT_N,
+  SPOT_PAY,
+  addSpot,
+  dirtAway,
+  dirtiest,
+  growSpots,
+  murkOf,
+  rng,
+  rotInto,
+  spotOpacity,
+  spotSlots,
+  spotsForMurk,
+  spotsFromSave,
+  toSaveSpots,
+  type SaveSpot,
+  type Spot,
+} from "./dirt";
+import {
+  DIVER,
+  VISITORS,
+  VISITOR_PROP,
+  VISIT_GAP_MIN,
+  VISIT_GAP_SPREAD,
+  VISIT_PAY_MIN,
+  VISIT_PAY_STEPS,
+  cheer,
+  planVisit,
+  settled,
+  stepVisit,
+  visitOver,
+  visitorCentre,
+  visitorHit,
+  type Visit,
+  type VisitorKind,
+} from "./visitors";
+import { decodeTank, encodeTank, hasPlace, type TankCode } from "./tankcode";
 
-export const K = contract;
-const P = K.P;
+export { K, clamp, sandAt, specProps, SHOP_ITEMS, POLYP_ANCHORS, SETTLE_SPOTS, DECOR, TAB_ITEMS, NAMES, OPEN_SAND, OPEN_SANDS, TIERS, MAX_SLOTS, geomOf };
+export type { Species, Stage, Snail, Walker, Cam, Visit, VisitorKind, Spot, SaveSpot, FoodKind };
+export { favouriteFood, FOOD_NAMES, FOOD_KINDS, THEME_N, THEME_NAMES, foodItem, themeItem };
+export { SPOT_N, murkOf, spotsForMurk };
+export { VISITORS };
 
-export interface Save {
+// ---------------------------------------------------------------- saves
+
+export interface SaveV1 {
   v: 1;
   fullness: number;
   murk: number;
@@ -17,10 +221,94 @@ export interface Save {
   lastSeen: number;
 }
 
+export interface SaveJelly {
+  k: Species;
+  g: Stage;
+  /** cumulative growth points */
+  gp: number;
+  /** seconds of good care towards the next point */
+  care: number;
+  fullness: number;
+  affection: number;
+  /** polyp rock anchor index, -1 when not a polyp */
+  anchor: number;
+  /** settle spot index for upside-down juveniles/adults, -1 otherwise */
+  spot: number;
+  name: string;
+  /** epoch ms */
+  born: number;
+  /** growth-scaled seconds of content time (adult, mood > 0.7) towards the next baby */
+  content: number;
+  /** v7: a rare colour morph (1 in 10 births), fixed for life */
+  morph: boolean;
+}
+
+/** v7: what the jelly journal knows about one species (journal(s)[k]). */
+export interface JournalEntry {
+  /** ever owned, at any stage */
+  seen: boolean;
+  /** how many reached adult */
+  raised: number;
+  /** when the first one reached adult (epoch ms) */
+  firstAdultAt: number | null;
+  /** that first adult's name */
+  firstName: string | null;
+  /** ever owned its colour morph */
+  morphSeen: boolean;
+}
+
+/** The lamp button's override of the clock: show `night` until `until` (epoch ms, the next 07:00 or 19:00). */
+export interface LampOverride {
+  night: boolean;
+  until: number;
+}
+
+/** The save version written by toSave (v6 changed no save fields; v8 added the dirt spots; v9 foods and themes). */
+export const SAVE_VERSION = 9;
+
+export interface Save {
+  v: 9;
+  /** always length 7 (MAX_SLOTS); null = empty slot */
+  slots: (SaveJelly | null)[];
+  dollars: number;
+  /** derived from `spots` (clamp(sum(dirt) / 6)); kept for the away summary and older readers */
+  murk: number;
+  /** v8: dirt spots on the glass (world), at most SPOT_N */
+  spots: SaveSpot[];
+  /** whether night was showing when saved (informational: on load the clock and `lamp` decide) */
+  night: boolean;
+  /** an unexpired lamp override, or null to follow the clock */
+  lamp: LampOverride | null;
+  /** decor 0..4 bought */
+  owned: boolean[];
+  /** snail, shrimp, crab bought */
+  helpers: boolean[];
+  /** where each decoration's base sits (x, artboard units) */
+  decorX: number[];
+  /** local YYYY-MM-DD of the last pearl collected ("" = never) */
+  pearlDay: string;
+  lastSeen: number;
+  /** v5: tank tier 0 Small, 1 Medium, 2 Large */
+  tier: number;
+  /** v5: the camera offset (camX, ≤ 0) when saved */
+  cam: number;
+  /** v7: the jelly journal, one entry per species (index = k) */
+  journal: JournalEntry[];
+  /** v9: food kinds owned (index = FoodKind; flakes always true) */
+  foods: boolean[];
+  /** v9: tank themes owned (index = theme; Reef always true) and the one in use */
+  themes: boolean[];
+  theme: number;
+}
+
+// ---------------------------------------------------------------- state
+
 export type FoodState = "off" | "sink" | "rest" | "eaten";
 
 export interface Food {
   state: FoodState;
+  /** v11: flakes, brine shrimp or plankton */
+  kind: FoodKind;
   x: number;
   y: number;
   vy: number;
@@ -29,357 +317,2558 @@ export interface Food {
   /** where it was when eaten, so it can be drawn into the jelly */
   ex: number;
   ey: number;
+  /** slot that ate it */
+  by: number;
+}
+
+export type Mode = "fixed" | "swim" | "settling" | "settled";
+
+export interface Jelly {
+  k: Species;
+  g: Stage;
+  gp: number;
+  care: number;
+  fullness: number;
+  affection: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  /** pulse phase (sway for polyps, shimmer for comb) */
+  pulse: number;
+  tent: number;
+  /** trailing-tentacle pose (TRAIL_FAN..TRAIL_R), the sim time it was entered, and the eased velocity it reads */
+  trail: number;
+  trailAt: number;
+  svx: number;
+  svy: number;
+  /** v10: the lean into turns (j{s}rot) */
+  tilt: Tilt;
+  target: { x: number; y: number } | null;
+  targetKind: "wander" | "tap" | "food" | null;
+  targetUntil: number;
+  /** when the last happy wiggle started (eating, petting, growing) */
+  wiggleT0: number;
+  /** v11: when it last ate its favourite food (a longer, brighter flush) */
+  loveT0: number;
+  /** sim time when petting pays a dollar again */
+  petReadyAt: number;
+  anchor: number;
+  spot: number;
+  mode: Mode;
+  /** total pulse impulse ever applied (px/s); comb juveniles/adults keep this at 0 */
+  thrust: number;
+  name: string;
+  born: number;
+  content: number;
+  morph: boolean;
+}
+
+export type SimEventType = "ate" | "pulse" | "cleaned" | "grew" | "adult" | "earned" | "baby" | "dug" | "shrimpAte" | "pearlReady" | "pearl" | "rehomed" | "upgraded" | "revealed" | "visitorArrived" | "visitorTapped" | "visitorLeft" | "spotCleaned" | "themed";
+export interface SimEvent {
+  type: SimEventType;
+  slot?: number;
+  stage?: number;
+  amount?: number;
+  /** "baby": the parent's slot */
+  parent?: number;
+  /** "rehomed" and its "earned": where the jelly was (body centre, world); "revealed": the sparkle; "spotCleaned": the spot */
+  x?: number;
+  y?: number;
+  /** "upgraded", "revealed": the new tank tier */
+  tier?: number;
+  /** "visitorArrived", "visitorTapped", "visitorLeft": which visitor */
+  kind?: VisitorKind;
+  /** v11 "ate": the pellet was the jelly's favourite food; and which food it was */
+  fav?: boolean;
+  food?: FoodKind;
+  /** v11 "themed": the theme now in use */
+  theme?: number;
 }
 
 export interface State {
   t: number;
   rand: () => number;
-  jx: number;
-  jy: number;
-  vx: number;
-  vy: number;
-  pulse: number;
-  tent: number;
-  target: { x: number; y: number } | null;
-  targetKind: "wander" | "tap" | "food" | null;
-  targetUntil: number;
+  growthMultiplier: number;
+  slots: (Jelly | null)[];
   food: Food[];
-  fullness: number;
   murk: number;
-  affection: number;
+  /** night is showing (the clock's state, or the lamp override's) */
   nightTarget: boolean;
+  /** eased 0..1 toward nightTarget */
   night: number;
+  /** the lamp button's override, null = follow the clock */
+  lamp: LampOverride | null;
+  dollars: number;
+  owned: boolean[];
   ripple: { x: number; y: number; t0: number } | null;
-  wipe: { t0: number; murk0: number } | null;
-  pressUntil: [number, number, number];
-  /** when the last happy wiggle started (eating, petting) */
-  wiggleT0: number;
+  /** the old cleaning sweep (clean(), demo/tests): every spot fades out over WIPE_TIME */
+  wipe: { t0: number; murk0: number; dirt0: number[] } | null;
+  /** v8: dirt spots on the glass, fixed slots (spot{i} in the view), null = clean glass there */
+  spots: (Spot | null)[];
+  /** sim time the next spot appears, and the spots' own random stream */
+  nextSpot: number;
+  dirtRand: () => number;
+  /** the spot the snail is working on (-1 none) */
+  snailSpot: number;
+  /** v8: what's in hand */
+  tool: Tool;
+  /** v8: the pointer (SCREEN coordinates), pressed, and whether the held item is shown */
+  cursor: { x: number; y: number; down: boolean; visible: boolean };
+  /** v8: sprinkling's rate limit (a token bucket) and when the last flake went in */
+  pour: { tokens: number; at: number; last: number };
+  pressUntil: number[];
+  shop: { open: boolean; from: number; to: number; t0: number };
+  /** how far the JELLIES tab is scrolled down (artboard px, 0..SHOP_SCROLL.max) */
+  shopScroll: number;
+  fx: { x: number; y: number; t0: number } | null;
+  /** events raised outside step() (pet dollars, the pearl), emitted by the next step() */
+  queued: SimEvent[];
+  /** wall clock, epoch ms: starts at the save's time, advanced by dt */
+  clock: number;
+  /** active shop tab 0..2 */
+  tab: number;
+  decorX: number[];
+  /** decoration being arranged, -1 none */
+  lifted: number;
+  helpers: boolean[];
+  snail: Snail;
+  shrimp: Walker;
+  crab: Walker;
+  pearlDay: string;
+  /** whether the pearl was showing on the last step (for pearlReady) */
+  pearlWas: boolean;
+  /** v5: tank tier (0..2) */
+  tier: number;
+  /** the right wall sliding out after an upgrade (null = at the tier's width) */
+  wall: { from: number; to: number; t0: number } | null;
+  cam: Cam;
+  /** the jelly card's close-up: which slot, whether it's wanted, and the eased progress 0..1 */
+  focus: { slot: number; on: boolean; e: number };
+  /** pan hint chevrons, eased 0..1 */
+  hints: { l: number; r: number };
+  /** screen x of the finger dragging a decoration (for edge scrolling), null when not dragging */
+  dragX: number | null;
+  /** v7: the journal, index = species */
+  journal: JournalEntry[];
+  /** v7: the visitor in the tank (null = none) and when the next one is due (sim time) */
+  visit: Visit | null;
+  nextVisit: number;
+  lastVisitor: number;
+  /** v11: food kinds owned (flakes always), themes owned (Reef always) and the theme in use */
+  foods: boolean[];
+  themes: boolean[];
+  theme: number;
 }
 
-export const clamp = (v: number, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v));
+/** v8: what the player has in hand. v11: "shrimp" (the brine shrimp jar) and "plankton" (the bottle) are foods too. */
+export type Tool = "none" | "food" | "sponge" | "shrimp" | "plankton";
+/** v11: the tool that pours each food kind (index = FoodKind). */
+export const FOOD_TOOLS = ["food", "shrimp", "plankton"] as const;
+/** v11: the food kind a tool pours, or -1 (none, sponge). */
+export const foodKindOf = (tool: Tool): FoodKind | -1 => {
+  const k = (FOOD_TOOLS as readonly string[]).indexOf(tool);
+  return k < 0 ? -1 : (k as FoodKind);
+};
+/** v11: is it a food (the can, the jar or the bottle)? The host sprinkles with any of them. */
+export const isFoodTool = (tool: Tool) => foodKindOf(tool) >= 0;
 
-const BOUNDS = { x0: 18, x1: 126, y0: 32, y1: 172 };
+export interface SimOptions {
+  /** ×20 when the URL has ?fast=1 */
+  growthMultiplier?: number;
+}
+
+/** v1 geometry, kept for reference: the moon adult. */
+const MOON_GEOM = geomOf(MOON, ADULT);
+export const BELL_HALF = MOON_GEOM.body.halfW;
+export const BELL_H = MOON_GEOM.body.top;
+export const BOUNDS = MOON_GEOM.bounds;
+export const HARD = MOON_GEOM.hard;
+export const RIM_ABOVE_SAND = MOON_GEOM.rimAbove;
+
+/** Food sprite is 3x3 logical px drawn from its top-left; this finds its middle. */
+const FOOD_MID = P + 1;
 const RATES = {
   /** full -> empty while you watch, seconds */
   hungerActive: 60 * 8,
   /** full -> empty while away, seconds */
   hungerAway: 3600 * 6,
-  murkActive: 60 * 25,
-  murkAway: 3600 * 12,
   affectionDecay: 60 * 6,
 };
+const GOOD_FULLNESS = 0.3;
+const GOOD_MURK = 0.6;
+const SHOP_SLIDE = 0.35;
+const WIPE_TIME = 1.6;
+/** v8 sprinkling: flakes land within this of the point (±12 px), at most POUR_RATE a second (bursts of POUR_BURST) */
+export const SPRINKLE_SPREAD = 12;
+export const POUR_RATE = 10;
+export const POUR_BURST = 3;
+/** the can shows its pouring frame this long after a flake goes in */
+const POUR_SHOW = 0.2;
+/** a swimmer's starting spot per slot (clamped into the tank it's in) */
+const START_X = [360, 220, 500, 870, 960, 1230, 1320];
+/** the right wall slides out to the new width over this long after an upgrade, s */
+export const WALL_TIME = 1.2;
+/** the camera's reveal of the new space (a little slower than the wall, so the wall is seen moving), s */
+export const REVEAL_TIME = 1.5;
+/** height of the sparkle in the new space when the wall arrives */
+const REVEAL_FX_Y = 540;
+/** v11: and of the one that greets a new theme */
+const THEME_FX_Y = 480;
+/** pan hints fade in/out over this long, s */
+const HINT_TIME = 0.25;
 
-export function defaultSave(): Save {
-  return { v: 1, fullness: 0.7, murk: 0.1, affection: 0.4, night: false, lastSeen: Date.now() };
+const freshJelly = (k: Species, g: Stage, name: string, born: number, morph = false): SaveJelly => ({
+  k,
+  g,
+  gp: GROWTH[g],
+  care: 0,
+  fullness: 0.7,
+  affection: 0.4,
+  anchor: g === POLYP ? 0 : -1,
+  spot: -1,
+  name,
+  born,
+  content: 0,
+  morph,
+});
+
+// ---------------------------------------------------------------- the jelly journal (v7)
+
+const blankEntry = (): JournalEntry => ({ seen: false, raised: 0, firstAdultAt: null, firstName: null, morphSeen: false });
+export const emptyJournal = (): JournalEntry[] => Array.from({ length: SPECIES_N }, blankEntry);
+
+/** A journal built from the jellies in a tank: each is seen; adults count as raised, first raised at `now`. */
+export function journalFrom(slots: readonly (SaveJelly | null)[], now: number): JournalEntry[] {
+  const jn = emptyJournal();
+  for (const j of slots) {
+    if (!j) continue;
+    const e = jn[j.k]!;
+    e.seen = true;
+    if (j.morph) e.morphSeen = true;
+    if (j.g === ADULT) {
+      e.raised++;
+      if (e.firstAdultAt === null) {
+        e.firstAdultAt = now;
+        e.firstName = j.name;
+      }
+    }
+  }
+  return jn;
 }
 
-/** Time away still matters, but nothing ever dies: hunger floors at 10%. */
-export function applyAway(save: Save, now: number): Save {
+/** A saved journal repaired entry by entry; anything in the tank now is marked seen. */
+function journalOf(raw: unknown, slots: readonly (SaveJelly | null)[], now: number): JournalEntry[] {
+  if (!Array.isArray(raw)) return journalFrom(slots, now);
+  const jn = emptyJournal().map((_, k): JournalEntry => {
+    const o = raw[k] && typeof raw[k] === "object" ? (raw[k] as Record<string, unknown>) : {};
+    const at = finite(o.firstAdultAt, NaN);
+    const raised = Math.max(0, Math.floor(finite(o.raised, 0)));
+    return {
+      seen: o.seen === true || raised > 0,
+      raised,
+      firstAdultAt: Number.isFinite(at) ? at : null,
+      firstName: cleanName(o.firstName),
+      morphSeen: o.morphSeen === true,
+    };
+  });
+  for (const j of slots) {
+    if (!j) continue;
+    jn[j.k]!.seen = true;
+    if (j.morph) jn[j.k]!.morphSeen = true;
+  }
+  return jn;
+}
+
+const copyJournal = (jn: readonly JournalEntry[]): JournalEntry[] => jn.map((e) => ({ ...e }));
+
+/** The journal, one entry per species (index = k): a copy. */
+export const journal = (s: State): JournalEntry[] => copyJournal(s.journal);
+
+/** Note a jelly in the journal (it's in the tank now). */
+function noteJelly(s: State, j: Jelly): void {
+  const e = s.journal[j.k]!;
+  e.seen = true;
+  if (j.morph) e.morphSeen = true;
+}
+
+/** A repeatable 0..1 from a timestamp, so loading the same save twice names jellies the same. */
+const seedOf = (now: number, i: number) => {
+  const x = Math.sin((Math.floor(now / 1000) % 100000) * 12.9898 + i * 78.233) * 43758.5453;
+  return x - Math.floor(x);
+};
+
+const defaultDecorX = () => DECOR.map((d) => d.x);
+const emptySlots = (): (SaveJelly | null)[] => Array.from({ length: MAX_SLOTS }, () => null);
+const withSlots = (first: (SaveJelly | null)[]) => emptySlots().map((_, i) => first[i] ?? null);
+const noHelpers = () => Array.from({ length: HELPER_N }, () => false);
+const noDecor = () => Array.from({ length: DECOR_N }, () => false);
+/** v9: just the flakes, and just the Reef. */
+const starterFoods = () => Array.from({ length: FOOD_KINDS }, (_, k) => k === FLAKES);
+const starterThemes = () => Array.from({ length: THEME_N }, (_, t) => t === 0);
+/** Owned flags from a save (missing or damaged: the starter set); index 0 is always owned. */
+const ownedList = (raw: unknown, n: number) => Array.from({ length: n }, (_, i) => i === 0 || (Array.isArray(raw) && raw[i] === true));
+/** The theme in use from a save: an owned one, else the Reef. */
+const themeOf = (raw: unknown, themes: readonly boolean[]) => {
+  const t = Math.round(finite(raw, 0));
+  return t >= 0 && t < THEME_N && themes[t] ? t : 0;
+};
+
+/** A new game: one moon polyp on the first rock, no dollars. */
+export function defaultSave(now = Date.now()): Save {
+  const slots = withSlots([freshJelly(MOON, POLYP, pickName([], seedOf(now, 0)), now)]);
+  const spots = spotsForMurk(0.1, tierRight(0), rng(now));
+  return {
+    v: 9,
+    slots,
+    dollars: 0,
+    murk: murkOf(spots),
+    spots: toSaveSpots(spots),
+    night: isNightByClock(now),
+    lamp: null,
+    owned: noDecor(),
+    helpers: noHelpers(),
+    decorX: defaultDecorX(),
+    pearlDay: "",
+    lastSeen: now,
+    tier: 0,
+    cam: 0,
+    journal: journalFrom(slots, now),
+    foods: starterFoods(),
+    themes: starterThemes(),
+    theme: 0,
+  };
+}
+
+/** v1 had one adult moon: keep its needs, add a welcome gift. `now` (default: its lastSeen) is its birthday. */
+export function migrateV1(v1: SaveV1, now = v1.lastSeen): Save {
+  const j: SaveJelly = { ...freshJelly(MOON, ADULT, pickName([], seedOf(now, 0)), now), fullness: clamp(v1.fullness), affection: clamp(v1.affection) };
+  const spots = spotsForMurk(clamp(finite(v1.murk, 0.1)), tierRight(0), rng(v1.lastSeen));
+  return {
+    v: 9,
+    slots: withSlots([j]),
+    dollars: 10,
+    murk: murkOf(spots),
+    spots: toSaveSpots(spots),
+    night: !!v1.night,
+    lamp: null,
+    owned: noDecor(),
+    helpers: noHelpers(),
+    decorX: defaultDecorX(),
+    pearlDay: "",
+    lastSeen: v1.lastSeen,
+    tier: 0,
+    cam: 0,
+    journal: journalFrom([j], now),
+    foods: starterFoods(),
+    themes: starterThemes(),
+    theme: 0,
+  };
+}
+
+const finite = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+/** World x of the inside of the right glass for a tier. */
+const tierRight = (tier: number) => glassRightOf(worldWOf(tier));
+
+/** A saved lamp override, or null if it's missing or damaged (expiry is checked against the clock in createState). */
+function lampOf(v: unknown): LampOverride | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const until = finite(o.until, NaN);
+  return typeof o.night === "boolean" && Number.isFinite(until) ? { night: o.night, until } : null;
+}
+const stageOrSpecies = (v: unknown) => clamp(Math.round(finite(v, 0)), 0, 3) as Stage;
+const speciesOf = (v: unknown) => clamp(Math.round(finite(v, 0)), 0, SPECIES_N - 1) as Species;
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * A v2..v7 save, repaired field by field. Before v7: no morphs, and the journal is filled from the
+ * jellies in the tank (adults count as raised, first raised at load time). v2 → v3: names assigned, born = now,
+ * no content time, no helpers, decorations at their default spots, pearl available today.
+ * Before v5: the small tank (tier 0), camera at 0. Jellies past the tier's max are dropped.
+ * Before v8: no dirt spots: a few appear, adding up to the saved murk. From v8 murk is derived from the spots.
+ * Before v9: only flakes and the Reef are owned, the Reef in use.
+ */
+function sanitize(raw: Record<string, unknown>, now: number): Save {
+  const slotsIn = Array.isArray(raw.slots) ? raw.slots : [];
+  const slots: (SaveJelly | null)[] = [];
+  const used: string[] = [];
+  const tier = clamp(Math.round(finite(raw.tier, 0)), 0, TIER_N - 1);
+  let kept = 0;
+  for (let i = 0; i < MAX_SLOTS; i++) {
+    const r: unknown = slotsIn[i];
+    if (!r || typeof r !== "object" || kept >= maxJelliesOf(tier)) {
+      slots.push(null);
+      continue;
+    }
+    kept++;
+    const o = r as Record<string, unknown>;
+    const g = stageOrSpecies(o.g);
+    const name = cleanName(o.name) ?? pickName(used, seedOf(now, i));
+    used.push(name);
+    slots.push({
+      k: speciesOf(o.k),
+      g,
+      gp: Math.max(GROWTH[g], finite(o.gp, GROWTH[g])),
+      care: clamp(finite(o.care, 0), 0, CARE_SECONDS),
+      fullness: clamp(finite(o.fullness, 0.7)),
+      affection: clamp(finite(o.affection, 0.4)),
+      anchor: Math.round(finite(o.anchor, -1)),
+      spot: Math.round(finite(o.spot, -1)),
+      name,
+      born: finite(o.born, now),
+      content: clamp(finite(o.content, 0), 0, BABY_SECONDS),
+      morph: o.morph === true,
+    });
+  }
+  const ownedIn = Array.isArray(raw.owned) ? raw.owned : [];
+  const helpersIn = Array.isArray(raw.helpers) ? raw.helpers : [];
+  const decorIn = Array.isArray(raw.decorX) ? raw.decorX : [];
+  const foods = ownedList(raw.foods, FOOD_KINDS);
+  const themes = ownedList(raw.themes, THEME_N);
+  const spots =
+    raw.v === 8 || raw.v === 9 ? spotsFromSave(raw.spots, tierRight(tier)) : spotsForMurk(clamp(finite(raw.murk, 0.1)), tierRight(tier), rng(finite(raw.lastSeen, now)));
+  return {
+    v: 9,
+    slots,
+    dollars: clamp(Math.floor(finite(raw.dollars, 0)), 0, MAX_DOLLARS),
+    murk: murkOf(spots),
+    spots: toSaveSpots(spots),
+    night: raw.night === true,
+    lamp: lampOf(raw.lamp),
+    owned: Array.from({ length: DECOR_N }, (_, i) => ownedIn[i] === true),
+    helpers: Array.from({ length: HELPER_N }, (_, i) => helpersIn[i] === true),
+    decorX: DECOR.map((d, n) => decorClampX(n, finite(decorIn[n], d.x), tier)),
+    pearlDay: typeof raw.pearlDay === "string" && DAY_RE.test(raw.pearlDay) ? raw.pearlDay : "",
+    lastSeen: finite(raw.lastSeen, now),
+    tier,
+    cam: snap(clamp(finite(raw.cam, 0), camLo(worldWOf(tier)), 0)),
+    journal: raw.v === 7 || raw.v === 8 || raw.v === 9 ? journalOf(raw.journal, slots, now) : journalFrom(slots, now),
+    foods,
+    themes,
+    theme: themeOf(raw.theme, themes),
+  };
+}
+
+// ---------------------------------------------------------------- day and night
+
+const HOUR = 3_600_000;
+
+/** Night by the local wall clock: 19:00 up to (not including) 07:00. */
+export function isNightByClock(ms: number): boolean {
+  const h = new Date(ms).getHours();
+  return h >= NIGHT_FROM || h < DAY_FROM;
+}
+
+/** The next scheduled change of light strictly after `ms`: the next local 07:00 or 19:00. */
+export function nextLightChange(ms: number): number {
+  const d = new Date(ms);
+  for (let add = 0; add < 3; add++) {
+    for (const h of [DAY_FROM, NIGHT_FROM]) {
+      const t = new Date(d.getFullYear(), d.getMonth(), d.getDate() + add, h).getTime();
+      if (t > ms) return t;
+    }
+  }
+  return ms + 12 * HOUR;
+}
+
+/** The override if it still holds at `clock` (and isn't absurdly far off), else null. */
+const liveLamp = (lamp: LampOverride | null | undefined, clock: number): LampOverride | null =>
+  lamp && lamp.until > clock && lamp.until - clock <= 24 * HOUR ? { night: lamp.night, until: lamp.until } : null;
+
+// ---------------------------------------------------------------- time away
+
+/**
+ * Time away still matters, but nothing ever dies: hunger floors at 10%.
+ * Good care (fullness > 0.3, murk < 0.6) keeps paying growth points while
+ * away, at most 8 per absence; stage-ups happen on the first step() back.
+ * v8: the glass gets dirty as if the time passed (spots appear and grow, for up to 20 minutes and to
+ * murk 0.8 at most); the snail keeps grazing the whole absence, down to lightly cloudy (0.3).
+ */
+export function applyAway(save: Save, now: number, growthMultiplier = 1): Save {
   const away = Math.max(0, (now - save.lastSeen) / 1000);
+  const tier = clamp(Math.round(finite(save.tier, 0)), 0, TIER_N - 1);
+  const right = tierRight(tier);
+  const start = Array.isArray(save.spots) ? spotsFromSave(save.spots, right) : spotsForMurk(save.murk, right, rng(save.lastSeen));
+  const dirt = dirtAway(start, away, right, save.helpers[SNAIL] === true, SNAIL_FLOOR, GOOD_MURK, Math.floor(finite(save.lastSeen, 0) / 1000) + 7);
   return {
     ...save,
-    fullness: Math.max(Math.min(save.fullness, 0.1), save.fullness - away / RATES.hungerAway),
-    murk: Math.min(Math.max(save.murk, 0.8), save.murk + away / RATES.murkAway),
-    affection: Math.max(0, save.affection - away / (RATES.affectionDecay * 20)),
+    slots: save.slots.map((j) => {
+      if (!j) return null;
+      const fullGood = j.fullness > GOOD_FULLNESS ? (j.fullness - GOOD_FULLNESS) * RATES.hungerAway : 0;
+      const good = dirt.goodTime(Math.min(away, fullGood));
+      const pts = Math.min(AWAY_GROWTH_CAP, Math.floor((good * growthMultiplier) / CARE_SECONDS));
+      return {
+        ...j,
+        gp: j.gp + pts,
+        fullness: Math.max(Math.min(j.fullness, 0.1), j.fullness - away / RATES.hungerAway),
+        affection: Math.max(0, j.affection - away / (RATES.affectionDecay * 20)),
+      };
+    }),
+    murk: dirt.murk,
+    spots: toSaveSpots(dirt.spots),
     lastSeen: now,
   };
 }
 
-export function createState(save: Save, rand: () => number = Math.random): State {
+/** Parse whatever localStorage held into a v9 save (no time away yet); `fresh` = it was a brand-new game. */
+function parseSave(raw: string | null, now: number): { save: Save; fresh: boolean } {
+  try {
+    const d: unknown = raw ? JSON.parse(raw) : null;
+    const o = d && typeof d === "object" ? (d as Record<string, unknown>) : null;
+    if (o?.v === 9 || o?.v === 8 || o?.v === 7 || o?.v === 5 || o?.v === 4 || o?.v === 3 || o?.v === 2) return { save: sanitize(o, now), fresh: false };
+    if (o?.v === 1)
+      return {
+        save: migrateV1(
+          {
+            v: 1,
+            fullness: finite(o.fullness, 0.7),
+            murk: finite(o.murk, 0.1),
+            affection: finite(o.affection, 0.4),
+            night: o.night === true,
+            lastSeen: finite(o.lastSeen, now),
+          },
+          now,
+        ),
+        fresh: false,
+      };
+  } catch {
+    /* garbage: start fresh */
+  }
+  return { save: defaultSave(now), fresh: true };
+}
+
+/** Parse whatever localStorage held (v1..v9, garbage or nothing), migrate to v9, and apply time away. */
+export function loadSave(raw: string | null, now: number, opts: SimOptions = {}): Save {
+  return loadGame(raw, now, opts).save;
+}
+
+export interface AwaySummary {
+  /** how long the player was away */
+  seconds: number;
+  /** short past-tense lines, at most 4 */
+  lines: string[];
+}
+
+/** The highest stage `gp` points reach from stage g (stage-ups only go up). */
+function stageFor(g: Stage, gp: number): Stage {
+  let out = g;
+  while (out < ADULT && gp >= GROWTH[(out + 1) as Stage]) out = (out + 1) as Stage;
+  return out;
+}
+
+const GREW_TO = ["", "budded into an ephyra", "grew into a juvenile", "grew into an adult"] as const;
+
+/** "A", "A and B", "A, B and C". */
+function listNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/**
+ * What changed while the tank was left alone, from the save before and after applyAway:
+ * jellies that will grow on the first step back, jellies that got hungry, the water
+ * turning cloudy (or the snail clearing it), a new day's pearl. Null when away < 10 minutes.
+ */
+export function awaySummary(before: Save, after: Save): AwaySummary | null {
+  const seconds = Math.max(0, (after.lastSeen - before.lastSeen) / 1000);
+  if (seconds < AWAY_SUMMARY_MIN) return null;
+  // [priority (lower is kept first when there are too many), line]; listed in reading order
+  const picks: [number, string][] = [];
+  const hungry: string[] = [];
+  before.slots.forEach((b, i) => {
+    const a = after.slots[i];
+    if (!b || !a) return;
+    const g = stageFor(a.g, a.gp);
+    if (g > b.g) picks.push([1, `${a.name} ${GREW_TO[g]}.`]);
+    if (b.fullness >= GOOD_FULLNESS && a.fullness < GOOD_FULLNESS) hungry.push(a.name);
+  });
+  if (hungry.length) picks.push([0, `${listNames(hungry)} got hungry.`]);
+  if (before.murk < 0.5 && after.murk >= 0.5) picks.push([3, "The water got cloudy."]);
+  else if (before.helpers[SNAIL] && before.murk > SNAIL_FLOOR && after.murk <= before.murk - 0.1) picks.push([4, "The snail cleaned the glass."]);
+  const today = dayKey(after.lastSeen);
+  if (after.owned[CLAM] && after.pearlDay !== today && dayKey(before.lastSeen) !== today) picks.push([2, "A pearl is waiting in the clam."]);
+  if (!picks.length) {
+    const names = after.slots.filter((j): j is SaveJelly => j !== null).map((j) => j.name);
+    picks.push([5, names.length === 1 ? `${names[0]} drifted about.` : "The jellies drifted about."]);
+  }
+  const keep = new Set(
+    picks
+      .map((p, i) => ({ p: p[0], i }))
+      .sort((a, b) => a.p - b.p || a.i - b.i)
+      .slice(0, AWAY_LINES_MAX)
+      .map((e) => e.i),
+  );
+  return { seconds, lines: picks.filter((_, i) => keep.has(i)).map((p) => p[1]) };
+}
+
+/**
+ * loadSave plus a "while you were away" summary: null for a brand-new game or an
+ * absence under 10 minutes.
+ */
+export function loadGame(raw: string | null, now: number, opts: SimOptions = {}): { save: Save; away: AwaySummary | null } {
+  const { save: before, fresh } = parseSave(raw, now);
+  const save = applyAway(before, now, opts.growthMultiplier ?? 1);
+  return { save, away: fresh ? null : awaySummary(before, save) };
+}
+
+/**
+ * A tank set up for a short promo clip (pair it with growthMultiplier 1): an adult moon
+ * called Mochi mid-tank; a hungry moon polyp on the first rock one meal from budding
+ * (hungry enough that care alone won't bud it first, and the Feed pinch drops over it);
+ * 200 dollars; the castle; no helpers; clear water; night by a lamp override that holds
+ * at least half an hour, so the clip opens on the glow; no pearl. The small tank, camera at 0.
+ */
+export function demoSave(now = Date.now()): Save {
+  let until = nextLightChange(now);
+  if (until - now < HOUR / 2) until = nextLightChange(until);
+  const slots = withSlots([
+    { ...freshJelly(MOON, ADULT, "Mochi", now - 3 * 24 * HOUR), fullness: 0.85, affection: 0.7 },
+    { ...freshJelly(MOON, POLYP, "Bloop", now), gp: GROWTH[EPHYRA] - 1, fullness: 0.25, affection: 0.6, anchor: 0 },
+  ]);
   return {
-    t: 0,
-    rand,
-    jx: 72,
-    jy: 100,
-    vx: 0,
-    vy: 0,
-    pulse: 0,
-    tent: 0,
-    target: null,
-    targetKind: null,
-    targetUntil: 0,
-    food: Array.from({ length: K.foodN }, () => ({ state: "off" as FoodState, x: 0, y: 0, vy: 0, age: 0, seed: 0, ex: 0, ey: 0 })),
-    fullness: save.fullness,
-    murk: save.murk,
-    affection: save.affection,
-    nightTarget: save.night,
-    night: save.night ? 1 : 0,
-    ripple: null,
-    wipe: null,
-    pressUntil: [0, 0, 0],
-    wiggleT0: -Infinity,
+    v: 9,
+    slots,
+    dollars: 200,
+    murk: 0,
+    spots: [],
+    night: true,
+    lamp: { night: true, until },
+    owned: [true, false, false, false, false],
+    helpers: noHelpers(),
+    decorX: defaultDecorX(),
+    pearlDay: dayKey(now),
+    lastSeen: now,
+    tier: 0,
+    cam: 0,
+    journal: journalFrom(slots, now - 2 * 24 * HOUR),
+    foods: starterFoods(),
+    themes: starterThemes(),
+    theme: 0,
   };
 }
 
-export function toSave(s: State, now: number): Save {
-  return { v: 1, fullness: s.fullness, murk: s.murk, affection: s.affection, night: s.nightTarget, lastSeen: now };
+function modeFor(k: Species, g: Stage): Mode {
+  if (g === POLYP) return "fixed";
+  if (k === UPSIDE && g >= JUVENILE) return "settled";
+  return "swim";
 }
 
-export const mood = (s: State) => clamp(0.5 * s.fullness + 0.3 * (1 - s.murk) + 0.2 * s.affection);
+/** First rock anchor this tier has that no other polyp sits on; -1 if all taken. */
+function freeAnchor(slots: (Jelly | null)[], tier: number, except: Jelly | null = null): number {
+  const used = new Set(slots.filter((j) => j && j !== except && j.mode === "fixed").map((j) => j!.anchor));
+  return POLYP_ANCHORS.findIndex((a, i) => a.tier <= tier && !used.has(i));
+}
 
-const sandAt = (x: number) => K.sandTop[clamp(Math.round(x), 0, K.LW - 1)] ?? 192;
+/** First settle spot this tier has that no other upside-down uses; else the nearest one it has. */
+function freeSpot(slots: (Jelly | null)[], j: Jelly, tier: number): number {
+  const used = new Set(slots.filter((o) => o && o !== j && (o.mode === "settled" || o.mode === "settling")).map((o) => o!.spot));
+  const free = SETTLE_SPOTS.findIndex((p, i) => p.tier <= tier && !used.has(i));
+  if (free >= 0) return free;
+  let best = 0;
+  SETTLE_SPOTS.forEach((p, i) => {
+    if (p.tier <= tier && Math.abs(p.x - j.x) < Math.abs(SETTLE_SPOTS[best]!.x - j.x)) best = i;
+  });
+  return best;
+}
+
+/** A species/stage geometry with its right-hand x limits at a right glass of `right` (world x). */
+function geomAt(k: Species, g: Stage, right: number): Geom {
+  const base = geomOf(k, g);
+  const dx = right - K.glassR;
+  return dx === 0 ? base : { ...base, bounds: { ...base.bounds, x1: base.bounds.x1 + dx }, hard: { ...base.hard, x1: base.hard.x1 + dx } };
+}
+
+/** The tank the jellies swim in now: its right glass follows the wall as it slides out. */
+const geomIn = (s: State, k: Species, g: Stage) => geomAt(k, g, rightGlass(s));
+
+function makeJelly(sj: SaveJelly, slot: number, slots: (Jelly | null)[], tier: number, right: number): Jelly {
+  const j: Jelly = {
+    k: sj.k,
+    g: sj.g,
+    gp: sj.gp,
+    care: sj.care,
+    fullness: sj.fullness,
+    affection: sj.affection,
+    x: 0,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    pulse: slot * 0.31,
+    tent: slot * 0.27,
+    trail: TRAIL_NEUTRAL,
+    trailAt: -Infinity,
+    svx: 0,
+    svy: 0,
+    tilt: newTilt(),
+    target: null,
+    targetKind: null,
+    targetUntil: 0,
+    wiggleT0: -Infinity,
+    loveT0: -Infinity,
+    petReadyAt: 0,
+    anchor: -1,
+    spot: -1,
+    mode: modeFor(sj.k, sj.g),
+    thrust: 0,
+    name: sj.name,
+    born: sj.born,
+    content: sj.content,
+    morph: sj.morph === true,
+  };
+  if (j.mode === "fixed") {
+    const ok =
+      sj.anchor >= 0 && sj.anchor < POLYP_ANCHORS.length && POLYP_ANCHORS[sj.anchor]!.tier <= tier && !slots.some((o) => o && o.mode === "fixed" && o.anchor === sj.anchor);
+    j.anchor = ok ? sj.anchor : Math.max(0, freeAnchor(slots, tier));
+    const a = POLYP_ANCHORS[j.anchor]!;
+    j.x = a.x;
+    j.y = a.y;
+  } else if (j.mode === "settled") {
+    const ok = sj.spot >= 0 && sj.spot < SETTLE_SPOTS.length && SETTLE_SPOTS[sj.spot]!.tier <= tier && !slots.some((o) => o && o.mode === "settled" && o.spot === sj.spot);
+    j.spot = ok ? sj.spot : freeSpot(slots, j, tier);
+    const p = SETTLE_SPOTS[j.spot]!;
+    j.x = p.x;
+    j.y = p.y;
+  } else {
+    const b = geomAt(j.k, j.g, right).bounds;
+    j.x = clamp(START_X[slot] ?? 360, b.x0, b.x1);
+    j.y = clamp(540, b.y0, b.y1);
+  }
+  return j;
+}
+
+export function createState(save: Save, rand: () => number = Math.random, opts: SimOptions = {}): State {
+  const tier = clamp(Math.round(finite(save.tier, 0)), 0, TIER_N - 1);
+  const worldW = worldWOf(tier);
+  const right = glassRightOf(worldW);
+  const slots: (Jelly | null)[] = Array.from({ length: MAX_SLOTS }, () => null);
+  let kept = 0;
+  save.slots.slice(0, MAX_SLOTS).forEach((sj, i) => {
+    if (!sj || kept >= maxJelliesOf(tier)) return;
+    slots[i] = makeJelly(sj, i, slots, tier, right);
+    kept++;
+  });
+  const world = helperWorld(right, openSandsOf(tier));
+  const helpers = Array.from({ length: HELPER_N }, (_, i) => save.helpers?.[i] === true);
+  const clock = finite(save.lastSeen, Date.now());
+  // the clock decides day or night, unless the lamp was switched and that hasn't run out
+  const lamp = liveLamp(save.lamp, clock);
+  const nightNow = lamp ? lamp.night : isNightByClock(clock);
+  // the glass: the saved spots (older hand-made saves: spots for their murk)
+  // the dirt has its own random stream, so it doesn't shift everything else's
+  const dirtRand = rng(Math.floor(clock / 1000) + 11);
+  const spots = spotSlots(Array.isArray(save.spots) ? spotsFromSave(save.spots, right) : spotsForMurk(finite(save.murk, 0.1), right, rng(clock)));
+  const state: State = {
+    t: 0,
+    rand,
+    growthMultiplier: opts.growthMultiplier ?? 1,
+    slots,
+    food: Array.from({ length: K.foodN }, () => ({ state: "off" as FoodState, kind: FLAKES, x: 0, y: 0, vy: 0, age: 0, seed: 0, ex: 0, ey: 0, by: -1 })),
+    murk: murkOf(spots),
+    nightTarget: nightNow,
+    night: nightNow ? 1 : 0,
+    lamp,
+    dollars: clamp(Math.floor(save.dollars), 0, MAX_DOLLARS),
+    owned: Array.from({ length: DECOR_N }, (_, i) => save.owned[i] === true),
+    ripple: null,
+    wipe: null,
+    spots,
+    dirtRand,
+    nextSpot: SPOT_GAP_MIN * 0.5 + dirtRand() * SPOT_GAP_SPREAD,
+    snailSpot: -1,
+    tool: "none",
+    cursor: { x: K.W / 2, y: 540, down: false, visible: false },
+    pour: { tokens: POUR_BURST, at: 0, last: -Infinity },
+    pressUntil: [0, 0, 0, 0, 0, 0],
+    shop: { open: false, from: SHOP_CLOSED_Y, to: SHOP_CLOSED_Y, t0: -Infinity },
+    shopScroll: 0,
+    fx: null,
+    queued: [],
+    clock,
+    tab: 0,
+    decorX: DECOR.map((d, n) => decorClampX(n, save.decorX?.[n] ?? d.x, tier)),
+    lifted: -1,
+    helpers,
+    snail: newSnail(rand, 0, world),
+    shrimp: newShrimp(),
+    crab: newCrab(rand),
+    pearlDay: typeof save.pearlDay === "string" ? save.pearlDay : "",
+    pearlWas: false,
+    tier,
+    wall: null,
+    cam: newCam(clamp(finite(save.cam, 0), camLo(worldW), 0)),
+    focus: { slot: -1, on: false, e: 0 },
+    hints: { l: 0, r: 0 },
+    dragX: null,
+    journal: journalOf(save.journal, save.slots, clock),
+    visit: null,
+    nextVisit: VISIT_GAP_MIN + rand() * VISIT_GAP_SPREAD,
+    lastVisitor: -1,
+    foods: ownedList(save.foods, FOOD_KINDS),
+    themes: ownedList(save.themes, THEME_N),
+    theme: 0,
+  };
+  state.theme = themeOf(save.theme, state.themes);
+  for (const j of jellies(state)) noteJelly(state, j);
+  // the hints start where they belong: no fade-in on load
+  state.hints = { l: hintTarget(state, -1), r: hintTarget(state, 1) };
+  return state;
+}
+
+export function toSave(s: State, now: number): Save {
+  return {
+    v: 9,
+    slots: s.slots.map((j) =>
+      j
+        ? { k: j.k, g: j.g, gp: j.gp, care: j.care, fullness: j.fullness, affection: j.affection, anchor: j.anchor, spot: j.spot, name: j.name, born: j.born, content: j.content, morph: j.morph }
+        : null,
+    ),
+    dollars: s.dollars,
+    murk: murkOf(s.spots),
+    spots: toSaveSpots(s.spots),
+    night: s.nightTarget,
+    lamp: liveLamp(s.lamp, s.clock),
+    owned: [...s.owned],
+    helpers: [...s.helpers],
+    decorX: [...s.decorX],
+    pearlDay: s.pearlDay,
+    lastSeen: now,
+    tier: s.tier,
+    cam: camX(s),
+    journal: copyJournal(s.journal),
+    foods: [...s.foods],
+    themes: [...s.themes],
+    theme: s.theme,
+  };
+}
+
+export const jellies = (s: State) => s.slots.filter((j): j is Jelly => j !== null);
+export const jellyCount = (s: State) => jellies(s).length;
+
+// ---------------------------------------------------------------- world and camera (v5)
+
+/** World width of the tank's tier (the right wall's resting x): 720 / 1080 / 1440. */
+export const worldW = (s: State) => worldWOf(s.tier);
+/** Most jellies this tank holds: 3 / 5 / 7. */
+export const maxJellies = (s: State) => maxJelliesOf(s.tier);
+
+const smoothstep = (t: number) => t * t * (3 - 2 * t);
+
+/** The right wall's world x now: the tier's width, or on its way there after an upgrade (unsnapped). */
+export function wallX(s: State): number {
+  const w = s.wall;
+  if (!w) return worldW(s);
+  const p = clamp((s.t - w.t0) / WALL_TIME);
+  return w.from + (w.to - w.from) * smoothstep(p);
+}
+/** World x of the inside of the right glass now. */
+export const rightGlass = (s: State) => glassRightOf(wallX(s));
+/** The leftmost camera offset now: -(wallX - 720). */
+const camMin = (s: State) => camLo(wallX(s));
+
+/** The World node's x (≤ 0), on the pixel grid: the pan offset, before any close-up. */
+export const camX = (s: State) => snap(s.cam.x);
+
+// ---------------------------------------------------------------- close-up on a jelly (its card is open)
+
+/** 4/3 turns each 3-unit art pixel into exactly 4: the zoomed sprites stay on a whole-pixel grid. */
+export const ZOOM = 4 / 3;
+/** where the focused jelly's body sits on screen: high, so the card fits below it */
+const FOCUS_AT = { x: 360, y: 330 };
+const FOCUS_TIME = 0.35;
+/** the bottom of the water on screen: the cabinet covers everything below */
+const WATER_SCREEN_BOTTOM = 1068;
+const easeIO = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
+
+/** Ease the camera into a close-up of a jelly (the host calls this when its card opens). */
+export function focusJelly(s: State, slot: number): void {
+  if (!s.slots[slot]) return;
+  setTool(s, "none");
+  s.focus.slot = slot;
+  s.focus.on = true;
+}
+/** Ease back out (card closed). */
+export function unfocus(s: State): void {
+  s.focus.on = false;
+}
+
+/** The World nodes' transform: screen = world × z + (tx, ty). */
+export function viewXform(s: State): { z: number; tx: number; ty: number } {
+  const base = { z: 1, tx: camX(s), ty: 0 };
+  const j = s.slots[s.focus.slot];
+  const e = easeIO(clamp(s.focus.e));
+  if (e <= 0 || !j) return base;
+  const fy = j.y - geomOf(j.k, j.g).body.top / 2;
+  const tx = clamp(FOCUS_AT.x - j.x * ZOOM, VIEW_W - wallX(s) * ZOOM, 0);
+  const ty = clamp(FOCUS_AT.y - fy * ZOOM, WATER_SCREEN_BOTTOM * (1 - ZOOM), 0);
+  return { z: 1 + (ZOOM - 1) * e, tx: Math.round(base.tx + (tx - base.tx) * e), ty: Math.round(ty * e) };
+}
+
+/** Artboard (screen) x → world x. */
+export const screenToWorld = (s: State, x: number) => {
+  const f = viewXform(s);
+  return (x - f.tx) / f.z;
+};
+/** World x → artboard (screen) x. */
+export const worldToScreen = (s: State, x: number) => {
+  const f = viewXform(s);
+  return x * f.z + f.tx;
+};
+/** World y → artboard (screen) y (differs from y only in a close-up). */
+export const worldToScreenY = (s: State, y: number) => {
+  const f = viewXform(s);
+  return y * f.z + f.ty;
+};
+/** The world x range on screen (the artboard's width). */
+export const viewSpan = (s: State) => ({ x0: screenToWorld(s, 0), x1: screenToWorld(s, VIEW_W) });
+
+/** The shop is up (or sliding): the tank doesn't take taps or pans. */
+const shopBlocks = (s: State) => s.shop.open || shopY(s) < SHOP_CLOSED_Y - 0.5;
+
+/**
+ * Drag the view by dx artboard px (finger moving right = dx > 0 = see further left).
+ * Takes over from any fling or ease; clamped to the tank. Ignored while the shop is up.
+ */
+export function panBy(s: State, dx: number): void {
+  if (shopBlocks(s) || !Number.isFinite(dx)) return;
+  s.cam.ease = null;
+  s.cam.v = 0;
+  s.cam.x = clamp(s.cam.x + dx, camMin(s), 0);
+}
+
+/**
+ * Let go of a pan at vx artboard px/s: the view glides on, slowing smoothly (v·e^(-t/0.4 s)),
+ * and eases to a stop at the end of the tank instead of hitting it. Ignored while the shop is up.
+ */
+export function flingCam(s: State, vx: number): void {
+  if (shopBlocks(s) || !Number.isFinite(vx)) return;
+  s.cam.ease = null;
+  const v = clamp(vx, -FLING_MAX, FLING_MAX);
+  s.cam.v = Math.abs(v) < FLING_REST ? 0 : v;
+}
+
+/** Ease the view to centre on world x (as near as the tank's ends allow). */
+export function camTo(s: State, x: number): void {
+  if (!Number.isFinite(x)) return;
+  const to = clamp(VIEW_W / 2 - x, camLo(worldW(s)), 0);
+  s.cam.v = 0;
+  s.cam.ease = { from: s.cam.x, to, t0: s.t, dur: easeTime(to - s.cam.x) };
+}
+
+/** Is the camera still moving (fling or ease)? */
+export const camMoving = (s: State) => s.cam.v !== 0 || s.cam.ease !== null;
+
+/** 1 when there's more tank that way (dir -1 left, +1 right) and the shop isn't up. */
+function hintTarget(s: State, dir: -1 | 1): number {
+  if (s.shop.open) return 0;
+  return (dir < 0 ? s.cam.x < -0.5 : s.cam.x > camMin(s) + 0.5) ? 1 : 0;
+}
+export const moodOf = (s: State, j: Jelly) => clamp(0.5 * j.fullness + 0.3 * (1 - s.murk) + 0.2 * j.affection);
+/** Average mood across the tank. */
+export function mood(s: State): number {
+  const js = jellies(s);
+  return js.length ? js.reduce((a, j) => a + moodOf(s, j), 0) / js.length : 0;
+}
+
+function earn(s: State, amount: number, events: SimEvent[], slot?: number): void {
+  const before = s.dollars;
+  s.dollars = Math.min(MAX_DOLLARS, s.dollars + amount);
+  const got = s.dollars - before;
+  if (got > 0) events.push(slot === undefined ? { type: "earned", amount: got } : { type: "earned", amount: got, slot });
+}
+
+/** Where on the body a pellet is drawn into, and where sparkles burst. */
+function bodyCentre(j: Jelly): { x: number; y: number } {
+  const b = geomOf(j.k, j.g).body;
+  if (j.k === COMB && j.g >= JUVENILE) return { x: j.x, y: j.y };
+  return { x: j.x, y: j.y - b.top * 0.5 };
+}
 
 // ---------------------------------------------------------------- actions
 
+/**
+ * Drop a pinch of food (up to 4 flakes) around the middle of the view. If the hungriest
+ * jelly can't swim (a polyp, a settled upside-down) it goes over that one instead, and if
+ * that's off screen the camera eases over so the drop is seen. Returns the flakes dropped.
+ */
 export function feed(s: State): number {
   s.pressUntil[0] = s.t + 0.14;
   let dropped = 0;
-  const cx = 34 + s.rand() * 76;
+  const right = rightGlass(s);
+  // a hungry jelly that can't swim gets the pinch dropped over it
+  let hungriest: Jelly | null = null;
+  for (const j of jellies(s)) if (!hungriest || j.fullness < hungriest.fullness) hungriest = j;
+  let cx: number;
+  if (hungriest && hungriest.mode !== "swim") {
+    cx = clamp(hungriest.x + (s.rand() - 0.5) * 60, K.glassL + 40, right - 40);
+    const v = viewSpan(s);
+    if (hungriest.x < v.x0 + K.glassL + 60 || hungriest.x > v.x1 - (K.W - K.glassR) - 60) camTo(s, hungriest.x);
+  } else {
+    cx = screenToWorld(s, VIEW_W / 2) - 200 + s.rand() * 400;
+  }
   for (const f of s.food) {
     if (dropped >= 4) break;
     if (f.state !== "off") continue;
     f.state = "sink";
-    f.x = cx + (s.rand() - 0.5) * 14;
-    f.y = K.waterTop + 1 - dropped * 2;
-    f.vy = 7 + s.rand() * 4;
+    f.kind = FLAKES;
+    f.x = clamp(cx + (s.rand() - 0.5) * 70, K.glassL + P, right - 4 * P);
+    f.y = K.waterTop + 3 - dropped * 6;
+    f.vy = 35 + s.rand() * 20;
     f.age = 0;
     f.seed = s.rand() * 10;
+    f.by = -1;
     dropped++;
   }
   return dropped;
 }
 
+/** The old one-shot sweep (demo and tests; the Clean button now picks up the sponge): every spot fades over 1.6 s. */
 export function clean(s: State): void {
   s.pressUntil[1] = s.t + 0.14;
   if (s.wipe) return;
-  s.wipe = { t0: s.t, murk0: s.murk };
+  s.wipe = { t0: s.t, murk0: s.murk, dirt0: s.spots.map((sp) => (sp ? sp.dirt : 0)) };
 }
 
+// ---------------------------------------------------------------- v8: things you pick up
+
+/** The press-offset prop each tool's shelf item bobs on: b0y can, b1y sponge, b4y jar, b5y bottle. */
+const BTN_OF: Record<Exclude<Tool, "none">, number> = { food: 0, sponge: 1, shrimp: 4, plankton: 5 };
+
+/** v11: does the player have this tool on the shelf? (The jar and the bottle are bought; the can and sponge always are.) */
+export function hasTool(s: State, tool: Tool): boolean {
+  const k = foodKindOf(tool);
+  return k <= 0 || s.foods[k] === true;
+}
+
+/**
+ * Pick up `tool` (or put it down with "none"). Picking something up puts the other one down. Ignored
+ * (and the hand emptied) while the shop is up or a jelly's card is open. A food that hasn't been bought
+ * can't be picked up (the hand stays as it was). Returns what's in hand now.
+ */
+export function setTool(s: State, tool: Tool): Tool {
+  const known = tool === "food" || tool === "sponge" || tool === "shrimp" || tool === "plankton";
+  if (known && !hasTool(s, tool)) return s.tool;
+  const want: Tool = known ? tool : "none";
+  const now: Tool = want !== "none" && (shopBlocks(s) || s.focus.on) ? "none" : want;
+  if (now !== s.tool) {
+    for (const t of [s.tool, now]) if (t !== "none") s.pressUntil[BTN_OF[t]] = s.t + 0.14;
+    s.tool = now;
+    s.cursor.down = false;
+  }
+  return s.tool;
+}
+
+/** What the shelf items do (feed: "food", clean: "sponge", v11 shrimp: "shrimp", plankton: "plankton"): pick it up, or put it down if it's in hand. */
+export const toggleTool = (s: State, tool: Exclude<Tool, "none">): Tool => setTool(s, s.tool === tool ? "none" : tool);
+
+/**
+ * Where the pointer is, in SCREEN (artboard) coordinates, whether it's pressed, and whether the held
+ * item should show (e.g. false when the pointer leaves the canvas). The can's spout / the sponge's
+ * middle sits on the point; pressed, the can tips and pours and the sponge squishes.
+ */
+export function setCursor(s: State, x: number, y: number, down: boolean, visible: boolean): void {
+  if (Number.isFinite(x)) s.cursor.x = x;
+  if (Number.isFinite(y)) s.cursor.y = y;
+  s.cursor.down = !!down;
+  s.cursor.visible = !!visible;
+}
+
+/**
+ * Sprinkle food at a WORLD point: 1-2 pellets within ±12 px of it, clamped inside the water (under the
+ * surface, above the sand, inside the glass). At most ~10 a second (bursts of 3) and only while the
+ * pool (food0..15) has free pellets. v11: the pellets are whatever food is in hand (flakes from the can,
+ * brine shrimp from the jar, plankton from the bottle; flakes with nothing in hand), or `kind` if given.
+ * Returns how many went in (0: none free, or too soon).
+ */
+export function sprinkle(s: State, x: number, y: number, kind?: FoodKind): number {
+  if (shopBlocks(s) || !Number.isFinite(x) || !Number.isFinite(y)) return 0;
+  const held = foodKindOf(s.tool);
+  const pellet: FoodKind = kind === 0 || kind === 1 || kind === 2 ? kind : held !== -1 ? held : FLAKES;
+  const pour = s.pour;
+  pour.tokens = Math.min(POUR_BURST, pour.tokens + Math.max(0, s.t - pour.at) * POUR_RATE);
+  pour.at = s.t;
+  const right = rightGlass(s);
+  let want = Math.min(Math.floor(pour.tokens + 1e-9), s.rand() < 0.5 ? 1 : 2);
+  let n = 0;
+  for (const f of s.food) {
+    if (want <= 0) break;
+    if (f.state !== "off") continue;
+    const cx = clamp(x + (s.rand() - 0.5) * 2 * SPRINKLE_SPREAD, K.glassL + P + FOOD_MID, right - 4 * P + FOOD_MID);
+    const fx = cx - FOOD_MID;
+    const floor = sandAt(cx) - 2 * P;
+    f.state = "sink";
+    f.kind = pellet;
+    f.x = fx;
+    f.y = clamp(y + (s.rand() - 0.5) * 2 * SPRINKLE_SPREAD - FOOD_MID, K.waterTop + 3, floor);
+    f.vy = 18 + s.rand() * 14;
+    f.age = 0;
+    f.seed = s.rand() * 10;
+    f.by = -1;
+    want--;
+    n++;
+  }
+  pour.tokens -= n;
+  if (n > 0) pour.last = s.t;
+  return n;
+}
+
+/** Sum the glass's dirt into murk. */
+const syncMurk = (s: State) => {
+  s.murk = murkOf(s.spots);
+};
+
+/** Spot i is gone. Scrubbed off by the player (`paid`) from a real mess: sparkle, "spotCleaned", +1. */
+function spotGone(s: State, i: number, paid: boolean): void {
+  const sp = s.spots[i];
+  if (!sp) return;
+  s.spots[i] = null;
+  if (s.snailSpot === i) s.snailSpot = -1;
+  if (!paid || sp.peak < PAY_DIRT) return;
+  s.fx = { x: sp.x, y: sp.y, t0: s.t };
+  s.queued.push({ type: "spotCleaned", x: sp.x, y: sp.y });
+  const before = s.dollars;
+  s.dollars = Math.min(MAX_DOLLARS, s.dollars + SPOT_PAY);
+  if (s.dollars > before) s.queued.push({ type: "earned", amount: s.dollars - before, x: sp.x, y: sp.y });
+}
+
+/**
+ * Rub the sponge at a WORLD point, having moved `distance` px since the last call: every spot whose middle
+ * is within ~60 px loses dirt in proportion (a full spot takes ~1.75 s of steady rubbing at 600 px/s; one
+ * call counts at most 160 px). A spot that had >= 0.4 dirt and comes clean pays +1 with a sparkle
+ * ("spotCleaned" and "earned" come out of the next step). Returns how much dirt came off.
+ */
+export function scrubAt(s: State, x: number, y: number, distance: number): number {
+  if (shopBlocks(s) || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(distance)) return 0;
+  const amount = clamp(distance, 0, SCRUB_STEP_MAX) * SCRUB_PER_PX;
+  if (amount <= 0) return 0;
+  let got = 0;
+  s.spots.forEach((sp, i) => {
+    if (!sp || Math.hypot(sp.x - x, sp.y - y) > SCRUB_REACH) return;
+    const take = Math.min(sp.dirt, amount);
+    sp.dirt -= take;
+    got += take;
+    if (sp.dirt <= 1e-9) spotGone(s, i, true);
+  });
+  syncMurk(s);
+  return got;
+}
+
+/** Dirty spots on the glass now: slot, where (world), dirt and kind. */
+export const spots = (s: State) => s.spots.flatMap((sp, i) => (sp ? [{ i, x: sp.x, y: sp.y, dirt: sp.dirt, v: sp.v }] : []));
+
+/** Replace the glass with spots adding up to `murk` (demo, tests, debug). */
+export function setMurk(s: State, murk: number): void {
+  s.spots = spotSlots(spotsForMurk(murk, rightGlass(s), s.dirtRand));
+  s.snailSpot = -1;
+  if (s.wipe) s.wipe = null;
+  syncMurk(s);
+}
+
+/**
+ * The lamp overrides the clock: flip what's showing and hold it until the next
+ * scheduled change (07:00 or 19:00), when the clock takes over again. Flipping
+ * back to the clock's own state just drops the override.
+ */
 export function toggleLamp(s: State): void {
   s.pressUntil[2] = s.t + 0.14;
-  s.nightTarget = !s.nightTarget;
+  const night = !s.nightTarget;
+  s.lamp = night === isNightByClock(s.clock) ? null : { night, until: nextLightChange(s.clock) };
+  s.nightTarget = night;
 }
 
-/** A tap in the water: logical coordinates. */
-export function tap(s: State, x: number, y: number): "pet" | "call" | null {
-  if (x < K.glassL || x > K.glassR || y < K.waterTop || y > K.waterBot) return null;
+/** Night is showing because of the clock (false) or the lamp override (true). */
+export const lampOverridden = (s: State) => s.lamp !== null;
+
+/** Is the jelly in `slot` a juvenile or adult, with at least one other jelly staying behind? */
+export function canRehome(s: State, slot: number): boolean {
+  const j = s.slots[slot];
+  return !!j && j.g >= JUVENILE && jellyCount(s) > 1;
+}
+
+/** For the jelly card: whether `slot` can be rehomed, what it would pay, and (when it can't) why, in a short line. */
+export function rehomeInfo(s: State, slot: number): { allowed: boolean; reward: number; reason: string } {
+  const j = s.slots[slot];
+  if (!j) return { allowed: false, reward: 0, reason: "" };
+  const reward = REHOME_PAY[j.g];
+  if (j.g === POLYP) return { allowed: false, reward, reason: "Polyps stay on their rock." };
+  if (j.g === EPHYRA) return { allowed: false, reward, reason: "Still too little to move." };
+  if (jellyCount(s) <= 1) return { allowed: false, reward, reason: `${j.name} is your only jelly.` };
+  return { allowed: true, reward, reason: "" };
+}
+
+/**
+ * Send a grown jelly to a new home: frees its slot (and its sand spot), pays 15 for a
+ * juvenile or 30 for an adult, and sparkles where it was. Queues "rehomed" then
+ * "earned" (both with the slot and the jelly's x, y), out of the next step().
+ * Null for polyps, ephyras, empty slots and the last jelly in the tank.
+ */
+export function rehome(s: State, slot: number): { name: string; dollars: number } | null {
+  const j = s.slots[slot];
+  if (!j || !canRehome(s, slot)) return null;
+  const c = bodyCentre(j);
+  const pay = REHOME_PAY[j.g];
+  s.fx = { x: c.x, y: c.y, t0: s.t };
+  s.queued.push({ type: "rehomed", slot, x: c.x, y: c.y });
+  const before = s.dollars;
+  s.dollars = Math.min(MAX_DOLLARS, s.dollars + pay);
+  const got = s.dollars - before;
+  if (got > 0) s.queued.push({ type: "earned", amount: got, slot, x: c.x, y: c.y });
+  // pellets on their way into it finish on their own
+  for (const f of s.food) if (f.by === slot && f.state === "eaten") f.by = -1;
+  s.slots[slot] = null;
+  return { name: j.name, dollars: got };
+}
+
+export const shopY = (s: State) => {
+  const p = clamp((s.t - s.shop.t0) / SHOP_SLIDE);
+  const e = 1 - (1 - p) ** 3;
+  return s.shop.from + (s.shop.to - s.shop.from) * e;
+};
+export const isShopOpen = (s: State) => s.shop.open;
+
+/** Room for one more polyp: under the tier's max and a free rock anchor. */
+const roomForPolyp = (s: State) => jellyCount(s) < maxJellies(s) && freeAnchor(s.slots, s.tier) >= 0;
+
+/** Opens on the JELLIES tab. */
+export function openShop(s: State): void {
+  s.pressUntil[3] = s.t + 0.14;
+  setTool(s, "none");
+  if (s.shop.open) return;
+  s.tab = 0;
+  s.shopScroll = 0;
+  s.shop = { open: true, from: shopY(s), to: SHOP_OPEN_Y, t0: s.t };
+}
+
+/** The JELLIES tab's scroll window (contract.shopScroll), artboard px. */
+export const SHOP_SCROLL = (() => {
+  const c = (K as unknown as { shopScroll?: { max?: number; viewTop?: number; viewBottom?: number; trackTop?: number; trackH?: number } }).shopScroll ?? {};
+  const max = Math.max(0, c.max ?? 0);
+  const trackH = c.trackH ?? 759;
+  return {
+    max,
+    viewTop: c.viewTop ?? 216,
+    viewBottom: c.viewBottom ?? 975,
+    trackTop: c.trackTop ?? 216,
+    trackH,
+    thumbH: Math.round((trackH * trackH) / (trackH + max)),
+  };
+})();
+
+/** Scroll the JELLIES tab by dy artboard px (a finger dragging up gives dy < 0 and scrolls down). */
+export function scrollShop(s: State, dy: number): void {
+  if (!s.shop.open || s.tab !== 0) return;
+  s.shopScroll = clamp(s.shopScroll - dy, 0, SHOP_SCROLL.max);
+}
+
+/** Is an artboard y inside the visible card window of the scrolling tab? (Hidden cards still hit-test in Rive.) */
+export const inShopView = (s: State, y: number) => s.tab !== 0 || (y >= SHOP_SCROLL.viewTop && y <= SHOP_SCROLL.viewBottom);
+
+/** Switch the shop tab (0 JELLIES, 1 DECOR, 2 HELPERS, 3 TANK); out-of-range is ignored. */
+export function setTab(s: State, t: number): void {
+  if (Number.isInteger(t) && t >= 0 && t < TAB_N) {
+    if (t !== s.tab) s.shopScroll = 0;
+    s.tab = t;
+  }
+}
+
+export function closeShop(s: State): void {
+  if (!s.shop.open) return;
+  s.shop = { open: false, from: shopY(s), to: SHOP_CLOSED_Y, t0: s.t };
+}
+
+/**
+ * "bought": paid for (a theme is applied straight away); "selected" (v11): an owned theme was picked again
+ * (no charge; the host should persist and play its "ui" sound); "owned": nothing to do (owned decor, helper,
+ * food, a tank already that big, or the theme already in use).
+ */
+export type BuyResult = "bought" | "cantAfford" | "tankFull" | "owned" | "needsMedium" | "needsLarge" | "selected";
+
+/** A unique name for a new jelly. */
+const newName = (s: State) => pickName(jellies(s).map((j) => j.name), s.rand());
+
+/** Put a new polyp of species k into a free slot at a free rock anchor; null if there's no room (the tier's max). */
+function addPolyp(s: State, k: Species): { slot: number; j: Jelly } | null {
+  const slot = s.slots.findIndex((j) => !j);
+  const anchor = freeAnchor(s.slots, s.tier);
+  if (slot < 0 || anchor < 0 || jellyCount(s) >= maxJellies(s)) return null;
+  const morph = s.rand() < MORPH_CHANCE;
+  const j = makeJelly({ ...freshJelly(k, POLYP, newName(s), s.clock, morph), anchor }, slot, s.slots, s.tier, rightGlass(s));
+  s.slots[slot] = j;
+  noteJelly(s, j);
+  const c = bodyCentre(j);
+  s.fx = { x: c.x, y: c.y, t0: s.t };
+  return { slot, j };
+}
+
+/**
+ * The tank grows to `tier`: the shop slides shut, then the right wall slides out to the new
+ * width over WALL_TIME while the camera eases right to show the new space; a sparkle goes off
+ * in the middle of it when the wall arrives.
+ */
+function upgradeTank(s: State, tier: number): void {
+  const delay = shopBlocks(s) ? SHOP_SLIDE : 0;
+  closeShop(s);
+  const from = wallX(s);
+  s.tier = tier;
+  const to = worldW(s);
+  const t0 = s.t + delay;
+  s.wall = { from, to, t0 };
+  s.cam.v = 0;
+  s.cam.ease = { from: s.cam.x, to: camLo(to), t0, dur: REVEAL_TIME };
+  s.queued.push({ type: "upgraded", tier });
+}
+
+/**
+ * v11: use tank theme n (0 Reef, 1 Kelp Forest, 2 Coral Garden, 3 Arctic) if it's owned. The shop slides
+ * shut so the new look shows, with a sparkle mid-view once it's down, and "themed" comes out of the next
+ * step(). Returns false (nothing changes) for a theme that isn't owned or doesn't exist; true otherwise
+ * (also when it's already the one in use, which changes nothing).
+ */
+export function setTheme(s: State, n: number): boolean {
+  if (!Number.isInteger(n) || n < 0 || n >= THEME_N || !s.themes[n]) return false;
+  if (n === s.theme) return true;
+  s.theme = n;
+  const delay = shopBlocks(s) ? SHOP_SLIDE : 0;
+  closeShop(s);
+  s.fx = { x: screenToWorld(s, VIEW_W / 2), y: THEME_FX_Y, t0: s.t + delay };
+  s.queued.push({ type: "themed", theme: n });
+  return true;
+}
+
+/** The theme in use (0 Reef .. 3 Arctic) and which are owned. */
+export const themeInfo = (s: State) => ({ theme: s.theme, name: THEME_NAMES[s.theme] ?? THEME_NAMES[0], owned: [...s.themes] });
+
+export function buy(s: State, i: number): BuyResult {
+  const item = SHOP_ITEMS[i];
+  if (!item) return "cantAfford";
+  if (item.kind === "theme") {
+    if (s.themes[item.theme]) return item.theme === s.theme ? "owned" : setTheme(s, item.theme) ? "selected" : "owned";
+    if (s.dollars < item.price) return "cantAfford";
+    s.dollars -= item.price;
+    s.themes[item.theme] = true;
+    setTheme(s, item.theme);
+    return "bought";
+  }
+  if (item.kind === "tank") {
+    if (s.tier >= item.tier) return "owned";
+    if (s.tier < item.tier - 1) return "needsMedium";
+    if (s.dollars < item.price) return "cantAfford";
+    s.dollars -= item.price;
+    upgradeTank(s, item.tier);
+    return "bought";
+  }
+  if (item.kind === "decor" && s.owned[item.d]) return "owned";
+  if (item.kind === "helper" && s.helpers[item.h]) return "owned";
+  if (item.kind === "food" && s.foods[item.f]) return "owned";
+  if (item.kind === "polyp" && item.needTier !== undefined && s.tier < item.needTier) return item.needTier >= 2 ? "needsLarge" : "needsMedium";
+  if (item.kind === "polyp" && !roomForPolyp(s)) return "tankFull";
+  if (s.dollars < item.price) return "cantAfford";
+  if (item.kind === "polyp") {
+    addPolyp(s, item.k);
+  } else {
+    if (item.kind === "decor") s.owned[item.d] = true;
+    else if (item.kind === "food") s.foods[item.f] = true;
+    else {
+      s.helpers[item.h] = true;
+      // a fresh helper starts from its home spot
+      if (item.h === SNAIL) s.snail = newSnail(s.rand, s.t, helpersWorld(s));
+      else if (item.h === SHRIMP) s.shrimp = newShrimp(s.t);
+      else s.crab = newCrab(s.rand, s.t);
+    }
+    // the card is on screen; the sparkle lives in the world
+    const c = shopCardCentre(i) ?? buttonCentre(`buy${i}`) ?? { x: K.W / 2, y: 640 };
+    s.fx = { x: screenToWorld(s, c.x), y: c.y, t0: s.t };
+  }
+  s.dollars -= item.price;
+  return "bought";
+}
+
+// ---------------------------------------------------------------- jellies: hit test, card, names
+
+/** The jelly whose body is under (x, y), nearest body centre first; -1 if none. */
+export function jellyAt(s: State, x: number, y: number): number {
+  let best = -1;
+  let bestD = Infinity;
+  s.slots.forEach((j, i) => {
+    if (!j || !hit(j, x, y)) return;
+    const c = bodyCentre(j);
+    const d = Math.hypot(c.x - x, c.y - y);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  });
+  return best;
+}
+
+export interface JellyInfo {
+  name: string;
+  k: Species;
+  g: Stage;
+  /** whole days since it was born (sim clock) */
+  ageDays: number;
+  fullness: number;
+  mood: number;
+  /** v7: a rare colour morph */
+  morph: boolean;
+}
+
+export function jellyInfo(s: State, slot: number): JellyInfo | null {
+  const j = s.slots[slot];
+  if (!j) return null;
+  return { name: j.name, k: j.k, g: j.g, ageDays: Math.max(0, Math.floor((s.clock - j.born) / 86_400_000)), fullness: j.fullness, mood: moodOf(s, j), morph: j.morph };
+}
+
+/** Trimmed, 1..12 characters; anything else is ignored. Returns whether the name changed. */
+export function renameJelly(s: State, slot: number, name: string): boolean {
+  const j = s.slots[slot];
+  const clean = cleanName(name);
+  if (!j || clean === null) return false;
+  j.name = clean;
+  return true;
+}
+
+// ---------------------------------------------------------------- decorations
+
+/** Base y of decoration n where it stands now. */
+export const decorBaseY = (s: State, n: number) => decorY(n, s.decorX[n] ?? DECOR[n]!.x);
+
+/** The owned decoration under (x, y), front-most (lowest base) first; -1 if none. */
+export function decorAt(s: State, x: number, y: number): number {
+  let best = -1;
+  let bestKey = -Infinity;
+  for (let n = 0; n < DECOR_N; n++) {
+    if (!s.owned[n]) continue;
+    const d = DECOR[n]!;
+    const bx = s.decorX[n]!;
+    const by = decorBaseY(s, n);
+    if (Math.abs(x - bx) > d.w / 2 || y > by || y < by - d.h) continue;
+    // in front first; then the one whose middle is nearer
+    const key = by * 1000 - Math.abs(x - bx);
+    if (key > bestKey) {
+      bestKey = key;
+      best = n;
+    }
+  }
+  return best;
+}
+
+/** Pick up an owned decoration to arrange it. Returns false (and does nothing) if it isn't owned. */
+export function liftDecor(s: State, n: number): boolean {
+  if (!s.owned[n]) return false;
+  s.lifted = n;
+  s.dragX = null;
+  return true;
+}
+
+/** Slide decoration n to world x (clamped inside the tank's glass); its y follows the sand. */
+export function moveDecor(s: State, n: number, x: number): void {
+  if (!s.owned[n] || !Number.isFinite(x)) return;
+  s.decorX[n] = decorClampX(n, x, s.tier);
+}
+
+/**
+ * Drag the lifted decoration with the finger at artboard (screen) x. Near either edge of the
+ * water the camera scrolls that way (up to 420 px/s) and the decoration rides along under the
+ * finger, so it can be carried across the whole tank.
+ */
+export function moveDecorScreen(s: State, n: number, screenX: number): void {
+  if (!s.owned[n] || !Number.isFinite(screenX)) return;
+  if (s.lifted === n) s.dragX = screenX;
+  moveDecor(s, n, screenToWorld(s, screenX));
+}
+
+export function dropDecor(s: State): void {
+  s.lifted = -1;
+  s.dragX = null;
+}
+
+// ---------------------------------------------------------------- daily pearl
+
+/** Local calendar day of an epoch-ms time, YYYY-MM-DD. */
+export function dayKey(ms: number): string {
+  const d = new Date(ms);
+  const p2 = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+}
+
+/** Today's pearl is in the clam: the clam is owned and today's isn't collected. */
+export const pearlShowing = (s: State) => s.owned[CLAM] === true && s.pearlDay !== dayKey(s.clock);
+
+/** Where the pearl is (follows the clam). */
+export function pearlCentre(s: State): { x: number; y: number } {
+  return { x: (s.decorX[CLAM] ?? DECOR[CLAM]!.x) + PEARL.dx, y: decorBaseY(s, CLAM) + PEARL.dy };
+}
+
+/**
+ * Jump the sim clock to the real time (the host can call it when the tab comes back:
+ * frames stop while it's hidden, so the dt-advanced clock falls behind). Never goes back.
+ */
+export function syncClock(s: State, now: number): void {
+  if (Number.isFinite(now) && now > s.clock) s.clock = now;
+}
+
+function hit(j: Jelly, x: number, y: number): boolean {
+  const b = geomOf(j.k, j.g).body;
+  const halfW = Math.max(b.halfW + 2, 30);
+  const top = Math.max(b.top + 5, 30);
+  const below = j.k === COMB && j.g >= JUVENILE ? b.top : 10;
+  return Math.abs(x - j.x) <= halfW && y >= j.y - top && y <= j.y + below;
+}
+
+/**
+ * A tap in the water, world coordinates (x from screenToWorld). On a visitor: the first tap of a visit
+ * pays 5-10 with a sparkle, and it leaves a little early, happily ("visitor" either way).
+ * On today's pearl: collect it (+15).
+ * On a jelly's body: pet it. Elsewhere: call the nearest swimmer over. Does
+ * nothing while the shop is up.
+ */
+export function tap(s: State, x: number, y: number): "visitor" | "pearl" | "pet" | "call" | null {
+  if (s.shop.open || shopY(s) < SHOP_CLOSED_Y - 0.5) return null;
+  if (s.visit && visitorHit(s.visit, x, y)) {
+    tapVisitor(s, s.visit);
+    return "visitor";
+  }
+  if (pearlShowing(s)) {
+    const p = pearlCentre(s);
+    if (Math.hypot(x - p.x, y - p.y) <= PEARL.r) {
+      s.pearlDay = dayKey(s.clock);
+      s.fx = { x: p.x, y: p.y, t0: s.t };
+      s.queued.push({ type: "pearl", amount: PEARL_REWARD });
+      earn(s, PEARL_REWARD, s.queued);
+      return "pearl";
+    }
+  }
+  if (x < K.glassL || x > rightGlass(s) || y < K.waterTop || y > K.waterBot) return null;
   s.ripple = { x, y, t0: s.t };
-  const onBell = Math.abs(x - s.jx) <= 13 && y >= s.jy - 17 && y <= s.jy + 4;
-  if (onBell) {
-    s.affection = clamp(s.affection + 0.08);
-    s.wiggleT0 = s.t;
-    s.vy -= 5;
+  const pet = jellyAt(s, x, y);
+  const pj = s.slots[pet];
+  if (pj) {
+    pj.affection = clamp(pj.affection + 0.08);
+    pj.wiggleT0 = s.t;
+    if (pj.mode === "swim") pj.vy -= 25;
+    if (s.t >= pj.petReadyAt) {
+      pj.petReadyAt = s.t + PET_COOLDOWN;
+      earn(s, EARN.pet, s.queued, pet);
+    }
     return "pet";
   }
-  s.affection = clamp(s.affection + 0.02);
-  if (s.targetKind !== "food") {
-    s.target = { x: clamp(x, BOUNDS.x0, BOUNDS.x1), y: clamp(y + 4, BOUNDS.y0, BOUNDS.y1) };
-    s.targetKind = "tap";
-    s.targetUntil = s.t + 4;
+  let call: Jelly | null = null;
+  let callD = Infinity;
+  for (const j of jellies(s)) {
+    if (j.mode !== "swim") continue;
+    const c = bodyCentre(j);
+    const d = Math.hypot(c.x - x, c.y - y);
+    if (d < callD) {
+      callD = d;
+      call = j;
+    }
+  }
+  if (call) {
+    call.affection = clamp(call.affection + 0.02);
+    if (call.targetKind !== "food") {
+      const g = geomIn(s, call.k, call.g);
+      // bring the bell to the finger: rim a little below the tap
+      const off = call.k === COMB && call.g >= JUVENILE ? 0 : Math.min(40, g.body.top / 3);
+      call.target = { x: clamp(x, g.bounds.x0, g.bounds.x1), y: clamp(y + off, g.bounds.y0, g.bounds.y1) };
+      call.targetKind = "tap";
+      call.targetUntil = s.t + 4;
+    }
   }
   return "call";
 }
 
+// ---------------------------------------------------------------- visitors (v7)
+
+/** The world stretch a visitor must stay in: what's on screen, inside the glass. */
+function visitStretch(s: State): { x0: number; x1: number } {
+  const v = viewSpan(s);
+  return { x0: Math.max(v.x0, K.glassL), x1: Math.min(v.x1, rightGlass(s)) };
+}
+
+/** The visitor in the tank: which one, where (world), and whether it's still visible; null if none. */
+export function visitorInfo(s: State): { kind: VisitorKind; x: number; y: number; on: number; paid: boolean } | null {
+  const v = s.visit;
+  if (!v) return null;
+  const c = visitorCentre(v);
+  return { kind: VISITORS[v.kind]!, x: c.x, y: c.y, on: v.on, paid: v.paid };
+}
+
+/** Where the diver would go next (its origin, world): the dirtiest spot it can reach on screen, or null. */
+function diverAim(s: State, v: Visit): { x: number; y: number } | null {
+  const c = visitorCentre(v);
+  const ox = c.x - v.x;
+  const oy = c.y - v.y;
+  const k = dirtiest(s.spots, (sp) => sp.x - ox >= v.lo && sp.x - ox <= v.hi && sp.y - oy >= v.ylo + 40 && sp.y - oy <= Math.max(v.ylo + 40, v.yhi));
+  const sp = s.spots[k];
+  return sp ? { x: sp.x - ox, y: sp.y - oy } : null;
+}
+
+function tapVisitor(s: State, v: Visit): void {
+  if (v.paid) return;
+  v.paid = true;
+  cheer(v);
+  const c = visitorCentre(v);
+  const amount = VISIT_PAY_MIN + Math.min(VISIT_PAY_STEPS - 1, Math.floor(s.rand() * VISIT_PAY_STEPS));
+  s.fx = { x: c.x, y: c.y, t0: s.t };
+  const before = s.dollars;
+  s.dollars = Math.min(MAX_DOLLARS, s.dollars + amount);
+  s.queued.push({ type: "visitorTapped", kind: VISITORS[v.kind]!, amount, x: c.x, y: c.y });
+  if (s.dollars > before) s.queued.push({ type: "earned", amount: s.dollars - before, x: c.x, y: c.y });
+}
+
+/**
+ * Schedule and run the visitors. One every 3-6 minutes, never while the shop is up (nor during a
+ * jelly's close-up or the wall sliding out): it waits until those are done. While the shop is up an
+ * ongoing visit holds still (the panel covers it). The diver cleans the glass while it works.
+ */
+function stepVisitors(s: State, dt: number, events: SimEvent[]): void {
+  const blocked = shopBlocks(s);
+  if (!s.visit) {
+    if (s.t < s.nextVisit || blocked || s.focus.on || s.wall) return;
+    const kinds = [0, 1, 2].filter((k) => k !== s.lastVisitor);
+    for (let i = kinds.length - 1; i > 0; i--) {
+      const r = Math.floor(s.rand() * (i + 1));
+      [kinds[i], kinds[r]] = [kinds[r]!, kinds[i]!];
+    }
+    for (const k of kinds) {
+      const v = planVisit(k, visitStretch(s), s.tier, s.rand);
+      if (!v) continue;
+      s.visit = v;
+      s.lastVisitor = k;
+      events.push({ type: "visitorArrived", kind: VISITORS[k]! });
+      break;
+    }
+    if (!s.visit) s.nextVisit = s.t + 10; // nothing fits this view: try again shortly
+    return;
+  }
+  if (blocked) return;
+  const v = s.visit;
+  stepVisit(v, dt, s.rand, v.kind === DIVER ? diverAim(s, v) : null);
+  if (v.kind === DIVER && settled(v)) {
+    // the diver wipes the spots it's working on
+    const c = visitorCentre(v);
+    s.spots.forEach((sp, i) => {
+      if (!sp || Math.hypot(sp.x - c.x, sp.y - c.y) > DIVER_REACH) return;
+      sp.dirt -= Math.min(sp.dirt, DIVER_SCRUB * dt);
+      if (sp.dirt <= 1e-9) spotGone(s, i, false);
+    });
+    syncMurk(s);
+  }
+  if (visitOver(v)) {
+    events.push({ type: "visitorLeft", kind: VISITORS[v.kind]! });
+    s.visit = null;
+    s.nextVisit = s.t + VISIT_GAP_MIN + s.rand() * VISIT_GAP_SPREAD;
+  }
+}
+
+// ---------------------------------------------------------------- share codes (v7)
+
+/**
+ * The tank as a short URL-safe code (base64url, ~60-130 characters for a full Large tank): tier,
+ * helpers, decorations and where they stand, and each jelly's slot, species, stage, morph, anchor
+ * or sand spot, and name; v11: the theme (a Reef tank's code is the same as before). Dollars, needs,
+ * foods and the clock are left out.
+ */
+export function exportTank(s: State): string {
+  const t: TankCode = {
+    tier: s.tier,
+    theme: s.theme,
+    helpers: [...s.helpers],
+    decor: s.owned.map((o, n) => (o ? snap(s.decorX[n] ?? DECOR[n]!.x) : null)),
+    jellies: s.slots.flatMap((j, slot) =>
+      j ? [{ slot, k: j.k, g: j.g, morph: j.morph, place: j.g === POLYP ? j.anchor : hasPlace(j.k, j.g) ? j.spot : -1, name: j.name }] : [],
+    ),
+  };
+  return encodeTank(t);
+}
+
+/**
+ * A Save for viewing someone's tank read-only (don't persist it), or null if `code` isn't a valid
+ * code. The jellies are well fed and content, the water clear, no pearl waiting; lastSeen = now,
+ * so no time away applies. exportTank(createState(importTank(c))) === c.
+ */
+export function importTank(code: string, now = Date.now()): Save | null {
+  const t = decodeTank(code);
+  if (!t) return null;
+  const slots = emptySlots();
+  for (const c of t.jellies) {
+    const k = c.k as Species;
+    const g = c.g as Stage;
+    slots[c.slot] = {
+      ...freshJelly(k, g, c.name, now, c.morph),
+      fullness: 0.85,
+      affection: 0.7,
+      anchor: g === POLYP ? c.place : -1,
+      spot: hasPlace(k, g) && g !== POLYP ? c.place : -1,
+    };
+  }
+  const themes = starterThemes();
+  const theme = clamp(Math.round(t.theme ?? 0), 0, THEME_N - 1);
+  themes[theme] = true;
+  return {
+    v: 9,
+    slots,
+    dollars: 0,
+    murk: 0,
+    spots: [],
+    night: isNightByClock(now),
+    lamp: null,
+    owned: t.decor.map((x) => x !== null),
+    helpers: [...t.helpers],
+    decorX: t.decor.map((x, n) => x ?? DECOR[n]!.x),
+    pearlDay: dayKey(now),
+    lastSeen: now,
+    tier: t.tier,
+    cam: 0,
+    journal: journalFrom(slots, now),
+    foods: starterFoods(),
+    themes,
+    theme,
+  };
+}
+
 // ---------------------------------------------------------------- step
 
-const WIPE_TIME = 1.6;
+/** Can this jelly catch a pellet whose middle is at (fx, fy)? */
+function catches(j: Jelly, fx: number, fy: number): boolean {
+  const b = geomOf(j.k, j.g).body;
+  if (j.mode === "fixed") {
+    // anywhere along the stalk and crown
+    const dy = clamp(j.y - fy, 0, b.top);
+    return Math.hypot(fx - j.x, fy - (j.y - dy)) <= b.halfW + 18;
+  }
+  if (j.mode === "settled" || j.mode === "settling") {
+    return Math.abs(fx - j.x) <= b.halfW + 18 && fy >= j.y - b.top - 18 && fy <= j.y + 12;
+  }
+  // under the bell, within the oral arms' reach
+  return Math.abs(fx - j.x) <= Math.max(b.halfW * 0.65, 20) && fy >= j.y - 10 && fy <= j.y + Math.max(b.reach, 26);
+}
 
-export function step(s: State, dt: number): string[] {
-  const events: string[] = [];
+/** The point food drifts toward, for jellies that lure it. */
+function lurePoint(j: Jelly): { x: number; y: number } | null {
+  const b = geomOf(j.k, j.g).body;
+  if (j.mode === "fixed") return { x: j.x, y: j.y - b.top * 0.8 };
+  if (j.mode === "settled") return { x: j.x, y: j.y - b.top * 0.4 };
+  return null;
+}
+
+function stageUp(s: State, slot: number, j: Jelly, events: SimEvent[]): void {
+  const from = j.g;
+  j.g = (from + 1) as Stage;
+  if (from === POLYP) {
+    // the ephyra buds off the top of the stalk and swims away
+    j.y -= geomOf(j.k, POLYP).body.top;
+    j.anchor = -1;
+    j.mode = "swim";
+    j.vy = -30;
+    j.target = null;
+    j.targetKind = null;
+  } else if (j.k === UPSIDE && j.g === JUVENILE) {
+    j.mode = "settling";
+    j.spot = freeSpot(s.slots, j, s.tier);
+    j.target = null;
+    j.targetKind = null;
+  }
+  if (j.mode === "swim") {
+    // the bigger body has to fit in the water straight away
+    const g = geomIn(s, j.k, j.g);
+    j.x = clamp(j.x, g.hard.x0, g.hard.x1);
+    j.y = clamp(j.y, g.hard.y0, Math.min(sandAt(j.x) - g.rimAbove, g.bounds.y1));
+  }
+  j.wiggleT0 = s.t;
+  const c = bodyCentre(j);
+  s.fx = { x: c.x, y: c.y, t0: s.t };
+  events.push({ type: "grew", slot, stage: j.g });
+  if (j.g === ADULT) {
+    events.push({ type: "adult", slot });
+    const e = s.journal[j.k]!;
+    e.seen = true;
+    e.raised++;
+    if (e.firstAdultAt === null) {
+      e.firstAdultAt = s.clock;
+      e.firstName = j.name;
+    }
+  }
+  earn(s, STAGE_REWARD[j.g], events, slot);
+}
+
+function swim(s: State, slot: number, j: Jelly, dt: number, events: SimEvent[]): void {
+  const g = geomIn(s, j.k, j.g);
+  const { bounds, hard } = g;
+  const sw = swimOf(j.k, j.g);
+
+  const busy = j.targetKind === "food" || j.targetKind === "tap";
+  const target = j.target ?? { x: j.x, y: j.y };
+  const tx = target.x - j.x;
+  const ty = target.y - j.y;
+  const dist = Math.hypot(tx, ty);
+
+  if (sw.glide) {
+    // comb: cilia, not a bell: no thrust, just a smooth glide; the rows shimmer all the time
+    j.pulse = (j.pulse + dt / sw.shimmer) % 1;
+    const speed = busy ? sw.speedBusy : sw.speedIdle;
+    const want = dist > 6 ? Math.min(speed, dist * 0.6) / dist : 0;
+    const a = 1 - Math.exp(-sw.ease * dt);
+    j.vx += (tx * want - j.vx) * a;
+    j.vy += (ty * want - j.vy) * a;
+  } else {
+    // pulse the bell, thrust during the squeeze
+    let period = busy ? sw.busy : sw.idle;
+    if (j.fullness < 0.2) period *= 1.3;
+    const prev = j.pulse;
+    j.pulse = (j.pulse + dt / period) % 1;
+    const squeezing = j.pulse < sw.squeeze;
+    if (squeezing && dist > 15) {
+      // a jelly can only push away from its bell: aim up and across, never down
+      const up = ty < -10 ? ty : -Math.min(30, Math.max(10, dist * 0.2));
+      const len = Math.hypot(tx * 0.9, up) || 1;
+      const force = (busy ? sw.forceBusy : sw.forceIdle) * Math.sin((j.pulse / sw.squeeze) * Math.PI);
+      if (ty < 40) {
+        j.vx += ((tx * 0.9) / len) * force * dt;
+        j.vy += (up / len) * force * dt;
+      } else {
+        j.vx += Math.sign(tx) * Math.min(1, Math.abs(tx) / 50) * force * 0.35 * dt;
+      }
+      j.thrust += Math.abs(force) * dt;
+    }
+    if (prev > j.pulse) {
+      events.push({ type: "pulse", slot });
+      if (sw.twitch) j.vx += (s.rand() - 0.5) * 2 * sw.twitch;
+    }
+    // sink between pulses, water drag
+    j.vy += 25 * dt;
+    const drag = Math.exp(-1.6 * dt);
+    j.vx *= drag;
+    j.vy *= drag;
+  }
+  j.x += j.vx * dt;
+  j.y += j.vy * dt;
+  if (j.x < bounds.x0) j.vx += (bounds.x0 - j.x) * 4 * dt;
+  if (j.x > bounds.x1) j.vx -= (j.x - bounds.x1) * 4 * dt;
+  if (j.y < bounds.y0) j.vy += (bounds.y0 - j.y) * 4 * dt;
+  if (j.x < hard.x0 || j.x > hard.x1) {
+    j.x = clamp(j.x, hard.x0, hard.x1);
+    j.vx = 0;
+  }
+  if (j.y < hard.y0) {
+    j.y = hard.y0;
+    j.vy = Math.max(0, j.vy);
+  }
+  const floor = Math.min(bounds.y1, sandAt(j.x) - g.rimAbove);
+  if (j.y > floor) {
+    j.y = floor;
+    j.vy = Math.min(0, j.vy);
+  }
+  if (!sw.glide && j.g >= JUVENILE) {
+    // v10: the ripple runs with the bell: TENT_WAVES_PER_PULSE waves down the tentacles per beat
+    let period = busy ? sw.busy : sw.idle;
+    if (j.fullness < 0.2) period *= 1.3;
+    j.tent = (j.tent + (dt * TENT_WAVES_PER_PULSE) / period) % 1;
+  } else {
+    // tentacles sway faster when it swims
+    j.tent = (j.tent + dt * (0.9 + Math.min(1.5, Math.hypot(j.vx, j.vy) / 40))) % 1;
+  }
+}
+
+/**
+ * The trail pose for an eased velocity (artboard px/s, y down), with hysteresis around `cur`:
+ * rising or gliding fast pulls the tentacles into a streak (straight below when mostly rising,
+ * swept to the side behind a mostly sideways glide); sinking (or, for gliders, nearly stopping)
+ * fans them out; anything in between is the neutral sway. Never streams while heading down.
+ */
+export function nextTrail(cur: number, svx: number, svy: number, tp: TrailParams): number {
+  const side = Math.abs(svx);
+  const up = -svy;
+  const speed = Math.hypot(svx, svy);
+  const streaming = cur === TRAIL_STREAM || cur === TRAIL_L || cur === TRAIL_R;
+  const ahead = up > 0 || svy < 0.5 * side; // rising, or gliding no steeper than ~27 degrees down
+  if (speed > (streaming ? tp.streamOut : tp.streamIn) && ahead) {
+    const swept = cur === TRAIL_L || cur === TRAIL_R;
+    if (up <= 0 || side > (swept ? tp.sweptOut : tp.sweptIn) * up) {
+      // a swept streak only flips sides once the glide has clearly turned
+      if (swept && Math.sign(svx) !== (cur === TRAIL_L ? 1 : -1) && side < tp.streamIn) return cur;
+      return svx > 0 ? TRAIL_L : TRAIL_R;
+    }
+    return TRAIL_STREAM;
+  }
+  const fanned = cur === TRAIL_FAN;
+  if (svy > (fanned ? tp.fanOut : tp.fanIn)) return TRAIL_FAN;
+  if (tp.restIn > 0 && speed < (fanned ? tp.restOut : tp.restIn)) return TRAIL_FAN;
+  return TRAIL_NEUTRAL;
+}
+
+/** Ease the velocity the tentacles feel and move to the pose it asks for (holding each pose a moment). */
+function stepTrail(s: State, j: Jelly, dt: number): void {
+  if (j.mode !== "swim" || !trailsOf(j.k, j.g)) {
+    j.trail = TRAIL_NEUTRAL;
+    j.svx = 0;
+    j.svy = 0;
+    return;
+  }
+  const tp = trailOf(j.k, j.g);
+  const a = 1 - Math.exp(-dt / tp.tau);
+  j.svx += (j.vx - j.svx) * a;
+  j.svy += (j.vy - j.svy) * a;
+  if (s.t - j.trailAt < tp.hold) return;
+  const next = nextTrail(j.trail, j.svx, j.svy, tp);
+  if (next !== j.trail) {
+    j.trail = next;
+    j.trailAt = s.t;
+  }
+}
+
+function chooseTargets(s: State): void {
+  const claimed = new Set<Food>();
+  s.slots.forEach((j) => {
+    if (!j || j.mode !== "swim") return;
+    const g = geomIn(s, j.k, j.g);
+    const reach = Math.max(g.body.reach, 26);
+    let best: Food | null = null;
+    let bestD = Infinity;
+    let bestFree: Food | null = null;
+    let bestFreeD = Infinity;
+    const fav = favouriteFood(j.k);
+    for (const f of s.food) {
+      if (f.state !== "sink" && f.state !== "rest") continue;
+      // v11: a favourite pellet counts as much nearer, so with several foods in the water it's chased first
+      const d = Math.hypot(f.x + FOOD_MID - j.x, f.y + FOOD_MID - (j.y + reach * 0.42)) * (f.kind === fav ? FAV_CHASE : 1);
+      if (d < bestD) {
+        bestD = d;
+        best = f;
+      }
+      if (!claimed.has(f) && d < bestFreeD) {
+        bestFreeD = d;
+        bestFree = f;
+      }
+    }
+    const f = bestFree ?? best;
+    if (f) {
+      claimed.add(f);
+      // park the rim above the pellet so it drifts into the tentacles
+      j.target = { x: clamp(f.x + FOOD_MID, g.bounds.x0, g.bounds.x1), y: clamp(f.y - reach * 0.37, g.bounds.y0, g.bounds.y1) };
+      j.targetKind = "food";
+    } else if (j.targetKind === "food" || !j.target || s.t > j.targetUntil) {
+      const sw = swimOf(j.k, j.g);
+      const b = g.bounds;
+      const low = BOTTOM_DWELLERS.includes(j.k) && j.g >= JUVENILE; // flower hats hop about near the sand
+      const yTop = low ? b.y0 + (b.y1 - b.y0) * 0.6 : b.y0 + 50;
+      const ySpan = low ? (b.y1 - b.y0) * 0.4 : Math.max(0, b.y1 - b.y0 - 150);
+      j.target = {
+        x: b.x0 + 40 + s.rand() * Math.max(0, b.x1 - b.x0 - 80),
+        y: yTop + s.rand() * ySpan,
+      };
+      j.targetKind = "wander";
+      j.targetUntil = s.t + sw.wanderMin + s.rand() * sw.wanderSpread;
+    }
+  });
+}
+
+/** Jellies nudge each other apart; polyps and settled ones are rocks to the swimmers. */
+function repel(s: State, dt: number): void {
+  const js = jellies(s);
+  for (let a = 0; a < js.length; a++) {
+    for (let b = a + 1; b < js.length; b++) {
+      const ja = js[a]!;
+      const jb = js[b]!;
+      const ma = ja.mode === "swim";
+      const mb = jb.mode === "swim";
+      if (!ma && !mb) continue;
+      const ga = geomOf(ja.k, ja.g).body;
+      const gb = geomOf(jb.k, jb.g).body;
+      const ca = bodyCentre(ja);
+      const cb = bodyCentre(jb);
+      const ra = Math.max(ga.halfW, ga.top / 2) * 0.85;
+      const rb = Math.max(gb.halfW, gb.top / 2) * 0.85;
+      let dx = ca.x - cb.x;
+      let dy = ca.y - cb.y;
+      let d = Math.hypot(dx, dy);
+      if (d < 1e-3) {
+        dx = 1;
+        dy = 0;
+        d = 1;
+      }
+      const overlap = ra + rb - d;
+      if (overlap <= 0) continue;
+      const push = 6 * overlap * dt;
+      const share = ma && mb ? 0.5 : 1;
+      if (ma) {
+        ja.vx += (dx / d) * push * share;
+        ja.vy += (dy / d) * push * share;
+      }
+      if (mb) {
+        jb.vx -= (dx / d) * push * share;
+        jb.vy -= (dy / d) * push * share;
+      }
+    }
+  }
+}
+
+export function step(s: State, dt: number): SimEvent[] {
+  const events: SimEvent[] = s.queued.splice(0);
   s.t += dt;
+  s.clock += dt * 1000;
+  const mult = s.growthMultiplier;
 
-  // needs
-  s.fullness = clamp(s.fullness - dt / RATES.hungerActive);
-  s.murk = clamp(s.murk + dt / RATES.murkActive);
-  s.affection = clamp(s.affection - dt / RATES.affectionDecay);
+  stepView(s, dt, events);
+  if (s.focus.on && !s.slots[s.focus.slot]) s.focus.on = false;
+  s.focus.e = clamp(s.focus.e + (s.focus.on ? dt : -dt) / FOCUS_TIME);
 
-  // lamp
+  // the glass gets dirty: spots grow, and a new one appears every 90-150 s while there's room
+  stepDirt(s, dt);
+  for (const j of jellies(s)) {
+    j.fullness = clamp(j.fullness - dt / RATES.hungerActive);
+    j.affection = clamp(j.affection - dt / RATES.affectionDecay);
+  }
+
+  // day and night: the clock, unless the lamp's override still holds
+  if (s.lamp && s.clock >= s.lamp.until) s.lamp = null;
+  s.nightTarget = s.lamp ? s.lamp.night : isNightByClock(s.clock);
   const nt = s.nightTarget ? 1 : 0;
   s.night += clamp(nt - s.night, -dt / 1.2, dt / 1.2);
 
-  // cleaning sweep
+  // cleaning sweep (clean(): demo and tests)
   if (s.wipe) {
     const p = (s.t - s.wipe.t0) / WIPE_TIME;
-    s.murk = s.wipe.murk0 * (1 - clamp(p));
+    const w = s.wipe;
+    s.spots.forEach((sp, i) => {
+      if (sp && w.dirt0[i] !== undefined && w.dirt0[i]! > 0) sp.dirt = w.dirt0[i]! * (1 - clamp(p));
+    });
     if (p >= 1) {
+      for (let i = 0; i < s.spots.length; i++) spotGone(s, i, false);
+    }
+    syncMurk(s);
+    if (p >= 1) {
+      const dirty = s.wipe.murk0 > 0.3;
       s.wipe = null;
-      events.push("cleaned");
+      events.push({ type: "cleaned" });
+      if (dirty) earn(s, EARN.clean, events);
     }
   }
 
   // food
-  let nearest: Food | null = null;
-  let nearestD = Infinity;
   for (const f of s.food) {
     if (f.state === "off") continue;
     f.age += dt;
     if (f.state === "sink") {
       f.y += f.vy * dt;
-      f.x += Math.sin(f.age * 2.2 + f.seed) * 3 * dt;
-      const floor = sandAt(f.x) - 2;
+      f.x = clamp(f.x + Math.sin(f.age * 2.2 + f.seed) * 15 * dt, K.glassL + P, rightGlass(s) - 4 * P);
+      // rest with the pellet's bottom row pressed into the top row of sand
+      const floor = sandAt(f.x + FOOD_MID) - 2 * P;
       if (f.y >= floor) {
         f.y = floor;
         f.state = "rest";
         f.age = 0;
       }
-    } else if (f.state === "rest" && f.age > 30) {
+    } else if (f.state === "rest" && f.age > 30 && !s.helpers[SHRIMP]) {
+      // left on the sand it spoils into grime low on the glass; with the shrimp around it waits to be eaten instead
       f.state = "off";
-      s.murk = clamp(s.murk + 0.03);
+      rotInto(s.spots, f.x + FOOD_MID, s.dirtRand, rightGlass(s));
+      s.nextSpot -= ROT_HURRY;
+      syncMurk(s);
     } else if (f.state === "eaten" && f.age > 0.3) {
       f.state = "off";
     }
-    if (f.state === "sink" || f.state === "rest") {
-      // caught by the tentacles: under the bell, within its width
-      if (Math.abs(f.x - s.jx) <= 10 && f.y >= s.jy - 4 && f.y <= s.jy + 15) {
-        f.state = "eaten";
-        f.age = 0;
-        f.ex = f.x;
-        f.ey = f.y;
-        s.fullness = clamp(s.fullness + 0.12);
-        s.affection = clamp(s.affection + 0.04);
-        s.wiggleT0 = s.t;
-        events.push("ate");
-        continue;
+    if (f.state !== "sink" && f.state !== "rest") continue;
+    // polyps (and settled upside-downs) draw nearby food in on a gentle current
+    for (const j of jellies(s)) {
+      const lp = lurePoint(j);
+      if (!lp) continue;
+      const dx = lp.x - (f.x + FOOD_MID);
+      const dy = lp.y - (f.y + FOOD_MID);
+      const d = Math.hypot(dx, dy);
+      if (d < LURE_RADIUS && d > 1) {
+        const v = (12 + 28 * (1 - d / LURE_RADIUS)) * dt;
+        f.x += (dx / d) * v;
+        f.y = Math.min(f.y + (dy / d) * v, sandAt(f.x + FOOD_MID) - 2 * P);
       }
-      const d = Math.hypot(f.x - s.jx, f.y - (s.jy + 8));
-      if (d < nearestD) {
-        nearestD = d;
-        nearest = f;
-      }
+    }
+    const fx = f.x + FOOD_MID;
+    const fy = f.y + FOOD_MID;
+    for (let i = 0; i < s.slots.length; i++) {
+      const j = s.slots[i];
+      if (!j || !catches(j, fx, fy)) continue;
+      f.state = "eaten";
+      f.age = 0;
+      f.ex = f.x;
+      f.ey = f.y;
+      f.by = i;
+      // v11: its favourite food grows it twice as fast, fills a little more and pleases it like a pet
+      const fav = favouriteFood(j.k) === f.kind;
+      const meal = fav ? FAV_MEAL : MEAL;
+      j.fullness = clamp(j.fullness + meal.full);
+      j.affection = clamp(j.affection + meal.love);
+      j.wiggleT0 = s.t;
+      if (fav) j.loveT0 = s.t;
+      j.gp += meal.gp * mult;
+      events.push(fav ? { type: "ate", slot: i, food: f.kind, fav: true } : { type: "ate", slot: i, food: f.kind });
+      earn(s, EARN.meal, events, i);
+      break;
     }
   }
 
-  // choose where to go
-  if (nearest) {
-    s.target = { x: nearest.x, y: clamp(nearest.y - 8, BOUNDS.y0, BOUNDS.y1) };
-    s.targetKind = "food";
-  } else if (s.targetKind === "food" || !s.target || s.t > s.targetUntil) {
-    s.target = {
-      x: BOUNDS.x0 + 8 + s.rand() * (BOUNDS.x1 - BOUNDS.x0 - 16),
-      y: BOUNDS.y0 + 10 + s.rand() * (BOUNDS.y1 - BOUNDS.y0 - 30),
-    };
-    s.targetKind = "wander";
-    s.targetUntil = s.t + 6 + s.rand() * 5;
-  }
-
-  // swim: pulse the bell, thrust during the squeeze
-  const busy = s.targetKind === "food" || s.targetKind === "tap";
-  let period = busy ? 1.15 : 2.1;
-  if (s.fullness < 0.2) period *= 1.3;
-  const prev = s.pulse;
-  s.pulse = (s.pulse + dt / period) % 1;
-  const squeezing = s.pulse < 0.3;
-  const tx = s.target.x - s.jx;
-  const ty = s.target.y - s.jy;
-  const dist = Math.hypot(tx, ty);
-  if (squeezing && dist > 3) {
-    // a jelly can only push away from its bell: aim up and across, never down
-    const up = ty < -2 ? ty : -Math.min(6, Math.max(2, dist * 0.2));
-    const len = Math.hypot(tx * 0.9, up) || 1;
-    const force = (busy ? 70 : 42) * Math.sin((s.pulse / 0.3) * Math.PI);
-    if (ty < 8) {
-      s.vx += ((tx * 0.9) / len) * force * dt;
-      s.vy += (up / len) * force * dt;
+  // move
+  chooseTargets(s);
+  s.slots.forEach((j, i) => {
+    if (!j) return;
+    if (j.mode === "swim") {
+      swim(s, i, j, dt, events);
+    } else if (j.mode === "fixed") {
+      j.pulse = (j.pulse + dt / POLYP_SWAY) % 1;
+      j.tent = (j.tent + dt * 0.45) % 1;
     } else {
-      s.vx += Math.sign(tx) * Math.min(1, Math.abs(tx) / 10) * force * 0.35 * dt;
+      j.pulse = (j.pulse + dt / SETTLED_PULSE) % 1;
+      j.tent = (j.tent + dt * 0.5) % 1;
+      if (j.mode === "settling") {
+        // drift down onto the home spot, then stay put
+        const p = SETTLE_SPOTS[j.spot]!;
+        const dx = p.x - j.x;
+        const dy = p.y - j.y;
+        const d = Math.hypot(dx, dy);
+        const v = Math.min(45, d * 0.9 + 6) * dt;
+        if (d <= v) {
+          j.x = p.x;
+          j.y = p.y;
+          j.mode = "settled";
+        } else {
+          j.x += (dx / d) * v;
+          j.y += (dy / d) * v;
+        }
+        j.vx = 0;
+        j.vy = 0;
+      }
     }
+  });
+  repel(s, dt);
+  for (const j of s.slots) {
+    if (!j) continue;
+    stepTrail(s, j, dt);
+    // v10: lean into turns; polyps and settling/settled jellies stand upright
+    stepTilt(j.tilt, j.vx, j.vy, dt, j.mode !== "swim" || j.g === POLYP);
   }
-  if (prev > s.pulse) events.push("pulse");
-  // sink between pulses, water drag
-  s.vy += 5 * dt;
-  const drag = Math.exp(-1.6 * dt);
-  s.vx *= drag;
-  s.vy *= drag;
-  s.jx += s.vx * dt;
-  s.jy += s.vy * dt;
-  if (s.jx < BOUNDS.x0) s.vx += (BOUNDS.x0 - s.jx) * 4 * dt;
-  if (s.jx > BOUNDS.x1) s.vx -= (s.jx - BOUNDS.x1) * 4 * dt;
-  if (s.jy < BOUNDS.y0) s.vy += (BOUNDS.y0 - s.jy) * 4 * dt;
-  const floor = Math.min(BOUNDS.y1, sandAt(s.jx) - 18);
-  if (s.jy > floor) {
-    s.jy = floor;
-    s.vy = Math.min(0, s.vy);
-  }
+  stepHelpers(s, dt, events);
 
-  // tentacles sway faster when it swims
-  s.tent = (s.tent + dt * (0.9 + Math.min(1.5, Math.hypot(s.vx, s.vy) / 8))) % 1;
+  // growth: good care pays a point a minute; stage-ups happen here
+  s.slots.forEach((j, i) => {
+    if (!j) return;
+    if (j.fullness > GOOD_FULLNESS && s.murk < GOOD_MURK) {
+      j.care += dt * mult;
+      while (j.care >= CARE_SECONDS) {
+        j.care -= CARE_SECONDS;
+        j.gp += 1;
+      }
+    }
+    while (j.g < ADULT && j.gp >= GROWTH[(j.g + 1) as Stage]) stageUp(s, i, j, events);
+  });
+
+  babies(s, dt, events);
+  stepVisitors(s, dt, events);
+  syncMurk(s);
+
+  // daily pearl: announce it once when it appears (also right after loading on a new day)
+  const pearl = pearlShowing(s);
+  if (pearl && !s.pearlWas) events.push({ type: "pearlReady" });
+  s.pearlWas = pearl;
 
   return events;
+}
+
+/** The wall slides, the camera moves (fling, ease, edge scroll under a dragged decoration), the hints fade. */
+function stepView(s: State, dt: number, events: SimEvent[]): void {
+  if (s.wall && s.t >= s.wall.t0 + WALL_TIME) {
+    // the wall is out: a sparkle in the middle of the new space
+    const x = snap((s.wall.from + s.wall.to) / 2);
+    s.wall = null;
+    s.fx = { x, y: REVEAL_FX_Y, t0: s.t };
+    events.push({ type: "revealed", tier: s.tier, x, y: REVEAL_FX_Y });
+  }
+  const lo = camMin(s);
+  if (s.lifted >= 0 && s.dragX !== null) {
+    // carrying a decoration to the edge of the water scrolls the tank under it
+    const l = K.glassL + EDGE_ZONE;
+    const r = K.glassR - EDGE_ZONE;
+    const push = s.dragX < l ? (l - s.dragX) / EDGE_ZONE : s.dragX > r ? -(s.dragX - r) / EDGE_ZONE : 0;
+    if (push !== 0) {
+      s.cam.ease = null;
+      s.cam.v = 0;
+      s.cam.x = clamp(s.cam.x + clamp(push, -1, 1) * EDGE_SCROLL * dt, lo, 0);
+      moveDecor(s, s.lifted, screenToWorld(s, s.dragX));
+    }
+  }
+  stepCam(s.cam, s.t, dt, lo);
+  const k = dt / HINT_TIME;
+  s.hints.l += clamp(hintTarget(s, -1) - s.hints.l, -k, k);
+  s.hints.r += clamp(hintTarget(s, 1) - s.hints.r, -k, k);
+}
+
+/** Spots grow and new ones appear (not during the old sweep, which fades them all). */
+function stepDirt(s: State, dt: number): void {
+  if (s.wipe) return;
+  growSpots(s.spots, dt);
+  if (s.spots.every((sp) => sp)) {
+    s.nextSpot = Math.max(s.nextSpot, s.t + SPOT_GAP_MIN);
+  } else if (s.t >= s.nextSpot) {
+    addSpot(s.spots, s.dirtRand, rightGlass(s));
+    s.nextSpot = s.t + SPOT_GAP_MIN + s.dirtRand() * SPOT_GAP_SPREAD;
+  }
+  syncMurk(s);
+}
+
+/**
+ * The spot the snail is after: while the water is dirtier than lightly cloudy it keeps to the spot it
+ * picked until that's clean, then takes the dirtiest (nearer first when about as dirty); below that it
+ * wanders. -1 = none.
+ */
+function snailGoal(s: State): number {
+  if (s.murk <= SNAIL_FLOOR) {
+    s.snailSpot = -1;
+    return -1;
+  }
+  if (!s.spots[s.snailSpot]) {
+    // the dirtiest, but a nearer one wins when it's nearly as dirty: it's a slow crawl across a big tank
+    let best = -1;
+    let bestScore = 0;
+    s.spots.forEach((sp, i) => {
+      if (!sp) return;
+      const score = sp.dirt * (1 - Math.min(0.5, Math.hypot(sp.x - s.snail.x, sp.y - s.snail.y) / 2000));
+      if (score > bestScore) {
+        bestScore = score;
+        best = i;
+      }
+    });
+    s.snailSpot = best;
+  }
+  return s.snailSpot;
+}
+
+/** Where the helpers live now: inside the (sliding) right glass, on the tier's open sand. */
+const helpersWorld = (s: State): HelperWorld => helperWorld(rightGlass(s), openSandsOf(s.tier));
+
+function stepHelpers(s: State, dt: number, events: SimEvent[]): void {
+  const world = helpersWorld(s);
+  if (s.helpers[SNAIL]) {
+    const k = snailGoal(s);
+    const sp = s.spots[k] ?? null;
+    if (stepSnail(s.snail, s.t, dt, s.rand, sp, world) && sp) {
+      // it grazes the spot it sits on, never past lightly cloudy
+      sp.dirt -= Math.min(sp.dirt, SNAIL_SCRUB * dt, Math.max(0, (murkOf(s.spots) - SNAIL_FLOOR) * 6));
+      if (sp.dirt <= 1e-9) spotGone(s, k, false);
+      syncMurk(s);
+    }
+  }
+  if (s.helpers[SHRIMP]) {
+    const resting: RestingFood = s.food.map((f) => (f.state === "rest" ? f.x + FOOD_MID : null));
+    const ate = stepShrimp(s.shrimp, s.t, dt, s.rand, resting, world);
+    const f = s.food[ate];
+    if (f) {
+      f.state = "off";
+      f.by = -1;
+      events.push({ type: "shrimpAte" });
+    }
+  }
+  if (s.helpers[CRAB] && stepCrab(s.crab, s.t, dt, s.rand, world)) {
+    s.fx = { x: s.crab.x, y: s.crab.y - CRAB_SIZE.h / 2, t0: s.t };
+    events.push({ type: "dug", amount: DIG_REWARD });
+    earn(s, DIG_REWARD, events);
+  }
+}
+
+/**
+ * Adults whose mood stays above 0.7 build content time; every 10 (growth-scaled)
+ * minutes of it they release a polyp of their own species. With no free slot or
+ * rock (or the tank at its tier's max) the timer holds at 10 minutes until there's room.
+ */
+function babies(s: State, dt: number, events: SimEvent[]): void {
+  s.slots.forEach((j, parent) => {
+    if (!j || j.g !== ADULT || moodOf(s, j) <= BABY_MOOD) return;
+    j.content = Math.min(BABY_SECONDS, j.content + dt * s.growthMultiplier);
+    if (j.content < BABY_SECONDS) return;
+    const born = addPolyp(s, j.k);
+    if (!born) return; // full: hold at the threshold
+    j.content = 0;
+    j.wiggleT0 = s.t;
+    events.push({ type: "baby", slot: born.slot, parent });
+  });
 }
 
 // ---------------------------------------------------------------- view
 
 export type View = Record<string, number>;
 
-function bellFrame(pulse: number): number {
-  if (pulse < 0.12) return 1;
-  if (pulse < 0.3) return 2;
-  if (pulse < 0.45) return 3;
-  return 0;
+/** Body frame for a pulse phase: the eased 8-frame curve where the stage draws 8, else the v2 four. */
+function bellFrame(j: Jelly, pulse: number, squeeze = 0.3): number {
+  return bodyFramesOf(j.k, j.g) === 8 ? pulseFrame(pulse, squeeze) : pulseFrame4(pulse, squeeze);
 }
 
 const WIGGLE_TIME = 0.6;
+/** v10: body and tentacle frame props per slot (bf0..7, tf0..7); stages with 4 frames use the first four. */
+const FRAME_N = 8;
 const FLUSH_TIME = 1.0;
+/** v11: the flush after a favourite meal */
+const LOVE_FLUSH_TIME = 1.8;
+const RIPPLE_TIME = 0.6;
+const FX_TIME = 0.7;
 
-const step6 = (v: number) => Math.round(v * 6) / 6;
+const smooth = smoothstep;
+/** The large card's "NEEDS MEDIUM" note: written only when the contract lists it. */
+const NEEDS12 = K.props.includes("needs12");
+const NEEDS15 = K.props.includes("needs15");
+const NEEDS17 = K.props.includes("needs17");
+
+function writeSlot(v: View, s: State, slot: number, j: Jelly | null, night: number): void {
+  const p = `j${slot}`;
+  if (!j) {
+    for (const name of ["on", "x", "y", "healthy", "pale", "flush", "glow", "morph", "rot"]) v[p + name] = 0;
+    for (let i = 0; i < SPECIES_N; i++) v[`${p}k${i}`] = 0;
+    for (let i = 0; i < 4; i++) v[`${p}g${i}`] = 0;
+    for (const g of ["bf", "tf"]) for (let i = 0; i < FRAME_N; i++) v[`${p}${g}${i}`] = 0;
+    for (let i = 0; i < TRAIL_N; i++) v[`${p}tr${i}`] = 0;
+    return;
+  }
+  const m = moodOf(s, j);
+  // happy wiggle: three quick squeezes and a one-pixel shimmy, no thrust
+  const wp = (s.t - j.wiggleT0) / WIGGLE_TIME;
+  const wiggling = wp >= 0 && wp < 1;
+  const shimmy = wiggling ? (Math.floor(wp * 8) % 2 ? P : -P) : 0;
+  v[p + "on"] = 1;
+  v[p + "x"] = snap(j.x) + shimmy;
+  v[p + "y"] = snap(j.y);
+  let bf: number;
+  if (wiggling) bf = bellFrame(j, (wp * 3) % 1);
+  else if (j.mode === "fixed") bf = Math.floor(j.pulse * 4) % 4;
+  else if (j.mode !== "swim") bf = bellFrame(j, j.pulse);
+  else {
+    const sw = swimOf(j.k, j.g);
+    bf = sw.glide ? Math.floor(j.pulse * 4) % 4 : bellFrame(j, j.pulse, sw.squeeze);
+  }
+  // juveniles and adults ripple through 8 sway frames off their own clock (wiggling too, so it never jumps)
+  const nt = tentFramesOf(j.g);
+  const tf = wiggling && nt === 4 ? Math.floor(wp * 8) % 4 : tentFrame(j.tent, nt);
+  for (let i = 0; i < SPECIES_N; i++) v[`${p}k${i}`] = i === j.k ? 1 : 0;
+  for (let i = 0; i < 4; i++) v[`${p}g${i}`] = i === j.g ? 1 : 0;
+  for (let i = 0; i < FRAME_N; i++) {
+    v[`${p}bf${i}`] = i === bf ? 1 : 0;
+    v[`${p}tf${i}`] = i === tf ? 1 : 0;
+  }
+  v[p + "rot"] = Math.round(j.tilt.out * 1e4) / 1e4;
+  for (let i = 0; i < TRAIL_N; i++) v[`${p}tr${i}`] = i === j.trail ? 1 : 0;
+  // palettes: pale overrides the morph colours; flush is drawn over whichever shows
+  const pale = m < 0.35 ? 1 : 0;
+  const morph = j.morph && !pale ? 1 : 0;
+  v[p + "pale"] = pale;
+  v[p + "morph"] = morph;
+  v[p + "healthy"] = pale || morph ? 0 : 1;
+  // rosy flush over whichever body is showing, fading out in steps; a favourite meal holds it longer (v11)
+  const fp = (s.t - j.wiggleT0) / FLUSH_TIME;
+  const lp = (s.t - j.loveT0) / LOVE_FLUSH_TIME;
+  const step3 = (q: number) => (q < 0 || q >= 1 ? 0 : q < 0.5 ? 1 : q < 0.75 ? 0.6 : 0.3);
+  v[p + "flush"] = Math.max(step3(fp), step3(lp));
+  const glowDay = 0.25 + 0.2 * m;
+  const glowNight = 0.6 + 0.4 * m;
+  v[p + "glow"] = glowDay + (glowNight - glowDay) * night;
+}
 
 export function view(s: State): View {
   const v: View = {};
-  const m = mood(s);
-  // happy wiggle: three quick squeezes and a one-pixel shimmy, no thrust
-  const wp = (s.t - s.wiggleT0) / WIGGLE_TIME;
-  const wiggling = wp >= 0 && wp < 1;
-  const shimmy = wiggling ? (Math.floor(wp * 8) % 2 ? 1 : -1) : 0;
-  v.jx = (Math.round(s.jx) + shimmy) * P;
-  v.jy = Math.round(s.jy) * P;
-  const bf = bellFrame(wiggling ? (wp * 3) % 1 : s.pulse);
-  const tf = wiggling ? Math.floor(wp * 8) % 4 : Math.floor(s.tent * 4) % 4;
-  for (let i = 0; i < 4; i++) {
-    v[`bf${i}`] = i === bf ? 1 : 0;
-    v[`tf${i}`] = i === tf ? 1 : 0;
-  }
-  const pale = m < 0.35 ? 1 : 0;
-  v.pale = pale;
-  v.healthy = 1 - pale;
-  // rosy flush over whichever bell is showing, fading out in steps
-  const fp = (s.t - s.wiggleT0) / FLUSH_TIME;
-  v.flush = fp < 0 || fp >= 1 ? 0 : fp < 0.5 ? 1 : fp < 0.75 ? 0.6 : 0.3;
-
-  const night = step6(s.night);
-  v.nightShade = night * 0.55;
+  // the night overlay carries its own alpha: write the eased fade straight
+  const night = smooth(clamp(s.night));
+  v.nightShade = night;
   v.daylight = 1 - night;
   v.sunO = s.nightTarget ? 0 : 1;
   v.moonO = s.nightTarget ? 1 : 0;
-  v.glow = Math.round(night * (0.45 + 0.55 * m) * 4) / 4;
 
-  v.murkShade = Math.round(s.murk * 8) / 8 * 0.42;
-  v.algae0 = s.murk > 0.3 ? 1 : 0;
-  v.algae1 = s.murk > 0.55 ? 1 : 0;
-  v.algae2 = s.murk > 0.8 ? 1 : 0;
+  // the water clouds a little with the murk; the grime itself is the spots on the glass
+  v.murkShade = clamp(s.murk) * 0.6;
+  for (let i = 0; i < SPOT_N; i++) {
+    const sp = s.spots[i];
+    v[`spot${i}x`] = sp ? snap(sp.x) : 0;
+    v[`spot${i}y`] = sp ? snap(sp.y) : 0;
+    v[`spot${i}o`] = sp ? Math.round(spotOpacity(sp.dirt) * 100) / 100 : 0;
+    const kind = sp ? sp.v : 0;
+    for (let k = 0; k < SPOT_KINDS; k++) v[`spot${i}v${k}`] = k === kind ? 1 : 0;
+  }
+
+  for (let i = 0; i < MAX_SLOTS; i++) writeSlot(v, s, i, s.slots[i] ?? null, night);
 
   s.food.forEach((f, i) => {
     let x = f.x;
     let y = f.y;
     let o = f.state === "sink" || f.state === "rest" ? 1 : 0;
     if (f.state === "eaten") {
+      // drawn up the arms into the body
+      const j = s.slots[f.by];
+      const c = j ? bodyCentre(j) : { x: f.ex + FOOD_MID, y: f.ey + FOOD_MID };
       const p = clamp(f.age / 0.3);
-      x = f.ex + (s.jx - f.ex) * p;
-      y = f.ey + (s.jy - 2 - f.ey) * p;
+      x = f.ex + (c.x - FOOD_MID - f.ex) * p;
+      y = f.ey + (c.y - f.ey) * p;
       o = p < 0.5 ? 1 : 0.5;
     }
-    v[`food${i}x`] = Math.round(x) * P;
-    v[`food${i}y`] = Math.round(y) * P;
+    v[`food${i}x`] = snap(x);
+    v[`food${i}y`] = snap(y);
     v[`food${i}o`] = o;
+    for (let k = 0; k < FOOD_KINDS; k++) v[`food${i}k${k}`] = k === f.kind ? 1 : 0;
   });
 
-  const rp = s.ripple ? (s.t - s.ripple.t0) / 0.45 : 1;
-  const rframe = rp < 1 ? Math.floor(rp * 3) : -1;
-  v.rx = s.ripple ? Math.round(s.ripple.x) * P : 0;
-  v.ry = s.ripple ? Math.round(s.ripple.y) * P : 0;
-  for (let i = 0; i < 3; i++) v[`rf${i}`] = i === rframe ? 1 : 0;
-
-  if (s.wipe) {
-    const p = clamp((s.t - s.wipe.t0) / WIPE_TIME);
-    v.wipeX = Math.round(K.glassL - 14 + p * (K.glassR - K.glassL + 44)) * P;
-    v.wipeO = 1;
+  // ripple: a ring that widens and fades
+  const rp = s.ripple ? (s.t - s.ripple.t0) / RIPPLE_TIME : 1;
+  if (s.ripple && rp < 1) {
+    const e = 1 - (1 - rp) * (1 - rp);
+    v.rx = snap(s.ripple.x);
+    v.ry = snap(s.ripple.y);
+    v.rs = 0.3 + 1.1 * e;
+    v.ro = 0.8 * (1 - rp);
   } else {
-    v.wipeX = -100 * P;
-    v.wipeO = 0;
+    v.rx = s.ripple ? snap(s.ripple.x) : 0;
+    v.ry = s.ripple ? snap(s.ripple.y) : 0;
+    v.rs = 1;
+    v.ro = 0;
   }
 
-  v.barFood = Math.round(s.fullness * K.barW) * P;
-  v.barWater = Math.round((1 - s.murk) * K.barW) * P;
-  v.barMood = Math.round(m * K.barW) * P;
-  for (let i = 0; i < 3; i++) v[`b${i}y`] = s.t < (s.pressUntil[i] ?? 0) ? P : 0;
+  // sparkle burst: pops, grows and fades
+  const xp = s.fx ? (s.t - s.fx.t0) / FX_TIME : 1;
+  v.fxX = s.fx ? snap(s.fx.x) : 0;
+  v.fxY = s.fx ? snap(s.fx.y) : 0;
+  if (s.fx && xp >= 0 && xp < 1) {
+    const e = 1 - (1 - xp) ** 2;
+    v.fxS = 0.4 + 1.2 * e;
+    v.fxO = xp < 0.3 ? 1 : 1 - (xp - 0.3) / 0.7;
+  } else {
+    v.fxS = 1;
+    v.fxO = 0;
+  }
+
+  // v8: the held item follows the pointer (screen space): the can tips while pouring, the sponge squishes.
+  // v11: so do the brine shrimp jar and the plankton bottle
+  const c = s.cursor;
+  const sponge = s.tool === "sponge" && c.visible;
+  const pours = c.down || s.t - s.pour.last < POUR_SHOW;
+  for (const [name, tool] of [["can", "food"], ["jar", "shrimp"], ["bottle", "plankton"]] as const) {
+    const shown = s.tool === tool && c.visible;
+    v[`${name}X`] = snap(c.x);
+    v[`${name}Y`] = snap(c.y);
+    v[`${name}O`] = shown ? 1 : 0;
+    v[`${name}F0`] = shown && pours ? 0 : 1;
+    v[`${name}F1`] = shown && pours ? 1 : 0;
+  }
+  v.spongeX = snap(c.x);
+  v.spongeY = snap(c.y);
+  v.spongeO = sponge ? 1 : 0;
+  v.spongeF0 = sponge && c.down ? 0 : 1;
+  v.spongeF1 = sponge && c.down ? 1 : 0;
+  v.toolFood = s.tool === "food" ? 1 : 0;
+  v.toolSponge = s.tool === "sponge" ? 1 : 0;
+  v.toolShrimp = s.tool === "shrimp" ? 1 : 0;
+  v.toolPlankton = s.tool === "plankton" ? 1 : 0;
+  // v11: bought foods stand on the shelf (their hit boxes are moved away until then)
+  v.haveShrimp = s.foods[1] ? 1 : 0;
+  v.havePlankton = s.foods[2] ? 1 : 0;
+  for (let t = 0; t < THEME_N; t++) v[`theme${t}`] = t === s.theme ? 1 : 0;
+
+  const js = jellies(s);
+  const full = K.barW * P;
+  const hungriest = js.length ? Math.min(...js.map((j) => j.fullness)) : 0;
+  v.barFood = snap(hungriest * full);
+  v.barWater = snap((1 - s.murk) * full);
+  v.barMood = snap(mood(s) * full);
+  // a held tool keeps its shelf item pressed (b4y the jar, b5y the bottle: v11)
+  const held = [s.tool === "food", s.tool === "sponge", false, false, s.tool === "shrimp", s.tool === "plankton"];
+  for (let i = 0; i < 6; i++) v[`b${i}y`] = held[i] || s.t < (s.pressUntil[i] ?? 0) ? P : 0;
+
+  // sand dollar counter: ones in position 0, no leading zeros, a lone 0 when broke
+  const digits = String(clamp(Math.floor(s.dollars), 0, MAX_DOLLARS));
+  for (let pos = 0; pos < 4; pos++) {
+    const ch = digits[digits.length - 1 - pos];
+    const d = ch === undefined ? -1 : Number(ch);
+    for (let n = 0; n < 10; n++) v[`cd${pos}n${n}`] = n === d ? 1 : 0;
+  }
+
+  // shop
+  v.shopY = snap(shopY(s));
+  if (K.props.includes("shopScroll")) {
+    v.shopScroll = -snap(s.shopScroll);
+    const frac = SHOP_SCROLL.max > 0 ? s.shopScroll / SHOP_SCROLL.max : 0;
+    v.shopScrollBar = snap(SHOP_SCROLL.trackTop + (SHOP_SCROLL.trackH - SHOP_SCROLL.thumbH) * frac);
+  }
+  const tankFull = !roomForPolyp(s);
+  SHOP_ITEMS.forEach((item, i) => {
+    if (item.kind === "theme") {
+      // v11: owned themes stay bright (tap to use one again): "IN USE" on the active one, "OWNED" on the rest
+      const has = s.themes[item.theme] === true;
+      const using = s.theme === item.theme;
+      v[`own${i}`] = has && !using ? 1 : 0;
+      v[`use${i}`] = using ? 1 : 0;
+      v[`lock${i}`] = !has && s.dollars < item.price ? 1 : 0;
+      return;
+    }
+    const owned =
+      item.kind === "decor"
+        ? s.owned[item.d] === true
+        : item.kind === "helper"
+          ? s.helpers[item.h] === true
+          : item.kind === "tank"
+            ? s.tier >= item.tier
+            : item.kind === "food"
+              ? s.foods[item.f] === true
+              : false;
+    const tooSmall = item.kind === "polyp" && item.needTier !== undefined && s.tier < item.needTier;
+    const blocked = (item.kind === "polyp" && (tankFull || tooSmall)) || (item.kind === "tank" && s.tier < item.tier - 1);
+    v[`own${i}`] = owned ? 1 : 0;
+    v[`lock${i}`] = owned || blocked || s.dollars < item.price ? 1 : 0;
+  });
+  if (NEEDS12) v.needs12 = s.tier < 1 ? 1 : 0;
+  if (NEEDS15) v.needs15 = s.tier < 1 ? 1 : 0;
+  if (NEEDS17) v.needs17 = s.tier < 2 ? 1 : 0;
+  for (let t = 0; t < TAB_N; t++) {
+    v[`shopTab${t}`] = t === s.tab ? 1 : 0;
+    v[`tab${t}Y`] = t === s.tab ? 0 : TAB_HIDDEN_Y;
+  }
+
+  // decorations: shown when owned, where they've been arranged
+  for (let d = 0; d < DECOR_N; d++) {
+    v[`dec${d}`] = s.owned[d] ? 1 : 0;
+    v[`dec${d}x`] = snap(s.decorX[d] ?? DECOR[d]!.x);
+    v[`dec${d}y`] = snap(decorBaseY(s, d));
+    v[`dec${d}lift`] = s.lifted === d && s.owned[d] ? 1 : 0;
+  }
+  v.dec4glow = night * (s.owned[4] ? 1 : 0);
+  v.pearl = pearlShowing(s) ? 1 : 0;
+
+  // helpers
+  const sn = s.snail;
+  v.snailOn = s.helpers[SNAIL] ? 1 : 0;
+  v.snailX = snap(sn.x);
+  v.snailY = snap(sn.y);
+  v.snailSX = sn.sx;
+  for (let f = 0; f < 2; f++) v[`snailF${f}`] = f === sn.f ? 1 : 0;
+  const walkers: [string, Walker, boolean][] = [
+    ["shrimp", s.shrimp, s.helpers[SHRIMP] === true],
+    ["crab", s.crab, s.helpers[CRAB] === true],
+  ];
+  for (const [name, h, on] of walkers) {
+    v[`${name}On`] = on ? 1 : 0;
+    v[`${name}X`] = snap(h.x);
+    v[`${name}Y`] = snap(h.y);
+    v[`${name}SX`] = h.sx;
+    for (let f = 0; f < 4; f++) v[`${name}F${f}`] = f === h.f ? 1 : 0;
+  }
+
+  // the camera, the right wall, and the chevrons saying there's more tank that way
+  const xf = viewXform(s);
+  v.camX = xf.tx;
+  v.camY = xf.ty;
+  v.camZ = xf.z;
+  v.wallX = snap(wallX(s));
+  v.panL = clamp(s.hints.l);
+  v.panR = clamp(s.hints.r);
+
+  // visitors (world): the one in the tank, eased in and out; the others hidden
+  VISITOR_PROP.forEach((name, k) => {
+    const vis = s.visit && s.visit.kind === k ? s.visit : null;
+    v[`${name}On`] = vis ? clamp(vis.on) : 0;
+    v[`${name}X`] = vis ? snap(vis.x) : 0;
+    v[`${name}Y`] = vis ? snap(vis.y) : 0;
+    v[`${name}SX`] = vis ? vis.sx : 1;
+    for (let f = 0; f < 4; f++) v[`${name}F${f}`] = (vis ? vis.f : 0) === f ? 1 : 0;
+  });
   return v;
 }

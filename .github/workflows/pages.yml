@@ -1,4 +1,6 @@
 # Builds the game and deploys dist/ to GitHub Pages on every push to main (or by hand from the Actions tab).
+# Pushes only deploy once the repo variable PAGES_ENABLED is "true" (set it after turning Pages on in
+# Settings → Pages → Source: GitHub Actions), so pushes don't fail while Pages is off.
 # No Python or Rive CLI here: the built public/jellytank.riv, the sprite groups in public/sprites/ and the
 # generated src/*.json are committed. Rebuild them locally with `npm run riv:build` before pushing art changes.
 name: Pages
@@ -19,6 +21,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.event_name == 'workflow_dispatch' || vars.PAGES_ENABLED == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

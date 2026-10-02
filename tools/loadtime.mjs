@@ -6,7 +6,7 @@ import { gzipSync } from "node:zlib";
 import { extname, join } from "node:path";
 import puppeteer from "puppeteer-core";
 
-const PORT = 5196;
+const PORT = Number(process.env.LOAD_PORT ?? 5196);
 const page = readFileSync("pub/jellytank.html", "utf8");
 const shell = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body>${page}</body></html>`;
 const types = { ".js": "text/javascript", ".wasm": "application/wasm", ".bin": "application/octet-stream", ".html": "text/html" };

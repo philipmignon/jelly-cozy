@@ -5,7 +5,7 @@ import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { extname, join } from "node:path";
 import puppeteer from "puppeteer-core";
 
-const PORT = 5195;
+const PORT = Number(process.env.PHONES_PORT ?? 5195);
 const page = readFileSync("pub/jellytank.html", "utf8");
 const shell = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}</style></head><body>${page}</body></html>`;
 const types = { ".js": "text/javascript", ".wasm": "application/wasm" };

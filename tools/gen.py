@@ -3772,6 +3772,501 @@ def diver_art(frame):
     return px
 
 
+# ---- Halloween event ----
+# Everything here is event art: every sprite is named hw_* (the lead's on-demand loader groups them as
+# "ev-halloween"), and all of it shows on one prop, evHalloween (0/1), written by the logic from src/season.ts.
+# Layered over whichever theme is in use: carved pumpkins and a sunken cauldron on the sand (World), their
+# candle and brew light over the Night layer (WorldMid), a bat visitor that hangs from the hood's front lip
+# (WorldGlass), and the ghost-pale jelly morph (Jelly VM `ghost`, a palette group per stage, like Morph).
+
+R_PUMPKIN = ramp("3e1004", "7a2608", "b8480c", "e2701a", "fb9a30", "ffc865")
+R_PSTEM = ramp("1e200a", "3a3c14", "5e5c22", "8a8034", "b4a650")
+R_CANDLE = ramp("c8500e", "f08a1c", "ffc040", "ffe88a", "fffbe0")  # the carved holes: rim -> hot middle
+R_IRONPOT = ramp("0a0812", "16141f", "262434", "3c3a50", "5e5e7a", "9294b0")
+R_BREW = ramp("124012", "1e7224", "36a83a", "6ad85a", "b4f68a", "eeffcc")
+R_BATFUR = ramp("140a1e", "2a1638", "432656", "623a7a", "88589e", "b088c4")
+R_BATWING = ramp("1a0c24", "2e1840", "48285c", "64387a", "8a58a0")
+BAT_EAR = hx("e88aae")
+BAT_BLUSH = hx("f07aa4", 150)
+
+# carved faces, '#' = cut through. Cosy, not scary: round-ish eyes, a wide grin, one goofy tooth.
+# Rows are centred on x = 0; the first row sits at the y given with the face.
+HW_FACES = {
+    "big": (-4, ["...#.......#...",
+                 "..###.....###..",
+                 ".#####...#####.",
+                 "...............",
+                 ".......#.......",
+                 "...............",
+                 "#.............#",
+                 "##...........##",
+                 ".#####.#######.",
+                 "..#####.#####..",
+                 "....#######...."]),
+    "mid": (-3, ["..#.....#..",
+                 ".###...###.",
+                 "...........",
+                 ".....#.....",
+                 "#.........#",
+                 "##.#####.##",
+                 ".#########.",
+                 "...#####..."]),
+    "small": (-2, [".#...#.",
+                   "##...##",
+                   ".......",
+                   "#.....#",
+                   ".##.##.",
+                   "..###.."]),
+}
+
+
+def hw_face_holes(face, dx=0, dy=0):
+    y0, rows = HW_FACES[face]
+    return {(x - len(row) // 2 + dx, y0 + j + dy) for j, row in enumerate(rows) for x, ch in enumerate(row) if ch == "#"}
+
+
+def hw_pumpkin_mask(rx, ry):
+    """A squat pumpkin, origin = the middle of its base on the sand. The top dips toward the stem."""
+    m = set()
+    cy = -ry
+    for y in range(-2 * ry - 2, 1):
+        for x in range(-rx - 1, rx + 2):
+            nx, ny = (x + 0.5) / rx, (y + 0.5 - cy) / ry
+            top = 1 - 0.16 * math.exp(-(nx / 0.28) ** 2) if ny < 0 else 1.0  # the dimple round the stem
+            if nx * nx + (ny / top) ** 2 <= 1 and y <= 0:
+                m.add((x, y))
+    return m
+
+
+def hw_pumpkin(rx, ry, face, ribs=5, lit=0.9):
+    """Carved pumpkin lantern: ribbed, lit from the upper left; the cut face glows with the candle inside
+    (`lit` scales how bright the holes look by day; the night light is hw_pumpkin_light)."""
+    px = Px()
+    m = hw_pumpkin_mask(rx, ry)
+    cy = -ry
+    holes = hw_face_holes(face, 0, round(cy))
+    near_face = lambda x, y: any((x + a, y + b) in holes for a in (-1, 0, 1) for b in (-1, 0, 1))
+    for (x, y) in m:
+        nx, ny = (x + 0.5) / rx, (y + 0.5 - cy) / ry
+        u = (nx + 1) / 2 * ribs  # which rib, and where across it
+        f = u - math.floor(u)
+        bulge = math.sin(f * math.pi)  # each rib is its own little cylinder
+        t = 0.5 - 0.32 * nx - 0.3 * ny + 0.22 * (bulge - 0.6) + 0.12 * (-math.cos(f * math.pi))
+        c = R_PUMPKIN[1 + shade_index(t, 3, x, y, 0.5)]  # kept to the mid ramp, so the lit face stands out
+        if (f < 0.1 or f > 0.93) and not near_face(x, y):
+            c = R_PUMPKIN[1 if nx > -0.2 else 2]  # the grooves between ribs (smoothed out round the face, so it reads)
+        px.put(x, y, c)
+    for (x, y) in m:  # selective outline: dark on the shadow sides, a lit rim top-left
+        e = lambda a, b: (x + a, y + b) not in m
+        if e(1, 0) or e(0, 1):
+            px.put(x, y, R_PUMPKIN[0])
+        elif (e(-1, 0) or e(0, -1)) and x < rx * 0.2:
+            px.put(x, y, R_PUMPKIN[4])
+    for (x, y) in holes:
+        if (x, y) not in m:
+            continue
+        # the candle shows through every cut; the lip of the cut shades its top row
+        c = mix(R_PUMPKIN[1], R_CANDLE[3], lit)
+        if (x, y - 1) not in holes and (x, y + 1) in holes:
+            c = mix(R_PUMPKIN[0], R_CANDLE[2], lit)
+        px.put(x, y, c)
+    # stem: a short curled stalk with a tiny leaf
+    sx = -1
+    for i in range(4):
+        y = round(cy * 2) - i + (1 if rx > 8 else 0)
+        for dx in (0, 1):
+            px.put(sx + dx + (1 if i == 3 else 0), y, R_PSTEM[3 - dx] if i < 3 else R_PSTEM[2])
+    ty = round(cy * 2) - 3 + (1 if rx > 8 else 0)
+    px.put(sx + 2, ty, R_PSTEM[4])
+    px.put(sx + 3, ty + 1, R_PSTEM[3])
+    if rx > 7:
+        for x, y, c in ((sx - 1, ty + 1, R_PSTEM[3]), (sx - 2, ty + 1, R_PSTEM[2]), (sx - 3, ty + 2, R_PSTEM[1]), (sx - 2, ty + 2, R_PSTEM[3])):
+            px.put(x, y, c)
+    for x in range(-rx + 2, rx - 1):  # it sits in the sand: a soft contact shadow
+        px.over(x, 1, hx("2a140a", 90 if abs(x) < rx - 3 else 50))
+    return px
+
+
+def hw_pumpkin_light(rx, ry, face):
+    """The candle shining out of the carved face, drawn over the Night layer (bright; faded by day)."""
+    px = Px()
+    holes = hw_face_holes(face, 0, round(-ry))
+    m = hw_pumpkin_mask(rx, ry)
+    for (x, y) in holes:
+        if (x, y) not in m:
+            continue
+        inner = all((x + a, y + b) in holes for a, b in N4)
+        px.put(x, y, R_CANDLE[4] if inner else R_CANDLE[3] if ((x - 1, y) in holes and (x, y - 1) in holes) else R_CANDLE[2])
+    for (x, y) in list(px.d):  # a little bloom round each hole
+        for a, b in N4:
+            if (x + a, y + b) not in px.d and (x + a, y + b) in m:
+                px.over(x + a, y + b, hx("ff9a2a", 70))
+    return px
+
+
+def hw_cauldron(frame):
+    """A little sunken witch's cauldron, half in the sand, with a bubbling green brew. Origin = base centre.
+    Frames 0-2: the brew's bubbles pop in turn."""
+    px = Px()
+    rx, ry, cy = 11, 8, -8
+    body = set()
+    for y in range(-17, 1):
+        for x in range(-13, 14):
+            nx, ny = (x + 0.5) / rx, (y + 0.5 - cy) / ry
+            if nx * nx + ny * ny <= 1 and y >= -14:
+                body.add((x, y))
+    for (x, y) in body:
+        nx, ny = (x + 0.5) / rx, (y + 0.5 - cy) / ry
+        t = 0.45 - 0.35 * nx - 0.3 * ny
+        px.put(x, y, R_IRONPOT[1 + shade_index(t, 3, x, y, 0.8)])
+    for (x, y) in body:
+        if (x + 1, y) not in body or (x, y + 1) not in body:
+            px.put(x, y, R_IRONPOT[0])
+    # a glint of the brew's light on the belly, and a riveted band
+    for x in range(-8, 9):
+        if (x, -6) in body:
+            px.put(x, -6, R_IRONPOT[3] if x % 4 else R_IRONPOT[4])
+    for x, y in ((-6, -11), (-5, -11), (-7, -10)):
+        px.put(x, y, R_IRONPOT[4])
+    # the rim: a thick lip, lit on top
+    for x in range(-12, 13):
+        for y in (-15, -14):
+            px.put(x, y, R_IRONPOT[4] if y == -15 and x < 6 else R_IRONPOT[3] if y == -15 else R_IRONPOT[2])
+    px.put(-12, -14, R_IRONPOT[1])
+    px.put(12, -15, R_IRONPOT[2])
+    px.put(12, -14, R_IRONPOT[0])
+    # the brew, seen a little from above: an ellipse inside the rim
+    for x in range(-10, 11):
+        for y in (-17, -16):
+            if (x + 0.5) ** 2 / 110 + (y + 16) ** 2 / 3.2 <= 1:
+                px.put(x, y, R_BREW[3 if y == -17 else 2])
+    pops = [(-5, -17), (2, -16), (6, -17)]
+    for i, (bx, by) in enumerate(pops):
+        if i == frame:
+            for dx, dy in ((0, -1), (-1, 0), (1, 0), (0, -2)):
+                px.put(bx + dx, by + dy, R_BREW[4] if dy == -2 else R_BREW[3])
+            px.put(bx, by - 2, R_BREW[5])
+        else:
+            px.put(bx, by, R_BREW[4])
+    # stubby feet poking out of the sand
+    for x in (-8, 7):
+        for dx in (0, 1):
+            px.put(x + dx, 1, R_IRONPOT[1 + dx])
+    for x in range(-10, 11):
+        px.over(x, 2, hx("2a140a", 80))
+    return px
+
+
+def hw_brew_light():
+    """The brew's glow over the Night layer: its surface and a faint green lick up the rim."""
+    px = Px()
+    for x in range(-10, 11):
+        for y in (-17, -16):
+            if (x + 0.5) ** 2 / 110 + (y + 16) ** 2 / 3.2 <= 1:
+                px.put(x, y, R_BREW[4 if abs(x) < 6 else 3])
+    for x in range(-11, 12):
+        px.over(x, -15, R_BREW[4][:3] + (90,))
+    return px
+
+
+# ---- the bat: hangs upside down from the hood's front lip (it's outside the glass, in front of the water),
+# wrapped in its wings, and now and then stretches one. Origin = where its feet grip the lip. Frames:
+# 0 hanging, wrapped; 1 hanging, stretching its wings; 2-3 flying (front view, wings up / down), body below
+# the origin so the box is the same whichever it's doing. Faces right at sx +1 (it's nearly symmetric).
+BAT_S = 1.3
+
+
+def hw_fill_poly(pts):
+    """Integer pixels inside a polygon (even-odd, sampled at pixel centres)."""
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    out = set()
+    for y in range(math.floor(min(ys)), math.ceil(max(ys)) + 1):
+        for x in range(math.floor(min(xs)), math.ceil(max(xs)) + 1):
+            cx_, cy_ = x + 0.5, y + 0.5
+            inside = False
+            for (x1, y1), (x2, y2) in zip(pts, pts[1:] + pts[:1]):
+                if (y1 > cy_) != (y2 > cy_) and cx_ < x1 + (cy_ - y1) * (x2 - x1) / (y2 - y1):
+                    inside = not inside
+            if inside:
+                out.add((x, y))
+    return out
+
+
+def hw_oval(cx, cy, rx, ry):
+    return {(x, y) for y in range(math.floor(cy - ry) - 1, math.ceil(cy + ry) + 1)
+            for x in range(math.floor(cx - rx) - 1, math.ceil(cx + rx) + 1)
+            if ((x + 0.5 - cx) / rx) ** 2 + ((y + 0.5 - cy) / ry) ** 2 <= 1}
+
+
+def hw_wing(sign, frame):
+    """One wing's membrane (sign -1 left, +1 right) and its finger bones, in BAT_S-scaled units."""
+    s = BAT_S
+    if frame == 1:  # hanging, stretched out to the side: wrist up near the feet, scallops hanging down
+        pts = [(3.5, 4.5), (8, 2.2), (11.5, 1.2), (12.4, 4.5), (11.8, 8.5), (10, 7.4), (8.6, 10.6), (6.6, 9.6), (5.2, 12.4), (3.6, 11)]
+        bones = [((3.5, 4.5), (11.5, 1.2)), ((11.5, 1.2), (11.8, 8.5)), ((11.5, 1.2), (8.6, 10.6)), ((11.5, 1.2), (5.2, 12.4))]
+    elif frame == 2:  # flying, wings up
+        pts = [(2.8, 9.5), (7, 6), (11, 2.2), (14.6, 1.4), (13.4, 5.6), (11.4, 4.8), (10.2, 9), (8, 8), (6.4, 11.6), (3.4, 12.6)]
+        bones = [((2.8, 9.5), (14.6, 1.4)), ((11, 2.2), (13.4, 5.6)), ((11, 2.2), (10.2, 9)), ((11, 2.2), (6.4, 11.6))]
+    else:  # flying, wings down
+        pts = [(2.8, 9), (7, 9.4), (11.2, 11.4), (14.2, 16.4), (11.6, 14.6), (10.4, 17.4), (8.4, 14.8), (6.4, 16.6), (4.6, 13.6), (3, 12.8)]
+        bones = [((2.8, 9), (11.2, 11.4)), ((11.2, 11.4), (14.2, 16.4)), ((11.2, 11.4), (10.4, 17.4)), ((11.2, 11.4), (6.4, 16.6))]
+    pts = [(sign * x * s, y * s) for x, y in pts]
+    bones = [((sign * a * s, b * s), (sign * c * s, d * s)) for (a, b), (c, d) in bones]
+    return hw_fill_poly(pts), bones
+
+
+def hw_bat_face(px, cx, cy, flip):
+    """Big round eyes with a shine, a tiny pink nose, a smile and one small fang; flip = hanging upside down."""
+    d = -1 if flip else 1
+    for sx in (-1, 1):
+        ex = cx + sx * 2
+        for x, y in ((ex, cy), (ex - 1 if sx < 0 else ex, cy), (ex, cy + d), (ex - 1 if sx < 0 else ex, cy + d)):
+            px.put(x, y, hx("120814"))
+        px.put(ex - (1 if sx < 0 else 0), cy if not flip else cy + d, hx("ffffff"))
+        px.put(cx + sx * 4 - (1 if sx < 0 else 0), cy + 2 * d, BAT_BLUSH)
+    px.put(cx - 1, cy + 2 * d, hx("ff9ac0"))
+    px.put(cx, cy + 2 * d, hx("ff9ac0"))
+    for x in (cx - 2, cx + 1):
+        px.put(x, cy + 3 * d, hx("2a1230"))
+    px.put(cx - 1, cy + 4 * d if not flip else cy + 4 * d, hx("2a1230"))
+    px.put(cx, cy + 4 * d, hx("2a1230"))
+    px.put(cx + 1, cy + 4 * d, hx("fff8f0"))  # the fang
+
+
+def hw_bat(frame):
+    s = BAT_S
+    px = Px()
+    hang = frame < 2
+    fur, wingc = R_BATFUR, R_BATWING
+
+    def shade_set(mask, cols, light=(-0.6, -0.8)):
+        if not mask:
+            return
+        xs = [p[0] for p in mask]
+        ys = [p[1] for p in mask]
+        cx_, cy_ = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+        hw_, hh_ = max(1, (max(xs) - min(xs)) / 2), max(1, (max(ys) - min(ys)) / 2)
+        for (x, y) in mask:
+            t = 0.55 + 0.4 * ((x - cx_) / hw_ * light[0] + (y - cy_) / hh_ * light[1])
+            px.put(x, y, cols[1 + shade_index(t, len(cols) - 2, x, y, 0.6)])
+        for (x, y) in mask:
+            e = lambda a, b: (x + a, y + b) not in mask
+            if e(1, 0) or e(0, 1) or e(-1, 0) and x > cx_:
+                px.put(x, y, cols[0])
+
+    if hang:
+        body = hw_oval(0, 7.5 * s, 4.6 * s, 6.4 * s)
+        head = hw_oval(0, 15.2 * s, 4.4 * s, 3.8 * s)
+        if frame == 1:
+            for sx in (-1, 1):
+                m, bones = hw_wing(sx, 1)
+                shade_set(m, wingc)
+                for (a, b), (c, d) in bones:
+                    line_px(px, [(a, b), (c, d)], wingc[4] if sx < 0 else wingc[3])
+                px.put(round(sx * 11.5 * s) - (1 if sx < 0 else 0), round(1.2 * s) - 1, hx("e8d8f0"))  # thumb claw
+        shade_set(body, wingc if frame == 0 else fur)
+        if frame == 0:  # wings wrapped round: fold lines, and the furry tummy peeking out down the middle
+            for y in range(round(3 * s), round(12.5 * s)):
+                w = 1.3 * s * math.sin(math.pi * (y - 3 * s) / (9.5 * s))
+                for x in range(-round(w), round(w) + 1):
+                    px.put(x - 0, y, fur[4] if x < 0 else fur[3])
+            for sx in (-1, 1):
+                line_px(px, [(sx * 2.8 * s, 2.6 * s), (sx * 3.5 * s, 7 * s), (sx * 2.6 * s, 12 * s)], wingc[0] if sx > 0 else wingc[1])
+        shade_set(head, fur)
+        for sx in (-1, 1):  # ears pointing down and out, over the head's lower corners, pink inside
+            ear = hw_fill_poly([(sx * 1.4 * s, 17.4 * s), (sx * 4.5 * s, 15.6 * s), (sx * 4.6 * s, 21.4 * s)])
+            shade_set(ear, fur)
+            for y in range(round(17.6 * s), round(19.8 * s)):
+                px.put(round(sx * 3.5 * s) - (1 if sx < 0 else 0), y, BAT_EAR)
+        hw_bat_face(px, 0, round(14.6 * s), True)
+        for sx in (-1, 1):  # feet gripping the lip
+            for y in (0, 1):
+                px.put(sx * 1 - (1 if sx < 0 else 0), y, hx("1a0c22") if y == 0 else fur[2])
+        return px
+    # flying: front view, right way up
+    for sx in (-1, 1):
+        m, bones = hw_wing(sx, frame)
+        shade_set(m, wingc)
+        for (a, b), (c, d) in bones:
+            line_px(px, [(a, b), (c, d)], wingc[4] if sx < 0 else wingc[3])
+    body = hw_oval(0, 12 * s, 3.6 * s, 4.6 * s)
+    head = hw_oval(0, 6.4 * s, 3.9 * s, 3.4 * s)
+    ears = set()
+    for sx in (-1, 1):
+        ears |= hw_fill_poly([(sx * 1.2 * s, 5 * s), (sx * 3.9 * s, 6 * s), (sx * 3.4 * s, 0.6 * s)])
+    shade_set(body, fur)
+    for y in range(round(10 * s), round(15 * s)):  # tummy
+        px.put(0, y, fur[4])
+        px.put(-1, y, fur[4])
+    shade_set(ears, fur)
+    for sx in (-1, 1):
+        for y in range(round(2 * s), round(4.6 * s)):
+            px.put(round(sx * 2.7 * s) - (1 if sx < 0 else 0), y, BAT_EAR)
+    shade_set(head, fur)
+    hw_bat_face(px, 0, round(6.2 * s), False)
+    for sx in (-1, 1):  # little feet tucked up
+        px.put(sx * 2 - (1 if sx < 0 else 0), round(16.8 * s), hx("1a0c22"))
+    return px
+
+
+def hw_bat_eyes(frame):
+    """Eyeshine for the night: the two shines, a touch bigger, over the bat's night tint."""
+    px = Px()
+    flip = frame < 2
+    cy = round((14.6 if flip else 6.2) * BAT_S)
+    d = -1 if flip else 1
+    for sx in (-1, 1):
+        ex = cx = sx * 2 - (1 if sx < 0 else 0)
+        px.put(ex, cy if not flip else cy + d, hx("fff4c8"))
+        px.over(ex + (1 if sx < 0 else -1), cy if not flip else cy + d, hx("ffd86a", 120))
+    return px
+
+
+# ---- the ghost-pale morph (art only; the logic's morph id 2 writes j{s}ghost = 1). A Ghost palette group per
+# species and stage, like Morph: every palette gets a "g" key, its colours mapped by lightness onto a cool
+# moonlit ramp (deep periwinkle shadows, mint-white light) and a little more see-through. While it shows, the
+# usual tentacles fade back (GhostFade) and a pale halo glows round the bell.
+HW_GHOST = ramp("262a52", "56649a", "92b2d2", "cdf0e8", "f4fffa")
+
+
+def hw_ghostify(c, alpha=0.82):
+    r, g_, b, a = c
+    lum = (0.3 * r + 0.59 * g_ + 0.11 * b) / 255
+    t = (0.16 + 0.84 * lum ** 0.7) * (len(HW_GHOST) - 1)
+    i = min(len(HW_GHOST) - 2, int(t))
+    rgb = mix(HW_GHOST[i], HW_GHOST[i + 1], t - i)[:3]
+    return (*rgb, max(30, round(a * alpha)))
+
+
+def hw_ghost_pal(src):
+    return {key: (hw_ghostify(c) if isinstance(c, tuple) else c) for key, c in src.items()}
+
+
+JELLY["jg"] = hw_ghost_pal(JELLY["j"])
+PAL_MOON["g"] = "jg"
+for _pals in (BLUBBER, UPSIDE):
+    _pals["g"] = hw_ghost_pal(_pals["h"])
+COMB["g"] = dict(hw_ghost_pal(COMB["h"]), comb=0.8, sat=0.18)  # the comb rows still shimmer, faintly
+for _k in NEW:
+    NEW[_k]["g"] = hw_ghost_pal(NEW[_k]["h"])
+HW_GHOST_FADE = 0.45  # the usual tentacles' opacity under a ghost bell
+HW_FADE_CONV = nid()  # DataConverterRangeMapper ghost 0..1 -> 1..HW_GHOST_FADE (appended last: the list is positional)
+
+
+def hw_ghost_tents(tents):
+    """The stage's tentacles, faded back while the ghost palette shows."""
+    return [node("GhostFade", tents, binds=[bind(jprop("ghost"), 18, HW_FADE_CONV)])]
+
+
+def hw_ghost_halo(gcy, gw, gh):
+    return ellipse_shape("GhostGlow", 0, gcy, round(gw * 0.95), round(gh * 0.95),
+                         rad_grad(0, 0, round(gw * 0.48), [(0, hx("e8fff6", 120)), (0.45, hx("a8e8e0", 50)), (1, hx("a8e8e0", 0))]),
+                         blend="screen", opacity=0, binds=[bind(jprop("ghost"), 18)])
+
+
+# ---- placement (logical; base points on the sand). Pumpkins: (x, rx, ry, face, tier). The cauldron sits in the
+# open sand left of the chest. Only what the tier's glass holds is in view; the rest waits behind the wall.
+HW_PUMPKINS = [(57, 11, 8, "big", 0), (75, 6, 5, "small", 0), (205, 8, 6, "mid", 0), (284, 7, 5, "small", 1), (446, 9, 7, "mid", 2)]
+HW_CAULDRON_X = 131
+HW_DEPTH = 9  # how far in front of the sand's top edge they sit (logical px)
+
+
+def hw_base_y(x):
+    return min(WATER_BOT - 2, sand_top(x) + HW_DEPTH)
+
+
+def hw_event_bind():
+    return dict(opacity=0, binds=[bind(prop("evHalloween"), 18)])
+
+
+def hw_brew_bubble(r):
+    px = Px()
+    for (x, y), c in bubble_art(r).d.items():
+        px.put(x, y, mix(c, R_BREW[4], 0.55)[:3] + (c[3],))
+    return px
+
+
+def hw_decor_node():
+    """World layer: the pumpkins and the cauldron (bubbling in three frames) on the sand, behind the front kelp."""
+    kids = [image(f"hw_Pumpkin{i}", lambda rx=rx, ry=ry, face=face: hw_pumpkin(rx, ry, face), lx=x, ly=hw_base_y(x))
+            for i, (x, rx, ry, face, _) in enumerate(HW_PUMPKINS)]
+    ids = [nid() for _ in range(3)]
+    pot = [image(f"hw_Cauldron{f}", lambda f=f: hw_cauldron(f), opacity=1 if f == 0 else 0, node_id=ids[f]) for f in range(3)]
+    frame_cycle("hw_CauldronBubble", ids, [0, 1, 2, 1, 0, 2], 22)
+    # green bubbles drifting up from the brew, each its own loop
+    by = -18
+    for j, (dur, dx, r) in enumerate([(360, -3, 1), (430, 2, 2), (520, 5, 1)]):
+        bid = nid()
+        pot.append(image(f"hw_BrewBubble{r}", lambda r=r: hw_brew_bubble(r), node_id=bid, opacity=0, node_name=f"hw_BrewBubble{j}"))
+        rise = min(dur - 20, 190 + j * 40)
+        add_anim(f"hw_BrewBubble{j}", dur, [
+            keys(bid, 14, [(0, by * P), (rise, (by - 60 - j * 12) * P)], "linear"),
+            keys(bid, 13, [(f, (dx + round(math.sin(f / 30 + j) * 2)) * P) for f in range(0, rise + 1, 30)], "cubic"),
+            keys(bid, 18, [(0, 0), (8, 1), (rise - 30, 0.8), (rise, 0)], "linear"),
+        ])
+    kids.append(node("hw_Cauldron", list(reversed(pot)), x=HW_CAULDRON_X * P, y=hw_base_y(HW_CAULDRON_X) * P))
+    return node("HwDecor", list(reversed(kids)), **hw_event_bind())
+
+
+def hw_glow_node():
+    """WorldMid, over the Night layer: each pumpkin's candle light (faint by day, full at night) with a warm halo
+    that flickers, and the brew's green glow. One flicker timeline for all of them (each its own pattern)."""
+    kids, tracks = [], []
+    flick = [[(0, 1), (9, 0.78), (14, 0.94), (26, 0.7), (31, 1), (47, 0.84), (52, 0.97), (70, 0.74), (76, 1), (95, 0.88), (120, 1)],
+             [(0, 0.85), (12, 1), (20, 0.72), (33, 0.95), (45, 0.8), (58, 1), (66, 0.76), (84, 0.98), (101, 0.82), (120, 0.85)],
+             [(0, 0.95), (7, 0.75), (19, 1), (38, 0.86), (44, 0.7), (51, 0.96), (73, 0.8), (88, 1), (106, 0.74), (120, 0.95)]]
+    for i, (x, rx, ry, face, _) in enumerate(HW_PUMPKINS):
+        hid, lid = nid(), nid()
+        halo = ellipse_shape("CandleHalo", 0, -ry * P, (rx * 5) * P, (ry * 5) * P,
+                             rad_grad(0, 0, round(rx * 2.5) * P, [(0, hx("ffb84a", 150)), (0.35, hx("ff8a2a", 70)), (1, hx("ff6a1a", 0))]),
+                             blend="screen", sid=hid)
+        light = node("Flame", [image(f"hw_PumpkinLight{i}", lambda rx=rx, ry=ry, face=face: hw_pumpkin_light(rx, ry, face))], node_id=lid)
+        kids.append(node(f"hw_Lantern{i}", [
+            node("HaloNight", [halo], opacity=0, binds=[bind(prop("nightShade"), 18)]),
+            node("LightNight", [light], binds=[bind(prop("nightShade"), 18, NIGHT_GLOW_CONV)]),
+        ], x=x * P, y=hw_base_y(x) * P))
+        pat = flick[i % len(flick)]
+        tracks.append(keys(hid, 18, pat, "linear"))
+        tracks.append(keys(lid, 18, [(f, round(0.75 + 0.25 * v, 3)) for f, v in pat], "linear"))
+    add_anim("hw_Flicker", 120, tracks)
+    brew = node("hw_Brew", [
+        node("HaloNight", [ellipse_shape("BrewHalo", 0, -19 * P, 44 * P, 30 * P,
+                                         rad_grad(0, 0, 22 * P, [(0, hx("9af06a", 120)), (0.45, hx("4ccc3a", 45)), (1, hx("4ccc3a", 0))]),
+                                         blend="screen")], opacity=0, binds=[bind(prop("nightShade"), 18)]),
+        node("LightNight", [image("hw_BrewLight", hw_brew_light)], binds=[bind(prop("nightShade"), 18, NIGHT_GLOW_CONV)]),
+    ], x=HW_CAULDRON_X * P, y=hw_base_y(HW_CAULDRON_X) * P)
+    kids.append(brew)
+    return node("HwGlow", list(reversed(kids)), **hw_event_bind())
+
+
+# the bat's perch: the hood's front lip, the top of the water (world y, artboard units)
+HW_BAT_HANG_Y = WATER_TOP * P
+HW_BAT_NIGHT = hx("08103a", 140)
+
+
+def hw_bat_node():
+    """WorldGlass: the bat visitor (props batOn/X/Y/SX/F0..3, like the others), with a night tint and eyeshine."""
+    tint_ = node("BatNight", list(reversed([
+        image(f"hw_BatNight{f}", lambda f=f: silhouette(hw_bat(f), HW_BAT_NIGHT), opacity=1 if f == 0 else 0,
+              binds=[bind(prop(f"batF{f}", default=1 if f == 0 else 0), 18)]) for f in range(4)])),
+        opacity=0, binds=[bind(prop("nightShade"), 18)])
+    eyes = node("BatEyes", list(reversed([
+        image(f"hw_BatEyes{f}", lambda f=f: hw_bat_eyes(f), opacity=1 if f == 0 else 0, blend="screen",
+              binds=[bind(prop(f"batF{f}", default=1 if f == 0 else 0), 18)]) for f in range(4)])),
+        opacity=0, binds=[bind(prop("nightShade"), 18)])
+    bat = visitor_node("bat", "hw_Bat", hw_bat, 120 * P, HW_BAT_HANG_Y, extra=[eyes, tint_])
+    return node("HwBat", [bat], **hw_event_bind())
+
+
+def hw_contract(c):
+    """What the logic needs to know, merged into contract.json."""
+    c["seasons"] = {"halloween": {"prop": "evHalloween", "sprites": "hw_", "visitor": "bat", "morphKey": "ghost"}}
+    c["batHangY"] = HW_BAT_HANG_Y
+    c["visitorOrigin"]["bat"] = "where its feet grip the hood's lip (y = batHangY when hanging); flying, the same point above it"
+# ---- end Halloween event ----
+
+
 # ---------------------------------------------------------------- v5: walls, the medium stretch, the cave
 
 def side_wall_art(right):
@@ -5076,6 +5571,8 @@ world.append(ellipse_shape("ChestGlow", (CHEST_X + 17) * P, (CHEST_Y - 22) * P, 
                          rad_grad(0, 0, 35 * P, [(0, hx("ffd76a", 150)), (1, hx("ffd76a", 0))]), blend="screen", sid=glow_id))
 add_anim("ChestGlow", 240, [keys(glow_id, 18, [(0, 0.55), (120, 1), (240, 0.55)], "cubic")])
 
+# ---- Halloween event ---- pumpkins and the cauldron on the sand, behind the front kelp (evHalloween)
+world.append(hw_decor_node())
 world.append(kelp_clump("KelpFrontL", 92, 344, [70, 96, 58], R_KELP, 2.1, 13))
 world.append(kelp_clump("KelpFrontR", 228, 348, [84, 60], R_KELP, 4.3, 15))
 world.append(kelp_clump("KelpFrontM", 324, 347, [70, 94], R_KELP, 5.2, 14))
@@ -5250,6 +5747,8 @@ add_anim("CaveBreath", 420, [keys(heart, 18, [(0, 0.55), (210, 1), (420, 0.55)],
 mid.append(node("CaveGlow", list(reversed(cave_halos + [image("CaveRimGlow", rim_glow, blend="screen")] + dot_groups
                                           + [node("AnemoneGlow", life_glow)])),
                 binds=[bind(prop("nightShade"), 18, NIGHT_GLOW_CONV)]))
+# ---- Halloween event ---- the pumpkins' candles and the brew's glow, over the Night layer
+mid.append(hw_glow_node())
 
 FOOD_N = 16  # v8: the pool grows for sprinkling
 FOOD_KINDS = ["Flakes", "BrineShrimp", "Plankton"]
@@ -5273,12 +5772,15 @@ for i in range(FOOD_N):
 SLOT_XY = [(360, 540), (204, 420), (516, 690), (870, 600), (1020, 450), (1269, 630), (780, 780)]
 # palette groups, back to front: flush is drawn over the others. v7 adds Morph (j{s}morph): the logic writes
 # healthy = 0, morph = 1 for a morph that is neither pale nor flushed.
-PAL_NAMES = (("h", "Healthy", "healthy"), ("p", "Pale", "pale"), ("m", "Morph", "morph"), ("r", "Flush", "flush"))
+PAL_NAMES = (("h", "Healthy", "healthy"), ("p", "Pale", "pale"), ("m", "Morph", "morph"), ("g", "Ghost", "ghost"), ("r", "Flush", "flush"))
+# (Ghost: the Halloween ghost-pale morph, j{s}ghost; its sprites are hw_*, see the Halloween event block)
 INVERT_CONV = nid()  # DataConverterRangeMapper 0..1 -> 1..0: "not a morph" (the usual tentacles, the green ring)
 bodies = [[None] * 4 for _ in range(len(SPECIES))]
 
 
 def sprite_name(k, g, part):
+    if part == "Ghost":  # Halloween event art: hw_ prefix
+        return f"hw_{SPECIES[k].capitalize()}{STAGES[g].capitalize()}Ghost"
     if k == 0 and g == 3:  # the v1 moon jelly keeps its asset names
         return {"Tent": "Tent", "Healthy": "BellHealthy", "Pale": "BellPale", "Flush": "BellFlush", "Morph": "BellMorph",
                 "MorphTent": "TentMorph", "Glint": "BellGlint"}[part]
@@ -5359,6 +5861,16 @@ def glint_art(k, g, f):
     return px
 
 
+# ---- quiet nights: the bell's own soft light. A small screen-blended glow inside the bell in the species' colour,
+# on j{s}nglow (the logic writes 0 by day; at night it swells with each squeeze of the bell, strongest for the
+# crystal and the comb, faint for the rest).
+def night_bell_glow(k, g, gcy, gw, gh):
+    gc = GLOW[k]
+    return ellipse_shape("NightBellGlow", 0, gcy, round(gw * 0.6), round(gh * 0.55),
+                         rad_grad(0, 0, round(gw * 0.3), [(0, hx(gc, 150)), (0.55, hx(gc, 55)), (1, hx(gc, 0))]),
+                         blend="screen", opacity=0, binds=[bind(jprop("nglow"), 18)])
+
+
 def stage_node(k, g):
     on = lambda key, d: dict(opacity=d, binds=[bind(jprop(key, default=d), 18)])
     morph = jprop("morph")
@@ -5384,6 +5896,7 @@ def stage_node(k, g):
                  tent_set("MorphTentacles", "MorphTent", "m", opacity=0, binds=[bind(morph, 18)])]
     else:
         tents = [tent_set("Tentacles", "Tent", "h")]
+    tents = hw_ghost_tents(tents)  # Halloween: they fade back under a ghost bell
     parts = [None, None] + tents  # [glow, morph halo] + tentacles, then the palettes (back to front)
     for pk, pn, pprop in PAL_NAMES:
         # v10: 8 pulse frames for juvenile/adult bells; the pale palette keeps 4 drawn ones (PALE_OF)
@@ -5433,6 +5946,8 @@ def stage_node(k, g):
     parts[1] = ellipse_shape("MorphGlow", 0, gcy, round(gw * 0.9), round(gh * 0.9),
                              rad_grad(0, 0, round(gw * 0.45), [(0, hx("fff6d0", 110)), (0.45, hx("ffd86a", 45)), (1, hx("ffd86a", 0))]),
                              blend="screen", opacity=0, binds=[bind(morph, 18)])
+    parts.insert(2, hw_ghost_halo(gcy, gw, gh))  # Halloween: the ghost's pale halo, behind the tentacles
+    parts.append(night_bell_glow(k, g, gcy, gw, gh))  # quiet nights: the bell's own soft light
     if k == CRYSTAL and g >= 2:
         sc = 1.0 if g == 3 else 0.6
         rings = []
@@ -5944,6 +6459,8 @@ diver_lamp = node("Headlamp", [
     rect_shape("LampLens", 0, -16 * P, P, P, solid(hx("fffbe0")))], opacity=0, binds=[bind(prop("nightShade"), 18)])
 glass.append(visitor_node("diver", "Diver", diver_art, 120 * P, 160 * P, extra=[diver_lamp, diver_tint]))
 glass.append(helper_node("snail", "Snail", snail_art, 2, 192 * P, 120 * P, extra=[snail_tint]))
+# ---- Halloween event ---- the bat visitor, hanging from the hood's front lip (in front of the glass)
+glass.append(hw_bat_node())
 btf.append(node("WorldGlass", list(reversed(glass)), binds=cam_bind()))
 
 btf.append(rect_shape("Vignette", water_x, water_y, water_w, water_h,
@@ -6316,6 +6833,7 @@ doc = f'''<Rive version="1" kind="fragment">
 {nl.join(f'<DataConverterRangeMapper minInput="{CAM_MIN}" maxInput="0" minOutput="{round(CAM_MIN * (f - 1))}" maxOutput="0" clampLower="true" clampUpper="true" name="Parallax{k}" id="{parallax_conv[k]}"/>' for k, f in PARALLAX.items())}
 <DataConverterRangeMapper minInput="0" maxInput="1" minOutput="1" maxOutput="0" clampLower="true" clampUpper="true" name="Invert" id="{INVERT_CONV}"/>
 <DataConverterRangeMapper minInput="0" maxInput="1" minOutput="3000" maxOutput="0" clampLower="true" clampUpper="true" name="Away" id="{AWAY_CONV}"/>
+<DataConverterRangeMapper minInput="0" maxInput="1" minOutput="1" maxOutput="{HW_GHOST_FADE}" clampLower="true" clampUpper="true" name="hw_GhostFade" id="{HW_FADE_CONV}"/>
 {jvm}
 {vm}
 {nl.join(assets)}
@@ -6386,6 +6904,7 @@ contract = {
     # writes, j{s}{key}, lives at the nested path j{s}/{key} of the Tank instance (vmi.number("j3/k5")).
     "nested": {"pattern": "^j([0-6])(.+)$", "path": "j{s}/{key}", "viewModel": "Jelly", "keys": list(_jorder)},
 }
+hw_contract(contract)  # ---- Halloween event ----
 (ROOT / "src" / "contract.json").write_text(json.dumps(contract, indent=1))
 
 

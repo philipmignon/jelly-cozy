@@ -155,6 +155,7 @@ import { helperWorld, newCrab, newShrimp, newSnail, stepCrab, stepShrimp, stepSn
 import { EDGE_SCROLL, EDGE_ZONE, FLING_MAX, FLING_REST, VIEW_W, camLo, easeTime, newCam, stepCam, type Cam } from "./camera";
 import { NAMES, cleanName, pickName } from "./names";
 import { TENT_WAVES_PER_PULSE, bodyFramesOf, newTilt, pulseFrame, pulseFrame4, stepTilt, tentFrame, tentFramesOf, type Tilt } from "./motion";
+import { QUIET, calmOf, gatherPoint, gatherTarget, nightGlow, quietPeriod, quietScale } from "./motion";
 import {
   DIVER_REACH,
   DIVER_SCRUB,
@@ -199,10 +200,12 @@ import {
   visitOver,
   visitorCentre,
   visitorHit,
+  visitsDuring,
   type Visit,
   type VisitorKind,
 } from "./visitors";
 import { decodeTank, encodeTank, hasPlace, type TankCode } from "./tankcode";
+import { SEASONS, type SeasonId } from "./season";
 
 export { K, clamp, sandAt, specProps, SHOP_ITEMS, POLYP_ANCHORS, SETTLE_SPOTS, DECOR, TAB_ITEMS, NAMES, OPEN_SAND, OPEN_SANDS, TIERS, MAX_SLOTS, geomOf };
 export type { Species, Stage, Snail, Walker, Cam, Visit, VisitorKind, Spot, SaveSpot, FoodKind };
@@ -459,6 +462,8 @@ export interface State {
   foods: boolean[];
   themes: boolean[];
   theme: number;
+  /** the seasonal event showing (src/season.ts; the host sets it with setEvent), null = none. Not saved. */
+  event: SeasonId | null;
 }
 
 /** v8: what the player has in hand. v11: "shrimp" (the brine shrimp jar) and "plankton" (the bottle) are foods too. */
@@ -1107,6 +1112,7 @@ export function createState(save: Save, rand: () => number = Math.random, opts: 
     foods: ownedList(save.foods, FOOD_KINDS),
     themes: ownedList(save.themes, THEME_N),
     theme: 0,
+    event: null,
   };
   state.theme = themeOf(save.theme, state.themes);
   for (const j of jellies(state)) noteJelly(state, j);
@@ -1475,6 +1481,17 @@ export function toggleLamp(s: State): void {
   const night = !s.nightTarget;
   s.lamp = night === isNightByClock(s.clock) ? null : { night, until: nextLightChange(s.clock) };
   s.nightTarget = night;
+}
+
+/**
+ * The seasonal event to show (the host: activeSeason(now, location.search, decor setting)), or null. Its decor
+ * shows on the season's prop and its visitors may come; a seasonal visitor already in the tank leaves when the
+ * event goes off.
+ */
+export function setEvent(s: State, id: SeasonId | null): void {
+  s.event = id;
+  const v = s.visit;
+  if (v && !visitsDuring(v.kind, id) && v.age < v.leaveAt) v.leaveAt = v.age;
 }
 
 /** Night is showing because of the clock (false) or the lamp override (true). */
@@ -1927,7 +1944,7 @@ function stepVisitors(s: State, dt: number, events: SimEvent[]): void {
   const blocked = shopBlocks(s);
   if (!s.visit) {
     if (s.t < s.nextVisit || blocked || s.focus.on || s.wall) return;
-    const kinds = [0, 1, 2].filter((k) => k !== s.lastVisitor);
+    const kinds = VISITORS.map((_, k) => k).filter((k) => k !== s.lastVisitor && visitsDuring(k, s.event));
     for (let i = kinds.length - 1; i > 0; i--) {
       const r = Math.floor(s.rand() * (i + 1));
       [kinds[i], kinds[r]] = [kinds[r]!, kinds[i]!];
@@ -2105,17 +2122,19 @@ function swim(s: State, slot: number, j: Jelly, dt: number, events: SimEvent[]):
   const ty = target.y - j.y;
   const dist = Math.hypot(tx, ty);
 
+  // quiet nights: idle jellies pulse less often and push more gently; gliders slow down
+  const calm = calmOf(s.night);
   if (sw.glide) {
     // comb: cilia, not a bell: no thrust, just a smooth glide; the rows shimmer all the time
     j.pulse = (j.pulse + dt / sw.shimmer) % 1;
-    const speed = busy ? sw.speedBusy : sw.speedIdle;
+    const speed = busy ? sw.speedBusy : sw.speedIdle * quietScale(QUIET.glide, calm);
     const want = dist > 6 ? Math.min(speed, dist * 0.6) / dist : 0;
     const a = 1 - Math.exp(-sw.ease * dt);
     j.vx += (tx * want - j.vx) * a;
     j.vy += (ty * want - j.vy) * a;
   } else {
     // pulse the bell, thrust during the squeeze
-    let period = busy ? sw.busy : sw.idle;
+    let period = quietPeriod(busy ? sw.busy : sw.idle, calm, busy);
     if (j.fullness < 0.2) period *= 1.3;
     const prev = j.pulse;
     j.pulse = (j.pulse + dt / period) % 1;
@@ -2124,7 +2143,7 @@ function swim(s: State, slot: number, j: Jelly, dt: number, events: SimEvent[]):
       // a jelly can only push away from its bell: aim up and across, never down
       const up = ty < -10 ? ty : -Math.min(30, Math.max(10, dist * 0.2));
       const len = Math.hypot(tx * 0.9, up) || 1;
-      const force = (busy ? sw.forceBusy : sw.forceIdle) * Math.sin((j.pulse / sw.squeeze) * Math.PI);
+      const force = (busy ? sw.forceBusy : sw.forceIdle * quietScale(QUIET.force, calm)) * Math.sin((j.pulse / sw.squeeze) * Math.PI);
       if (ty < 40) {
         j.vx += ((tx * 0.9) / len) * force * dt;
         j.vy += (up / len) * force * dt;
@@ -2135,7 +2154,7 @@ function swim(s: State, slot: number, j: Jelly, dt: number, events: SimEvent[]):
     }
     if (prev > j.pulse) {
       events.push({ type: "pulse", slot });
-      if (sw.twitch) j.vx += (s.rand() - 0.5) * 2 * sw.twitch;
+      if (sw.twitch) j.vx += (s.rand() - 0.5) * 2 * sw.twitch * quietScale(QUIET.twitch, calm);
     }
     // sink between pulses, water drag
     j.vy += 25 * dt;
@@ -2163,7 +2182,7 @@ function swim(s: State, slot: number, j: Jelly, dt: number, events: SimEvent[]):
   }
   if (!sw.glide && j.g >= JUVENILE) {
     // v10: the ripple runs with the bell: TENT_WAVES_PER_PULSE waves down the tentacles per beat
-    let period = busy ? sw.busy : sw.idle;
+    let period = quietPeriod(busy ? sw.busy : sw.idle, calm, busy);
     if (j.fullness < 0.2) period *= 1.3;
     j.tent = (j.tent + (dt * TENT_WAVES_PER_PULSE) / period) % 1;
   } else {
@@ -2219,9 +2238,17 @@ function stepTrail(s: State, j: Jelly, dt: number): void {
   }
 }
 
+/** Quiet nights: where the swimmers loosely gather now (world), drifting slowly through the view's mid water. */
+export function nightGather(s: State): { x: number; y: number } {
+  const span = viewSpan(s);
+  const x0 = Math.max(span.x0, K.glassL);
+  const x1 = Math.min(span.x1, rightGlass(s));
+  return gatherPoint(s.t, x0, x1, BOUNDS.y0, BOUNDS.y1);
+}
+
 function chooseTargets(s: State): void {
   const claimed = new Set<Food>();
-  s.slots.forEach((j) => {
+  s.slots.forEach((j, slot) => {
     if (!j || j.mode !== "swim") return;
     const g = geomIn(s, j.k, j.g);
     const reach = Math.max(g.body.reach, 26);
@@ -2261,6 +2288,13 @@ function chooseTargets(s: State): void {
       };
       j.targetKind = "wander";
       j.targetUntil = s.t + sw.wanderMin + s.rand() * sw.wanderSpread;
+      // quiet nights: wander less often, and loosely gather round the shared point (bottom dwellers only in x)
+      const calm = calmOf(s.night);
+      if (calm > 0) {
+        j.targetUntil = s.t + (j.targetUntil - s.t) * quietScale(QUIET.hold, calm);
+        const gt = gatherTarget(j.target, nightGather(s), slot, calm, (slot * 0.618034 + 0.3) % 1);
+        j.target = { x: clamp(gt.x, b.x0, b.x1), y: low ? j.target.y : clamp(gt.y, b.y0, b.y1) };
+      }
     }
   });
 }
@@ -2418,7 +2452,7 @@ export function step(s: State, dt: number): SimEvent[] {
       j.pulse = (j.pulse + dt / POLYP_SWAY) % 1;
       j.tent = (j.tent + dt * 0.45) % 1;
     } else {
-      j.pulse = (j.pulse + dt / SETTLED_PULSE) % 1;
+      j.pulse = (j.pulse + dt / quietPeriod(SETTLED_PULSE, calmOf(s.night), false)) % 1; // slower on quiet nights
       j.tent = (j.tent + dt * 0.5) % 1;
       if (j.mode === "settling") {
         // drift down onto the home spot, then stay put
@@ -2619,7 +2653,7 @@ const NEEDS17 = K.props.includes("needs17");
 function writeSlot(v: View, s: State, slot: number, j: Jelly | null, night: number): void {
   const p = `j${slot}`;
   if (!j) {
-    for (const name of ["on", "x", "y", "healthy", "pale", "flush", "glow", "morph", "rot"]) v[p + name] = 0;
+    for (const name of ["on", "x", "y", "healthy", "pale", "flush", "glow", "morph", "rot", "ghost", "nglow"]) v[p + name] = 0;
     for (let i = 0; i < SPECIES_N; i++) v[`${p}k${i}`] = 0;
     for (let i = 0; i < 4; i++) v[`${p}g${i}`] = 0;
     for (const g of ["bf", "tf"]) for (let i = 0; i < FRAME_N; i++) v[`${p}${g}${i}`] = 0;
@@ -2667,6 +2701,12 @@ function writeSlot(v: View, s: State, slot: number, j: Jelly | null, night: numb
   const glowDay = 0.25 + 0.2 * m;
   const glowNight = 0.6 + 0.4 * m;
   v[p + "glow"] = glowDay + (glowNight - glowDay) * night;
+  // Halloween ghost-pale morph: the art is bound to j{s}ghost. The morph model (0 none, 1 rare colour, 2 ghost)
+  // lands with the morph-id change; until then nothing is a ghost.
+  v[p + "ghost"] = 0;
+  // quiet nights: the bell's own soft light, swelling with each squeeze
+  const sq = j.mode === "swim" ? (swimOf(j.k, j.g) as { squeeze?: number }).squeeze ?? 0.5 : 0.4;
+  v[p + "nglow"] = nightGlow(night, j.k, j.pulse, sq);
 }
 
 export function view(s: State): View {
@@ -2764,6 +2804,8 @@ export function view(s: State): View {
   v.haveShrimp = s.foods[1] ? 1 : 0;
   v.havePlankton = s.foods[2] ? 1 : 0;
   for (let t = 0; t < THEME_N; t++) v[`theme${t}`] = t === s.theme ? 1 : 0;
+  // seasonal events: each season's decor shows on its own prop (evHalloween)
+  for (const season of SEASONS) v[season.prop] = s.event === season.id ? 1 : 0;
 
   const js = jellies(s);
   const full = K.barW * P;

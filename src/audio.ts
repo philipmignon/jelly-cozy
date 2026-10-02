@@ -1,7 +1,7 @@
 // Jelly Tank sound: everything is synthesised with the Web Audio API (no files).
 // Graph:  sfx ─────────────────────────┐
 //         ambience beds/pad/bubbles → murk lowpass → amb ─┤
-//         music: keys/bass/drums → tape-wow delay → tone LP → murk LP → duck → fade → bus (0.18) ─┴→ compressor → master (0.35) → out
+//         music: keys/bass/drums → tape-wow delay → tone LP → murk LP → duck → night level → fade → bus (0.18) ─┴→ compressor → master (0.35) → out
 // Nothing touches window/AudioContext at module load, so this imports cleanly in Node/Vitest.
 
 export type SoundName =
@@ -167,6 +167,29 @@ export function musicCutoff(night: number): number {
 /** Electric-piano lowpass centre (Hz), before its slow wobble: 1.8 kHz by day, 800 Hz at night. */
 const keysCutoff = (night: number) => 1800 * Math.pow(800 / 1800, clamp01(night));
 
+const smooth01 = (x: number) => {
+  const u = clamp01(x);
+  return u * u * (3 - 2 * u);
+};
+
+/** Quiet nights: the music bed's level, 1 by day easing to 0.62 at night (on top of the darker filters). */
+export function musicNightLevel(night: number): number {
+  return lerp(1, 0.62, smooth01(night));
+}
+
+/** The chance a bar is played the sparse night way (one long chord, no re-strike or pickup): 0 by day, 1 at night. */
+export function calmChance(night: number): number {
+  return smooth01((clamp01(night) - 0.15) / 0.7);
+}
+
+/** The chance the top voice of the chord is played: all four notes by day, often only three at night. */
+export function topVoiceChance(night: number): number {
+  return lerp(1, 0.4, smooth01(night));
+}
+
+/** Seconds the music takes to follow a change of night (time constant): slow, so day and night crossfade. */
+export const MUSIC_NIGHT_GLIDE = 1.4;
+
 /** Beat level 0..1: full by day, gone past night 0.6. */
 export function drumMix(night: number): number {
   return clamp01((0.6 - clamp01(night)) / 0.4);
@@ -214,7 +237,7 @@ export function createTankAudio(): TankAudio {
   let session: Session | null = null;
   // music bus (built lazily the first time music plays)
   let mBus: GainNode | null = null;
-  let mFade: GainNode, mDuck: GainNode, mMurk: BiquadFilterNode, mTone: BiquadFilterNode;
+  let mFade: GainNode, mDuck: GainNode, mNight: GainNode, mMurk: BiquadFilterNode, mTone: BiquadFilterNode;
   let mKeys: BiquadFilterNode, mWobble: GainNode, mBass: GainNode, mDrums: GainNode, mCrackle: GainNode;
   let crackleBuf: AudioBuffer;
 
@@ -551,6 +574,7 @@ export function createTankAudio(): TankAudio {
     mBus = ac.createGain(); mBus.gain.value = MUSIC_GAIN;
     mFade = ac.createGain(); mFade.gain.value = 0;
     mDuck = ac.createGain();
+    mNight = ac.createGain(); mNight.gain.value = musicNightLevel(night); // quiet nights: the whole bed sits lower
     mTone = filter("lowpass", musicCutoff(night), 0.5);
     mMurk = filter("lowpass", murkCutoff(murk), 0.5);
     // Tape wow: a short delay line whose delay time drifts, which bends the pitch of everything through it.
@@ -558,7 +582,7 @@ export function createTankAudio(): TankAudio {
     wow.delayTime.value = 0.012;
     lfo(0.5, 0.0008, wow.delayTime); // wow, about ±4 cents
     lfo(0.11, 0.0025, wow.delayTime); // slower drift, about ±3 cents
-    wow.connect(mTone).connect(mMurk).connect(mDuck).connect(mFade).connect(mBus).connect(comp);
+    wow.connect(mTone).connect(mMurk).connect(mDuck).connect(mNight).connect(mFade).connect(mBus).connect(comp);
 
     // Electric piano lowpass with a slow wobble on its cutoff.
     mKeys = filter("lowpass", keysCutoff(night), 0.9);
@@ -579,7 +603,8 @@ export function createTankAudio(): TankAudio {
   /** Night darkens the bed: lower tone and piano cutoffs, a lazier wobble, the beat faded out, quieter crackle. */
   function applyMusicNight(now = false) {
     if (!c || !mBus) return;
-    const t = c.currentTime, k = now ? 0.01 : 0.4;
+    const t = c.currentTime, k = now ? 0.01 : MUSIC_NIGHT_GLIDE; // a slow glide: day and night crossfade
+    mNight.gain.setTargetAtTime(musicNightLevel(night), t, k);
     mTone.frequency.setTargetAtTime(musicCutoff(night), t, k);
     mKeys.frequency.setTargetAtTime(keysCutoff(night), t, k);
     mWobble.gain.setTargetAtTime(lerp(320, 110, night), t, k);
@@ -655,12 +680,15 @@ export function createTankAudio(): TankAudio {
 
   /** One bar at `t0`. Day: strum + re-strike, bass with a pickup, brushed beat. Night: one long chord, more air. */
   function scheduleBar(s: Session, t0: number, bpm: number) {
-    const beat = 60 / bpm, ch = chordAt(s.bar), n = night, calm = n >= 0.5, sw = beat * 0.08;
+    // quiet nights: bar by bar the sparse way gets likelier as night falls (no hard switch), so dusk crossfades
+    const beat = 60 / bpm, ch = chordAt(s.bar), n = night, calm = Math.random() < calmChance(n), sw = beat * 0.08;
     const h = () => (Math.random() - 0.5) * 0.016; // ±8 ms of human
-    const v = (x: number) => x * (0.88 + Math.random() * 0.24);
+    const v = (x: number) => x * (0.88 + Math.random() * 0.24) * lerp(1, 0.85, n);
 
-    // Keys: a slow upward strum on the one; by day a softer re-strike of the upper notes on the and of 3.
-    ch.notes.forEach((m, i) => key(s, m, t0 + i * 0.018 + h(), v(1), beat * (calm ? 5.5 : 4.2)));
+    // Keys: a slow upward strum on the one (at night often without its top voice); by day a softer re-strike of
+    // the upper notes on the and of 3.
+    const top = Math.random() < topVoiceChance(n);
+    ch.notes.forEach((m, i) => (top || i < ch.notes.length - 1) && key(s, m, t0 + i * 0.018 + h(), v(1), beat * (calm ? 5.5 : 4.2)));
     if (!calm && Math.random() < 0.8) {
       ch.notes.slice(1).forEach((m, i) => key(s, m, t0 + 2.5 * beat + sw + i * 0.012 + h(), v(0.45), beat * 1.6));
     } else if (calm && Math.random() < 0.3) {
@@ -687,7 +715,7 @@ export function createTankAudio(): TankAudio {
     }
 
     // Melody: now and then a pentatonic note or two, walking by step from the last one.
-    if (Math.random() < lerp(0.4, 0.22, n)) {
+    if (Math.random() < lerp(0.4, 0.16, n)) {
       const pool = melodyPool(ch);
       if (pool.length) {
         let i = 0;

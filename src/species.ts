@@ -4,6 +4,7 @@
  * approximate values in docs/v2-spec.md for any key the contract lacks.
  */
 import contract from "./contract.json";
+import { SEASONS } from "./season";
 
 export interface Body {
   /** half body width */
@@ -760,7 +761,11 @@ export function specProps(foodN = K.foodN): string[] {
     for (const g of ["bf", "tf"]) for (let i = 0; i < 8; i++) out.push(`j${s}${g}${i}`);
     for (let i = 0; i < TRAIL_N; i++) out.push(`j${s}tr${i}`);
     out.push(`j${s}healthy`, `j${s}pale`, `j${s}flush`, `j${s}glow`, `j${s}rot`);
+    // Halloween's ghost-pale morph palette; quiet nights' bell glow
+    out.push(`j${s}ghost`, `j${s}nglow`);
   }
+  // seasonal events: each season's decor prop (evHalloween)
+  for (const season of SEASONS) out.push(season.prop);
   out.push("fxX", "fxY", "fxS", "fxO");
   for (let p = 0; p < 4; p++) for (let d = 0; d < 10; d++) out.push(`cd${p}n${d}`);
   out.push("shopY");
@@ -773,8 +778,8 @@ export function specProps(foodN = K.foodN): string[] {
   out.push("snailOn", "snailX", "snailY", "snailSX", "snailF0", "snailF1");
   for (const h of ["shrimp", "crab"]) out.push(`${h}On`, `${h}X`, `${h}Y`, `${h}SX`, `${h}F0`, `${h}F1`, `${h}F2`, `${h}F3`);
   out.push("camX", "camY", "camZ", "wallX", "panL", "panR");
-  // v7 visitors: turtle, seahorse ("horse"), diver
-  for (const v of ["turtle", "horse", "diver"]) out.push(`${v}On`, `${v}X`, `${v}Y`, `${v}SX`, `${v}F0`, `${v}F1`, `${v}F2`, `${v}F3`);
+  // v7 visitors: turtle, seahorse ("horse"), diver; the Halloween bat
+  for (const v of ["turtle", "horse", "diver", "bat"]) out.push(`${v}On`, `${v}X`, `${v}Y`, `${v}SX`, `${v}F0`, `${v}F1`, `${v}F2`, `${v}F3`);
   // optional: the art's "NEEDS MEDIUM" note on the large card, written only if the contract has it
   for (const n of ["needs12", "needs15", "needs17", "shopScroll", "shopScrollBar"]) if (K.props.includes(n)) out.push(n);
   return out;

@@ -1314,12 +1314,19 @@
    "y0": -90,
    "x1": 51,
    "y1": 51
+  },
+  "bat": {
+   "x0": -57,
+   "y0": 0,
+   "x1": 57,
+   "y1": 81
   }
  },
  "visitorOrigin": {
   "turtle": "middle of the shell",
   "horse": "the tail's grip on the kelp stalk",
-  "diver": "middle of the belly, on the front glass"
+  "diver": "middle of the belly, on the front glass",
+  "bat": "where its feet grip the hood's lip (y = batHangY when hanging); flying, the same point above it"
  },
  "kelpGrips": [
   {
@@ -1435,6 +1442,7 @@
   "shrimpX",
   "shrimpY",
   "shrimpSX",
+  "evHalloween",
   "horseF0",
   "horseF1",
   "horseF2",
@@ -1573,6 +1581,7 @@
   "j0tf1",
   "j0tf2",
   "j0tf3",
+  "j0ghost",
   "j0bf0",
   "j0bf1",
   "j0bf2",
@@ -1581,6 +1590,7 @@
   "j0pale",
   "j0flush",
   "j0glow",
+  "j0nglow",
   "j0g0",
   "j0g1",
   "j0tf4",
@@ -1616,6 +1626,7 @@
   "j1tf1",
   "j1tf2",
   "j1tf3",
+  "j1ghost",
   "j1bf0",
   "j1bf1",
   "j1bf2",
@@ -1624,6 +1635,7 @@
   "j1pale",
   "j1flush",
   "j1glow",
+  "j1nglow",
   "j1g0",
   "j1g1",
   "j1tf4",
@@ -1659,6 +1671,7 @@
   "j2tf1",
   "j2tf2",
   "j2tf3",
+  "j2ghost",
   "j2bf0",
   "j2bf1",
   "j2bf2",
@@ -1667,6 +1680,7 @@
   "j2pale",
   "j2flush",
   "j2glow",
+  "j2nglow",
   "j2g0",
   "j2g1",
   "j2tf4",
@@ -1702,6 +1716,7 @@
   "j3tf1",
   "j3tf2",
   "j3tf3",
+  "j3ghost",
   "j3bf0",
   "j3bf1",
   "j3bf2",
@@ -1710,6 +1725,7 @@
   "j3pale",
   "j3flush",
   "j3glow",
+  "j3nglow",
   "j3g0",
   "j3g1",
   "j3tf4",
@@ -1745,6 +1761,7 @@
   "j4tf1",
   "j4tf2",
   "j4tf3",
+  "j4ghost",
   "j4bf0",
   "j4bf1",
   "j4bf2",
@@ -1753,6 +1770,7 @@
   "j4pale",
   "j4flush",
   "j4glow",
+  "j4nglow",
   "j4g0",
   "j4g1",
   "j4tf4",
@@ -1788,6 +1806,7 @@
   "j5tf1",
   "j5tf2",
   "j5tf3",
+  "j5ghost",
   "j5bf0",
   "j5bf1",
   "j5bf2",
@@ -1796,6 +1815,7 @@
   "j5pale",
   "j5flush",
   "j5glow",
+  "j5nglow",
   "j5g0",
   "j5g1",
   "j5tf4",
@@ -1831,6 +1851,7 @@
   "j6tf1",
   "j6tf2",
   "j6tf3",
+  "j6ghost",
   "j6bf0",
   "j6bf1",
   "j6bf2",
@@ -1839,6 +1860,7 @@
   "j6pale",
   "j6flush",
   "j6glow",
+  "j6nglow",
   "j6g0",
   "j6g1",
   "j6tf4",
@@ -1964,6 +1986,14 @@
   "snailX",
   "snailY",
   "snailSX",
+  "batF0",
+  "batF1",
+  "batF2",
+  "batF3",
+  "batOn",
+  "batX",
+  "batY",
+  "batSX",
   "wallX",
   "panL",
   "panR",
@@ -2121,6 +2151,7 @@
    "tf1",
    "tf2",
    "tf3",
+   "ghost",
    "bf0",
    "bf1",
    "bf2",
@@ -2129,6 +2160,7 @@
    "pale",
    "flush",
    "glow",
+   "nglow",
    "g0",
    "g1",
    "tf4",
@@ -2160,5 +2192,14 @@
    "x",
    "y"
   ]
- }
+ },
+ "seasons": {
+  "halloween": {
+   "prop": "evHalloween",
+   "sprites": "hw_",
+   "visitor": "bat",
+   "morphKey": "ghost"
+  }
+ },
+ "batHangY": 42
 }

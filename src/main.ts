@@ -8,6 +8,7 @@ import { createJournal } from "./journal";
 import { connectCloud, savedAt, type CloudSync } from "./cloud";
 import { clearVisit, createBackupPanel, createSharePanel, pendingVisit, showVisitBar } from "./share";
 import { createOverlay, type JellyCardInfo } from "./overlay";
+import { activeSeason, readSeasonDecor, writeSeasonDecor } from "./season";
 import { SPECIES_NAMES, TAB_N } from "./species";
 import {
   K,
@@ -25,6 +26,7 @@ import {
   isFoodTool,
   scrubAt,
   setCursor,
+  setEvent,
   setTool,
   sprinkle,
   toggleTool,
@@ -194,6 +196,19 @@ async function main() {
   const book = createJournal(() => journal(state));
   const sharePanel = createSharePanel(() => exportTank(state), (code) => importTank(code) !== null);
   (window as unknown as { __tank: State }).__tank = state;
+
+  // seasonal events (Halloween...): the local calendar, ?season= for testing, and the "Seasonal decor" setting
+  const store = (() => {
+    try {
+      return window.localStorage;
+    } catch {
+      return null;
+    }
+  })();
+  let seasonDecor = readSeasonDecor(store);
+  const applySeason = () => setEvent(state, activeSeason(Date.now(), location.search, seasonDecor)?.id ?? null);
+  applySeason();
+  setInterval(applySeason, 60_000); // a tab left open over midnight picks up the new day
 
   const embedded = embeddedRiv();
   const rive = await new Promise<Rive>((resolve, reject) => {
@@ -457,6 +472,14 @@ async function main() {
     share: () => sharePanel.open(),
     backup: () => backupPanel.open("backup"),
     restore: () => backupPanel.open("restore"),
+    seasonDecor: {
+      get: () => seasonDecor,
+      set: (on) => {
+        seasonDecor = on;
+        writeSeasonDecor(store, on);
+        applySeason();
+      },
+    },
   });
   settings = settingsUi;
   if (VISIT_SAVE) showVisitBar();
@@ -608,6 +631,7 @@ async function main() {
       return;
     }
     syncClock(state, Date.now());
+    applySeason();
     // back on this device: did another one save a newer tank meanwhile?
     void cloud?.check().then((c) => {
       if (c && c.at > mySaveAt + 1000) offerNewer(c.json);

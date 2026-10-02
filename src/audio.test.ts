@@ -2,7 +2,31 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   MUSIC_KEY, PENTATONIC, PROGRESSION, SOUND_SPEC, barSeconds, bubbleDelayMs, chordAt, createGate, createTankAudio,
   drumMix, melodyPool, midiToHz, murkCutoff, musicCutoff, musicTempo, nightMix, noteToMidi,
+  MUSIC_NIGHT_GLIDE, calmChance, musicNightLevel, topVoiceChance,
 } from "./audio";
+
+describe("quiet nights: the music", () => {
+  it("sits lower at night, smoothly", () => {
+    expect(musicNightLevel(0)).toBe(1);
+    expect(musicNightLevel(1)).toBeCloseTo(0.62);
+    for (let n = 0; n < 1; n += 0.05) expect(musicNightLevel(n + 0.05)).toBeLessThanOrEqual(musicNightLevel(n) + 1e-12);
+    expect(musicNightLevel(Number.NaN)).toBe(1);
+  });
+
+  it("gets sparser bar by bar as night falls: no hard switch", () => {
+    expect(calmChance(0)).toBe(0);
+    expect(calmChance(0.1)).toBe(0);
+    expect(calmChance(1)).toBe(1);
+    expect(calmChance(0.5)).toBeGreaterThan(0.3);
+    expect(calmChance(0.5)).toBeLessThan(0.7);
+    expect(topVoiceChance(0)).toBe(1);
+    expect(topVoiceChance(1)).toBeCloseTo(0.4);
+  });
+
+  it("follows day and night slowly (a crossfade, not a cut)", () => {
+    expect(MUSIC_NIGHT_GLIDE).toBeGreaterThanOrEqual(1);
+  });
+});
 
 describe("audio helpers", () => {
   it("murk closes the lowpass monotonically from 9 kHz to 420 Hz", () => {

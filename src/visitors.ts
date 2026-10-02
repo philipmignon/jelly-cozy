@@ -5,16 +5,39 @@
  * Positions are world units (artboard px, x 0..worldW). Origins (contract.visitorOrigin):
  * turtle = middle of the shell; seahorse ("horse" in the props) = where its tail grips a kelp
  * stalk; diver = middle of the belly, on the inside of the front glass. Art faces right at sx +1.
+ *
+ * Seasonal visitors (VISITOR_SEASON) only come while their event is on: the Halloween bat flutters in,
+ * hangs upside down from the hood's front lip (origin = its feet's grip, y = contract.batHangY), stretches
+ * now and then, and flutters off. Frames: 0 hanging wrapped, 1 hanging stretching, 2-3 flying.
  */
+import type { SeasonId } from "./season";
 import { K, P, clamp, num } from "./species";
 
-export const VISITORS = ["turtle", "seahorse", "diver"] as const;
+export const VISITORS = ["turtle", "seahorse", "diver", "bat"] as const;
 export type VisitorKind = (typeof VISITORS)[number];
 export const TURTLE = 0;
 export const SEAHORSE = 1;
 export const DIVER = 2;
+export const BAT = 3;
 /** The view-model prefix for each visitor: `{prefix}On X Y SX F0..F3`. */
-export const VISITOR_PROP = ["turtle", "horse", "diver"] as const;
+export const VISITOR_PROP = ["turtle", "horse", "diver", "bat"] as const;
+/** The event a visitor belongs to (it only comes while that is on); null = all year. */
+export const VISITOR_SEASON: readonly (SeasonId | null)[] = [null, null, null, "halloween"];
+/** Can visitor `k` come while `event` is on? */
+export const visitsDuring = (k: number, event: SeasonId | null) => {
+  const s = VISITOR_SEASON[k] ?? null;
+  return s === null || s === event;
+};
+
+/** The bat's perch: the hood's front lip (world y of its feet while hanging). */
+export const BAT_HANG_Y = num((K as unknown as { batHangY?: unknown }).batHangY) ?? K.waterTop;
+/** Flying in and away, s; wing beats per second (flying, and when it leaves happy). */
+export const BAT_FLY_IN = 3.2;
+export const BAT_FLAP = 6;
+export const BAT_FLAP_HAPPY = 9;
+/** A stretch lasts this long, every BAT_STRETCH_GAP..+3 s while it hangs. */
+export const BAT_STRETCH = 0.9;
+export const BAT_STRETCH_GAP = 5;
 
 /** Seconds between visits: 3-6 minutes. */
 export const VISIT_GAP_MIN = 180;
@@ -42,6 +65,7 @@ const BOX_FALLBACK: Box[] = [
   { x0: -66, y0: -51, x1: 90, y1: 57 },
   { x0: -9, y0: -96, x1: 42, y1: 12 },
   { x0: -39, y0: -90, x1: 51, y1: 51 },
+  { x0: -57, y0: 0, x1: 57, y1: 81 },
 ];
 /** Each visitor's art extent around its origin at sx +1 (contract.visitors). */
 export const VISITOR_BOX: readonly Box[] = VISITOR_PROP.map((key, i) => {
@@ -214,6 +238,31 @@ export function planVisit(kind: number, st: Stretch, tier: number, rand: () => n
     v.y = v.fy;
     return v;
   }
+  if (kind === BAT) {
+    const rb = [xRange(BAT, 1, st, 2 * P), xRange(BAT, -1, st, 2 * P)];
+    if (!rb[0] || !rb[1]) return null;
+    v.lo = Math.max(rb[0][0], rb[1][0]);
+    v.hi = Math.min(rb[0][1], rb[1][1]);
+    if (v.hi < v.lo) return null;
+    // the perch keeps clear of the settings gear at the screen's top right
+    v.gx = v.lo + rand() * Math.max(0, v.hi - 40 * P - v.lo);
+    v.gy = BAT_HANG_Y;
+    // it flutters in from the side with more room, and leaves the other way
+    const from = v.gx - v.lo > v.hi - v.gx ? -1 : 1;
+    v.fx = clamp(v.gx + from * (240 + rand() * 120), v.lo, v.hi);
+    v.fy = BAT_HANG_Y + 150 + rand() * 120;
+    v.vx = clamp(v.gx - from * (260 + rand() * 120), v.lo, v.hi);
+    v.baseY = BAT_HANG_Y + 140 + rand() * 100;
+    v.sx = v.gx >= v.fx ? 1 : -1;
+    v.t0 = 0;
+    v.dur = BAT_FLY_IN;
+    v.nextMove = BAT_FLY_IN + 2 + rand() * 3;
+    v.ylo = Number.NaN; // where it lets go from (set when it starts to leave)
+    v.yhi = Number.NaN;
+    v.x = v.fx;
+    v.y = v.fy;
+    return v;
+  }
   // diver: on the glass in view, mid water
   const r = [xRange(DIVER, 1, st, 4 * P), xRange(DIVER, -1, st, 4 * P)];
   if (!r[0] || !r[1]) return null;
@@ -279,6 +328,8 @@ export function stepVisit(v: Visit, dt: number, rand: () => number, aim: { x: nu
       v.x = clamp(v.gx + (v.fx - v.gx) * e, v.lo, v.hi);
       v.y = Math.max(Math.min(v.ylo, v.gy), v.gy - 45 * P * e);
     }
+  } else if (v.kind === BAT) {
+    stepBat(v, dt, rand, leaving, lp);
   } else {
     v.phase = (v.phase + dt / (v.happy ? 0.5 : 1.0)) % 1;
     v.f = Math.floor(v.phase * 4) % 4;
@@ -303,6 +354,46 @@ export function stepVisit(v: Visit, dt: number, rand: () => number, aim: { x: nu
       v.y = Math.max(v.ylo, v.gy - 40 * P * lp * lp);
     }
   }
+}
+
+/**
+ * The bat: flutters in (wing beats bob it along an eased path up to the perch), hangs (wrapped, with a stretch
+ * every few seconds; a tap makes it stretch until it goes), then lets go and flutters off sideways and down.
+ * For the bat, (fx, fy) is where it flies in from, (gx, gy) the perch, (vx, baseY) where it leaves for, and
+ * (ylo, yhi) where it let go from.
+ */
+function stepBat(v: Visit, dt: number, rand: () => number, leaving: boolean, lp: number): void {
+  const a = v.age;
+  const flap = v.happy ? BAT_FLAP_HAPPY : BAT_FLAP;
+  const wing = () => {
+    v.phase = (v.phase + dt * flap) % 1;
+    v.f = v.phase < 0.5 ? 2 : 3;
+  };
+  if (!leaving && a < v.dur) {
+    wing();
+    const p = smooth(a / v.dur);
+    const rise = 1 - (1 - clamp(a / v.dur)) ** 2;
+    v.x = v.fx + (v.gx - v.fx) * p;
+    v.y = Math.max(BAT_HANG_Y, v.fy + (v.gy - v.fy) * rise + 9 * Math.sin(v.phase * 2 * Math.PI) * (1 - p));
+    v.sx = v.gx >= v.fx ? 1 : -1;
+    return;
+  }
+  if (!leaving) {
+    v.x = v.gx;
+    v.y = v.gy;
+    if (a >= v.nextMove + BAT_STRETCH) v.nextMove = a + BAT_STRETCH_GAP + rand() * 3;
+    v.f = v.happy || a >= v.nextMove ? 1 : 0;
+    return;
+  }
+  if (Number.isNaN(v.ylo)) {
+    v.ylo = v.x;
+    v.yhi = v.y;
+  }
+  wing();
+  const e = smooth(lp);
+  v.x = clamp(v.ylo + (v.vx - v.ylo) * e, v.lo, v.hi);
+  v.y = Math.max(BAT_HANG_Y, v.yhi + (v.baseY - v.yhi) * Math.sin((e * Math.PI) / 2) + 8 * Math.sin(v.phase * 2 * Math.PI) * e);
+  v.sx = v.vx >= v.ylo ? 1 : -1;
 }
 
 /** Is world (x, y) on the visitor (its box, a finger's width more)? Only while it can be seen. */

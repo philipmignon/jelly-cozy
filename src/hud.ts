@@ -1,6 +1,6 @@
 /**
  * The settings button in the hood strip (top right of the tank) and the menu it opens:
- * jelly journal, share your tank, music and sound. HTML over the canvas, placed in
+ * jelly journal, share your tank, music, sound and seasonal decor. HTML over the canvas, placed in
  * artboard coordinates.
  */
 import type { TankAudio } from "./audio";
@@ -63,6 +63,11 @@ const ICONS = {
   share: svg(ink("2,5,2,2;8,2,2,2;8,8,2,2", "#e09a28") + ink("4,5,1,1;5,4,1,1;6,3,1,1;7,3,1,1;4,6,1,1;5,7,1,1;6,8,1,1;7,8,1,1", "#693c24")),
   music: svg(ink("4,1,6,1;4,2,1,6;9,2,1,6;2,7,3,3;7,7,3,3", "#693c24")),
   sound: svg(ink("1,4,2,4;3,3,1,6;4,2,1,8;5,1,1,10", "#693c24") + ink("7,5,1,2;8,3,1,1;8,8,1,1;9,4,1,4;10,2,1,1;10,9,1,1;11,3,1,6", "#e09a28")),
+  // seasonal decor: a little carved pumpkin
+  season: svg(
+    ink("5,0,2,3", "#5e5c22") + ink("2,3,8,1;1,4,10,6;2,10,8,1", "#e2701a") + ink("1,5,1,4;4,4,1,6;7,4,1,6", "#b8480c")
+      + ink("3,5,2,2;7,5,2,2;3,8,6,1;4,9,4,1", "#ffe88a"),
+  ),
 };
 
 type AudioWithMusic = TankAudio & { music?: boolean; setMusic?(on: boolean): void };
@@ -72,6 +77,8 @@ export interface SettingsHandlers {
   share(): void;
   backup(): void;
   restore(): void;
+  /** the "Seasonal decor" setting (Halloween pumpkins, the bat...): omitted = no toggle in the menu */
+  seasonDecor?: { get(): boolean; set(on: boolean): void };
 }
 
 export interface Settings {
@@ -150,6 +157,9 @@ export function createSettings(
   const music = item("jt-menu-music", ICONS.music, "Music", true, () => audio.setMusic?.(!audio.music));
   if (typeof audio.setMusic !== "function") (music.parentElement as HTMLElement).hidden = true;
   const sound = item("jt-menu-sound", ICONS.sound, "Sound", true, () => audio.setMuted(!audio.muted));
+  const decor = on.seasonDecor;
+  const season = item("jt-menu-season", ICONS.season, "Seasonal decor", true, () => decor?.set(!decor.get()));
+  if (!decor) (season.parentElement as HTMLElement).hidden = true;
   const status = document.createElement("li");
   status.className = "jt-menu-status";
   status.setAttribute("role", "none");
@@ -161,6 +171,9 @@ export function createSettings(
     (music.querySelector(".state") as HTMLElement).textContent = audio.music ? "On" : "Off";
     sound.setAttribute("aria-checked", String(!audio.muted));
     (sound.querySelector(".state") as HTMLElement).textContent = audio.muted ? "Off" : "On";
+    const decorOn = decor?.get() ?? false;
+    season.setAttribute("aria-checked", String(decorOn));
+    (season.querySelector(".state") as HTMLElement).textContent = decorOn ? "On" : "Off";
   }
   sync();
 

@@ -1,0 +1,15 @@
+{
+  "name": "Jelly Tank",
+  "short_name": "Jelly Tank",
+  "description": "A cozy pixel-art jellyfish aquarium.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#15161f",
+  "theme_color": "#15161f",
+  "icons": [
+    { "src": "icons/jelly-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/jelly-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

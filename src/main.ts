@@ -1,4 +1,4 @@
-import { Alignment, EventType, Fit, Layout, Rive, RuntimeLoader, type ViewModelInstance } from "@rive-app/webgl2";
+import { Alignment, EventType, Fit, Layout, Rive, RuntimeLoader, decodeImage, type AssetLoadCallback, type ViewModelInstance } from "@rive-app/webgl2";
 import wasmUrl from "@rive-app/webgl2/rive.wasm?url";
 import rivUrl from "../public/jellytank.riv?url";
 import { createTankAudio } from "./audio";
@@ -12,6 +12,7 @@ import { clearVisit, createBackupPanel, createSharePanel, noteAfterReload, pendi
 import { createOverlay, type JellyCardInfo } from "./overlay";
 import { activeSeason, readSeasonDecor, writeSeasonDecor } from "./season";
 import { SPECIES_NAMES, TAB_N } from "./species";
+import { createSpriteGroups, eventGroup, groupsFor, jellyGroups, speciesGroup, useSpriteGroups } from "./spritegroups";
 import {
   K,
   SHOP_ITEMS,
@@ -48,6 +49,7 @@ import {
   panBy,
   screenToWorld,
   worldToScreen,
+  viewSpan,
   jellyAt,
   jellyInfo,
   loadGame,
@@ -235,6 +237,17 @@ async function main() {
   );
   (window as unknown as { __tank: State }).__tank = state;
 
+  // species (and event) art arrives in groups: fetch what this tank shows now, alongside the .riv
+  let fileLoaded = () => {};
+  const groups = createSpriteGroups({
+    decode: decodeImage,
+    fetch: (url) => fetch(url),
+    base: document.baseURI,
+    fileLoaded: new Promise<void>((r) => (fileLoaded = r)),
+    idle: (fn) => (typeof requestIdleCallback === "function" ? requestIdleCallback(fn, { timeout: 4000 }) : setTimeout(fn, 2000)),
+  });
+  useSpriteGroups(groups);
+  (window as unknown as { __spriteGroups: typeof groups }).__spriteGroups = groups; // for tools/loadtime.mjs
   // seasonal events (Halloween...): the local calendar, ?season= for testing, and the "Seasonal decor" setting
   const store = (() => {
     try {
@@ -244,7 +257,38 @@ async function main() {
     }
   })();
   let seasonDecor = readSeasonDecor(store);
-  const applySeason = () => setEvent(state, activeSeason(Date.now(), location.search, seasonDecor)?.id ?? null);
+  /** the event the calendar, ?season= and the decor setting ask for (its art may still be on the way) */
+  const wantedEvent = () => activeSeason(Date.now(), location.search, seasonDecor)?.id ?? null;
+  /** the jellies' groups (species, and a ghost's event art) plus the wanted event's; `near` = only those on screen */
+  const tankGroups = (near = Infinity) => {
+    const { x0, x1 } = viewSpan(state);
+    const js = state.slots.flatMap((j) => (j && j.x > x0 - near && j.x < x1 + near ? [{ k: j.k }] : []));
+    return groupsFor(js, wantedEvent());
+  };
+  /** species the shop would sell this tank right now: worth having before they're bought */
+  const affordableGroups = () =>
+    SHOP_ITEMS.flatMap((it) => (it.kind === "polyp" && state.dollars >= it.price && (it.needTier ?? 0) <= state.tier ? [speciesGroup(it.k)] : []));
+  // the loading screen waits for the art of the jellies on screen (or for it to fail); the rest follows after
+  let groupsSettled = false;
+  void groups
+    .ensureGroups(tankGroups(120))
+    .catch((err: unknown) => console.warn(err))
+    .finally(() => (groupsSettled = true));
+  /** when a group that a jelly was hidden for arrived: that jelly fades in rather than popping */
+  const hiddenFor = new Set<string>();
+  const arrivedAt = new Map<string, number>();
+  const FADE_IN_MS = 400;
+
+  /** show the wanted event once its art is in (decor and its visitors both draw from it); until then, none */
+  const applySeason = () => {
+    const id = wantedEvent();
+    if (id && !groups.isReady(eventGroup(id))) {
+      setEvent(state, null);
+      void groups.ensureGroups([eventGroup(id)]).then(applySeason, () => {}); // a failed fetch retries on the next tick
+      return;
+    }
+    setEvent(state, id);
+  };
   applySeason();
   setInterval(applySeason, 60_000); // a tab left open over midnight picks up the new day
 
@@ -258,7 +302,9 @@ async function main() {
       autoplay: true,
       autoBind: true,
       layout: new Layout({ fit: Fit.Contain, alignment: Alignment.Center }),
+      assetLoader: groups.assetLoader as unknown as AssetLoadCallback,
       onLoad: () => {
+        fileLoaded();
         r.resizeDrawingSurfaceToCanvas();
         resolve(r);
       },
@@ -313,6 +359,7 @@ async function main() {
   });
   on("shop", () => {
     overlay.closeCard();
+    groups.prefetch(affordableGroups()); // downloaded now, decoded when one is bought
     openShop(state);
     audio.play("ui");
   });
@@ -668,8 +715,9 @@ async function main() {
   let loadedFrame = false;
   let cardTick = 0;
   rive.on(EventType.Advance, () => {
-    if (!loadedFrame) {
+    if (!loadedFrame && groupsSettled) {
       loadedFrame = true;
+      groups.prefetch(affordableGroups());
       const el = document.getElementById("loading");
       el?.classList.add("done");
       setTimeout(() => el?.remove(), 600);
@@ -757,6 +805,21 @@ async function main() {
     });
     canvas.style.cursor = state.tool === "none" ? "" : "none"; // the held item is the cursor
     const v = view(state);
+    // a jelly whose art hasn't arrived stays hidden until it has (off screen at load, a new species, a visit)
+    if (groupsSettled) groups.want(tankGroups());
+    state.slots.forEach((j, s) => {
+      if (!j) return;
+      const need = jellyGroups({ k: j.k }); // its species' art, and a ghost's event art
+      const missing = need.filter((g) => !groups.isReady(g));
+      if (missing.length) {
+        for (const g of missing) hiddenFor.add(g);
+        v[`j${s}on`] = 0;
+        return;
+      }
+      let t = Infinity; // since the last of its groups arrived
+      for (const g of need) if (hiddenFor.has(g)) t = Math.min(t, now - (arrivedAt.get(g) ?? arrivedAt.set(g, now).get(g)!));
+      if (t < FADE_IN_MS) v[`j${s}on`] = Math.round((t / FADE_IN_MS) * 20) / 20;
+    });
     if (photoHide) Object.assign(v, PHOTO_HIDE);
     write(v);
     audio.setNight(v.nightShade ?? 0);

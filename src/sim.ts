@@ -1270,7 +1270,8 @@ export function mood(s: State): number {
   return js.length ? js.reduce((a, j) => a + moodOf(s, j), 0) / js.length : 0;
 }
 
-function earn(s: State, amount: number, events: SimEvent[], slot?: number): void {
+/** Add sand dollars (capped at MAX_DOLLARS) and report what was actually earned. Exported for friends' gifts. */
+export function earn(s: State, amount: number, events: SimEvent[], slot?: number): void {
   const before = s.dollars;
   s.dollars = Math.min(MAX_DOLLARS, s.dollars + amount);
   const got = s.dollars - before;

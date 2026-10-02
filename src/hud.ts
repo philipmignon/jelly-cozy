@@ -1,6 +1,6 @@
 /**
  * The settings button in the hood strip (top right of the tank) and the menu it opens:
- * jelly journal, share your tank, music and sound. HTML over the canvas, placed in
+ * jelly journal, share your tank, take a photo, saves, music and sound. HTML over the canvas, placed in
  * artboard coordinates.
  */
 import type { TankAudio } from "./audio";
@@ -61,6 +61,7 @@ const ICONS = {
   journal: svg(ink("1,2,4,8;7,2,4,8", "#fffaf0") + ink("5,3,2,8", "#a78560") + ink("2,4,2,1;2,6,2,1;8,4,2,1;8,6,2,1", "#8e5632") + ink("9,1,1,4", "#ff6fa8"), ink("0,1,12,10", "#45261a")),
   save: svg(ink("1,1,10,10", "#693c24") + ink("3,1,6,4", "#f1e2c4") + ink("3,7,6,3", "#d9bf94") + ink("7,2,1,2", "#693c24")),
   share: svg(ink("2,5,2,2;8,2,2,2;8,8,2,2", "#e09a28") + ink("4,5,1,1;5,4,1,1;6,3,1,1;7,3,1,1;4,6,1,1;5,7,1,1;6,8,1,1;7,8,1,1", "#693c24")),
+  photo: svg(ink("0,3,12,8;3,2,4,1", "#693c24") + ink("4,4,4,6;3,5,6,4", "#f1e2c4") + ink("5,6,2,2", "#23253a") + ink("9,4,2,1", "#e09a28")),
   music: svg(ink("4,1,6,1;4,2,1,6;9,2,1,6;2,7,3,3;7,7,3,3", "#693c24")),
   sound: svg(ink("1,4,2,4;3,3,1,6;4,2,1,8;5,1,1,10", "#693c24") + ink("7,5,1,2;8,3,1,1;8,8,1,1;9,4,1,4;10,2,1,1;10,9,1,1;11,3,1,6", "#e09a28")),
 };
@@ -72,6 +73,7 @@ export interface SettingsHandlers {
   share(): void;
   backup(): void;
   restore(): void;
+  photo(): void;
 }
 
 export interface Settings {
@@ -138,6 +140,10 @@ export function createSettings(
   item("jt-menu-share", ICONS.share, "Share your tank", false, () => {
     close();
     on.share();
+  });
+  item("jt-menu-photo", ICONS.photo, "Take a photo", false, () => {
+    close();
+    on.photo();
   });
   item("jt-menu-backup", ICONS.save, "Back up save", false, () => {
     close();

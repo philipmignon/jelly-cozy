@@ -10,7 +10,7 @@ import { readFileSync, mkdirSync } from "node:fs";
 import puppeteer from "puppeteer-core";
 
 const K = JSON.parse(readFileSync(new URL("../src/contract.json", import.meta.url)));
-const PORT = 5198;
+const PORT = Number(process.env.E2E_PORT) || 5198;
 const VIEW = { width: 480, height: 856 };
 const S = Math.min(VIEW.width / K.W, VIEW.height / K.H);
 const OX = (VIEW.width - K.W * S) / 2;

@@ -1,4 +1,4 @@
-import { Alignment, EventType, Fit, Layout, Rive, RuntimeLoader, type ViewModelInstance } from "@rive-app/webgl2";
+import { Alignment, EventType, Fit, Layout, Rive, RuntimeLoader, decodeImage, type AssetLoadCallback, type ViewModelInstance } from "@rive-app/webgl2";
 import wasmUrl from "@rive-app/webgl2/rive.wasm?url";
 import rivUrl from "../public/jellytank.riv?url";
 import { createTankAudio } from "./audio";
@@ -9,6 +9,7 @@ import { connectCloud, savedAt, type CloudSync } from "./cloud";
 import { clearVisit, createBackupPanel, createSharePanel, pendingVisit, showVisitBar } from "./share";
 import { createOverlay, type JellyCardInfo } from "./overlay";
 import { SPECIES_NAMES, TAB_N } from "./species";
+import { createSpriteGroups, groupsFor, speciesGroup, useSpriteGroups } from "./spritegroups";
 import {
   K,
   SHOP_ITEMS,
@@ -42,6 +43,7 @@ import {
   panBy,
   screenToWorld,
   worldToScreen,
+  viewSpan,
   jellyAt,
   jellyInfo,
   loadGame,
@@ -195,6 +197,36 @@ async function main() {
   const sharePanel = createSharePanel(() => exportTank(state), (code) => importTank(code) !== null);
   (window as unknown as { __tank: State }).__tank = state;
 
+  // species (and event) art arrives in groups: fetch what this tank shows now, alongside the .riv
+  let fileLoaded = () => {};
+  const groups = createSpriteGroups({
+    decode: decodeImage,
+    fetch: (url) => fetch(url),
+    base: document.baseURI,
+    fileLoaded: new Promise<void>((r) => (fileLoaded = r)),
+    idle: (fn) => (typeof requestIdleCallback === "function" ? requestIdleCallback(fn, { timeout: 4000 }) : setTimeout(fn, 2000)),
+  });
+  useSpriteGroups(groups);
+  (window as unknown as { __spriteGroups: typeof groups }).__spriteGroups = groups; // for tools/loadtime.mjs
+  const tankGroups = (near = Infinity) => {
+    const { x0, x1 } = viewSpan(state);
+    const ks = state.slots.flatMap((j) => (j && j.x > x0 - near && j.x < x1 + near ? [j.k] : []));
+    return groupsFor(ks, new Date(), location.search);
+  };
+  /** species the shop would sell this tank right now: worth having before they're bought */
+  const affordableGroups = () =>
+    SHOP_ITEMS.flatMap((it) => (it.kind === "polyp" && state.dollars >= it.price && (it.needTier ?? 0) <= state.tier ? [speciesGroup(it.k)] : []));
+  // the loading screen waits for the art of the jellies on screen (or for it to fail); the rest follows after
+  let groupsSettled = false;
+  void groups
+    .ensureGroups(tankGroups(120))
+    .catch((err: unknown) => console.warn(err))
+    .finally(() => (groupsSettled = true));
+  /** when a group that a jelly was hidden for arrived: that jelly fades in rather than popping */
+  const hiddenFor = new Set<string>();
+  const arrivedAt = new Map<string, number>();
+  const FADE_IN_MS = 400;
+
   const embedded = embeddedRiv();
   const rive = await new Promise<Rive>((resolve, reject) => {
     const r: Rive = new Rive({
@@ -205,7 +237,9 @@ async function main() {
       autoplay: true,
       autoBind: true,
       layout: new Layout({ fit: Fit.Contain, alignment: Alignment.Center }),
+      assetLoader: groups.assetLoader as unknown as AssetLoadCallback,
       onLoad: () => {
+        fileLoaded();
         r.resizeDrawingSurfaceToCanvas();
         resolve(r);
       },
@@ -260,6 +294,7 @@ async function main() {
   });
   on("shop", () => {
     overlay.closeCard();
+    groups.prefetch(affordableGroups()); // downloaded now, decoded when one is bought
     openShop(state);
     audio.play("ui");
   });
@@ -506,8 +541,9 @@ async function main() {
   let loadedFrame = false;
   let cardTick = 0;
   rive.on(EventType.Advance, () => {
-    if (!loadedFrame) {
+    if (!loadedFrame && groupsSettled) {
       loadedFrame = true;
+      groups.prefetch(affordableGroups());
       const el = document.getElementById("loading");
       el?.classList.add("done");
       setTimeout(() => el?.remove(), 600);
@@ -595,6 +631,19 @@ async function main() {
     });
     canvas.style.cursor = state.tool === "none" ? "" : "none"; // the held item is the cursor
     const v = view(state);
+    // a jelly whose art hasn't arrived stays hidden until it has (off screen at load, a new species, a visit)
+    if (groupsSettled) groups.want(tankGroups());
+    state.slots.forEach((j, s) => {
+      if (!j) return;
+      const g = speciesGroup(j.k);
+      if (!groups.isReady(g)) {
+        hiddenFor.add(g);
+        v[`j${s}on`] = 0;
+      } else if (hiddenFor.has(g)) {
+        const t = now - (arrivedAt.get(g) ?? arrivedAt.set(g, now).get(g)!);
+        if (t < FADE_IN_MS) v[`j${s}on`] = Math.round((t / FADE_IN_MS) * 20) / 20;
+      }
+    });
     write(v);
     audio.setNight(v.nightShade ?? 0);
     audio.setMurk(state.murk);

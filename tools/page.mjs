@@ -4,6 +4,10 @@
 // The .riv travels as base64 inside the page. (Measured 2026-10-02: moving it to its own
 // script didn't paint sooner, since the page renders progressively, and first frame is
 // bandwidth-bound either way, so the simpler single file stays.)
+//
+// The species' sprites are not in the .riv: each group is its own file (dist/sprites/<group>.json, see
+// src/spritegroups.ts) fetched when the tank needs it, so they are published beside the page at the same
+// relative paths. Republishing: pass the whole map; group paths are stable (the URL's ?v= busts caches).
 import { readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 
 const assets = readdirSync("dist/assets");
@@ -37,5 +41,8 @@ mkdirSync("pub", { recursive: true });
 const main = page("Jelly Tank");
 writeFileSync("pub/jellytank.html", main);
 writeFileSync("pub/jellytank-sync.html", page("Jelly Tank Sync", "<script>window.__JELLYTANK_SYNC = true;</script>\n"));
-console.log(JSON.stringify({ [`assets/${js}`]: `dist/assets/${js}`, [`assets/${wasm}`]: `dist/assets/${wasm}` }));
-console.log(`page ${Math.round(main.length / 1024)} KB, tank script ${Math.round(tankJs.length / 1024)} KB`);
+const groups = Object.values(JSON.parse(readFileSync("src/contract.json", "utf8")).assetGroups ?? {}).map((g) => g.file);
+const files = { [`assets/${js}`]: `dist/assets/${js}`, [`assets/${wasm}`]: `dist/assets/${wasm}` };
+for (const f of groups) files[f] = `dist/${f}`;
+console.log(JSON.stringify(files));
+console.log(`page ${Math.round(main.length / 1024)} KB, tank script ${Math.round(tankJs.length / 1024)} KB, ${groups.length} sprite groups`);

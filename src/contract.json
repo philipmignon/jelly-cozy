@@ -2160,5 +2160,61 @@
    "x",
    "y"
   ]
+ },
+ "assetGroups": {
+  "sp-blubber": {
+   "file": "sprites/sp-blubber.json",
+   "v": "ba109cfdeb",
+   "sprites": 168,
+   "bytes": 83234
+  },
+  "sp-comb": {
+   "file": "sprites/sp-comb.json",
+   "v": "81c018fdfb",
+   "sprites": 144,
+   "bytes": 88655
+  },
+  "sp-crystal": {
+   "file": "sprites/sp-crystal.json",
+   "v": "6e31b7c74a",
+   "sprites": 200,
+   "bytes": 114986
+  },
+  "sp-flowerhat": {
+   "file": "sprites/sp-flowerhat.json",
+   "v": "e501e3e559",
+   "sprites": 144,
+   "bytes": 91672
+  },
+  "sp-friedegg": {
+   "file": "sprites/sp-friedegg.json",
+   "v": "3623cc07eb",
+   "sprites": 168,
+   "bytes": 85683
+  },
+  "sp-lionsmane": {
+   "file": "sprites/sp-lionsmane.json",
+   "v": "ec018d0af3",
+   "sprites": 224,
+   "bytes": 320416
+  },
+  "sp-moon": {
+   "file": "sprites/sp-moon.json",
+   "v": "99bac18917",
+   "sprites": 224,
+   "bytes": 219067
+  },
+  "sp-nettle": {
+   "file": "sprites/sp-nettle.json",
+   "v": "fc71b772ff",
+   "sprites": 168,
+   "bytes": 150373
+  },
+  "sp-upside": {
+   "file": "sprites/sp-upside.json",
+   "v": "4ebcbb7565",
+   "sprites": 144,
+   "bytes": 45725
+  }
  }
 }

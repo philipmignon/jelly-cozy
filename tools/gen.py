@@ -9,6 +9,8 @@ fog, glow, vignette and night are smooth Rive gradients on top.
 Logical screen 240x428, artboard 720x1284. Host contract -> src/contract.json.
 The 8-bit version lives on in tools/gen_8bit.py.
 """
+import base64
+import hashlib
 import json
 import math
 import random
@@ -187,9 +189,30 @@ def sprite(name, px):
         w, h = x1 - x0 + 1, y1 - y0 + 1
         write_png(IMG / f"{name}.png", w, h, {(x - x0, y - y0): c for (x, y), c in px.d.items()})
         aid = nid()
-        assets.append(f'<ImageAsset file="img/{name}.png" samplerFilter="nearest" width="{w}" height="{h}" name="{name}" id="{aid}"/>')
+        ref = ' exportTypeValue="referenced"' if asset_group(name) else ""  # loaded by the host (see asset_group)
+        assets.append(f'<ImageAsset file="img/{name}.png" samplerFilter="nearest" width="{w}" height="{h}"{ref} name="{name}" id="{aid}"/>')
         sprites[name] = (aid, x0, y0, x1, y1)
     return sprites[name]
+
+
+# ---- asset groups: art the host loads only when it is needed (src/spritegroups.ts). A grouped sprite is a
+# referenced ImageAsset: the .riv keeps the record, its PNG goes into public/sprites/<group>.json with the rest of
+# its group, and the host fetches that file when a jelly of the species (or the event) shows up. Everything else
+# (tank, decor, shop, helpers, visitors) stays embedded. A new species or event needs nothing more than a line here.
+EVENT_GROUPS = {"hw_": "ev-halloween"}  # sprite-name prefix -> group
+
+
+def asset_group(name):
+    """The group sprite `name` loads with, or None to embed it in the .riv."""
+    for prefix, group in EVENT_GROUPS.items():
+        if name.startswith(prefix):
+            return group
+    if name.startswith(("Bell", "Tent")):  # the v1 moon adult kept its bare names (sprite_name)
+        return "sp-moon"
+    for sp in SPECIES:  # every other jelly sprite is <Species><Stage><Part> (sprite_name)
+        if name.startswith(sp.capitalize()):
+            return f"sp-{sp}"
+    return None
 
 
 def image(name, px, lx=0, ly=0, opacity=None, binds=(), node_id=None, blend=None, node_name=None):
@@ -6386,6 +6409,23 @@ contract = {
     # writes, j{s}{key}, lives at the nested path j{s}/{key} of the Tank instance (vmi.number("j3/k5")).
     "nested": {"pattern": "^j([0-6])(.+)$", "path": "j{s}/{key}", "viewModel": "Jelly", "keys": list(_jorder)},
 }
+# ---- asset groups: each group's PNGs packed into one file (base64 in JSON, a type every host serves and
+# compresses); the contract lists them with a content hash the host adds to the URL so a new build busts caches
+SPRITE_DIR = ROOT / "public" / "sprites"
+SPRITE_DIR.mkdir(parents=True, exist_ok=True)
+for old in SPRITE_DIR.glob("*.json"):
+    old.unlink()
+packs = {}
+for name in sorted(sprites):
+    if asset_group(name):
+        packs.setdefault(asset_group(name), {})[name] = base64.b64encode((IMG / f"{name}.png").read_bytes()).decode()
+contract["assetGroups"] = {}
+for group, members in sorted(packs.items()):
+    data = json.dumps({"group": group, "sprites": members}, separators=(",", ":")).encode()
+    (SPRITE_DIR / f"{group}.json").write_bytes(data)
+    contract["assetGroups"][group] = {"file": f"sprites/{group}.json", "v": hashlib.sha1(data).hexdigest()[:10],
+                                      "sprites": len(members), "bytes": len(data)}
+print("groups: " + ", ".join(f"{g} {a['sprites']} ({a['bytes'] // 1024} KB)" for g, a in contract["assetGroups"].items()))
 (ROOT / "src" / "contract.json").write_text(json.dumps(contract, indent=1))
 
 
@@ -6416,5 +6456,31 @@ for k in range(len(SPECIES)):
         sil.put(x, y, hx("141a33", 255 if body.has(x, y) or c[3] >= 110 else round(70 + c[3])))
     journal_art[f"{k}s"] = data_url(sil)
 (ROOT / "src" / "journal-art.json").write_text(json.dumps(journal_art, indent=1))
-total = sum(f.stat().st_size for f in IMG.glob("*.png"))
+
+
+# ---- home-screen icons (public/manifest.webmanifest): the moon jelly over deep water, whole pixels, inside the
+# maskable safe zone (the middle 80%)
+def app_icon(size):
+    port = journal_portrait(0, "h")
+    x0, y0, x1, y1 = port.bbox()
+    w, h = x1 - x0 + 1, y1 - y0 + 1
+    s = max(1, int(size * 0.62 // max(w, h)))
+    ox, oy = (size - w * s) // 2, (size - h * s) // 2
+    top, bot = hx("2c82c2"), hx("15264f")
+    px = {(x, y): mix(top, bot, y / (size - 1)) for y in range(size) for x in range(size)}
+    for (x, y), c in port.d.items():
+        a = c[3] / 255
+        for dy in range(s):
+            for dx in range(s):
+                q = (ox + (x - x0) * s + dx, oy + (y - y0) * s + dy)
+                b = px[q]
+                px[q] = (*(round(c[i] * a + b[i] * (1 - a)) for i in range(3)), 255)
+    return png_bytes(size, size, px)
+
+
+ICON_DIR = ROOT / "public" / "icons"
+ICON_DIR.mkdir(parents=True, exist_ok=True)
+for size in (192, 512):
+    (ICON_DIR / f"jelly-{size}.png").write_bytes(app_icon(size))
+total =sum(f.stat().st_size for f in IMG.glob("*.png"))
 print(f"wrote tank.rml ({len(doc) // 1024} KB), {len(assets)} images ({total // 1024} KB), {len(_order)} props, {len(anims)} animations")

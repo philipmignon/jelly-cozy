@@ -27,6 +27,12 @@ const check = (name, ok, extra = "") => {
 };
 
 const centre = (r) => [r.x + r.w / 2, r.y + r.h / 2];
+/** v15: where decoration n's base sits at world x (sim decorY): bought or placed ones land where there's room */
+const decorBase = (n, x) => {
+  const d = K.decor[n];
+  const sand = (v) => K.sandTop[Math.floor(v / K.P)] ?? 960;
+  return Math.min(Math.max(K.waterBot, d.y), Math.round((sand(x) + d.y - sand(d.x)) / K.P) * K.P);
+};
 const button = (name) => centre(K.buttons.find((b) => b.name === name));
 
 function startServer() {
@@ -731,9 +737,13 @@ async function main() {
     s = await st();
     check("buy giant clam", s.owned[3] === true);
     const before = s.dollars;
+    // v15: an owned decoration's card puts it away (no refund), and a second tap places it again (no charge)
     await click(...centre(K.shopCards[4]));
-    s = await st();
-    check("owned decor can't be bought twice", s.dollars === before);
+    const away = await until(page, () => window.__tank.stored[1] === true && window.__tank.owned[1] === true, null, 5000);
+    check("tapping an owned decoration's card puts it away", away && (await st()).dollars === before);
+    await click(...centre(K.shopCards[4]));
+    const back = await until(page, () => window.__tank.stored[1] === false, null, 5000);
+    check("tapping it again places it, never charged twice", back && (await st()).dollars === before && (await st()).shop === true);
     // v13: the bubbler (item 24, decoration 10) follows the sold decorations on the DECOR tab
     await page.evaluate(() => { window.__tank.dollars = Math.max(window.__tank.dollars, 300); });
     await click(...centre(K.shopCards[24]));
@@ -765,21 +775,33 @@ async function main() {
       return { visit: v ? { kind: v.kind, x: Math.round(v.x), y: Math.round(v.y), on: +v.on.toFixed(2) } : null, shopSlid: +(t.t - t.shop.t0).toFixed(2), tool: t.tool, card: !!document.querySelector(".jt-card:not([hidden])") };
     });
     const pearlScene = await scene();
-    await click(clam.x + K.pearl.dx, clam.y + K.pearl.dy);
+    const clamAt = await page.evaluate(() => ({ x: window.__tank.decorX[3], cam: window.__tank.cam.x }));
+    await click(clamAt.x + clamAt.cam + K.pearl.dx, decorBase(3, clamAt.x) + K.pearl.dy);
     s = await st();
     const pearlGone = await page.evaluate(() => !window.__tank.pearlWas && window.__tank.pearlDay !== "");
     // +15 for the pearl; a jelly finishing a meal in the same moment can add +1
     check("tap the pearl: +15", s.dollars >= d0 + 15 && s.dollars <= d0 + 17 && pearlGone, `${d0} -> ${s.dollars}${pearlGone ? "" : ` ${JSON.stringify(pearlScene)}`}`);
 
-    // long-press the anchor and drag it along the sand
+    // long-press the anchor and drag it along the sand. v15: the small tank is crowded by now (the bubbler and the
+    // keepsakes land wherever there's most room, which can be in front of the anchor): the rest go in the drawer
+    // for these checks and come back after them
+    const othersOut = await page.evaluate(() => {
+      const t = window.__tank;
+      const was = t.stored.slice();
+      t.owned.forEach((o, n) => o && n !== 1 && (t.stored[n] = true));
+      return was;
+    });
+    await frames(2);
     const anchor = K.decor[1];
     const ax0 = await page.evaluate(() => window.__tank.decorX[1]);
-    await page.mouse.move(OX + anchor.x * S, OY + (anchor.y - anchor.h / 2) * S);
+    const acam = await page.evaluate(() => window.__tank.cam.x);
+    const ay = decorBase(1, ax0) - anchor.h / 2;
+    await page.mouse.move(OX + (ax0 + acam) * S, OY + ay * S);
     await page.mouse.down();
     // hold until it lifts (a long-press is decided on the frame after LONG_MS, so under load that is later)
     await page.waitForFunction(() => window.__tank.lifted === 1, { timeout: 8000 }).catch(() => {});
     for (let k = 1; k <= 10; k++) {
-      await page.mouse.move(OX + (anchor.x + k * 22) * S, OY + (anchor.y - anchor.h / 2) * S);
+      await page.mouse.move(OX + (ax0 + acam + k * 22) * S, OY + ay * S);
       await sleep(30);
     }
     await shot("5c-dragging");
@@ -787,6 +809,37 @@ async function main() {
     await sleep(200);
     const ax1 = await page.evaluate(() => window.__tank.decorX[1]);
     check("drag moves the anchor", ax1 > ax0 + 100, `${ax0} -> ${ax1}`);
+
+    // v15: carry it down onto the drawer that slides up from the cabinet: it's put away, and nothing on the shelf
+    // under the finger is picked up; the shop's card places it again where there's room
+    const anchorAt = await page.evaluate(() => ({ x: window.__tank.decorX[1] + window.__tank.cam.x }));
+    const ay2 = decorBase(1, await page.evaluate(() => window.__tank.decorX[1])) - anchor.h / 2;
+    await page.mouse.move(OX + anchorAt.x * S, OY + ay2 * S);
+    await page.mouse.down();
+    await page.waitForFunction(() => window.__tank.lifted === 1, { timeout: 8000 }).catch(() => {});
+    const drop = [K.store.x + K.store.w / 2, K.store.y + 30];
+    for (let k = 1; k <= 8; k++) {
+      await page.mouse.move(OX + (anchorAt.x + (drop[0] - anchorAt.x) * k / 8) * S, OY + (ay2 + (drop[1] - ay2) * k / 8) * S);
+      await sleep(30);
+    }
+    const hot = await until(page, () => window.__tank.drawer.hot && window.__tank.drawer.e > 0.9, null, 5000);
+    await shot("5d-drawer");
+    await page.mouse.up();
+    const stored = await until(page, () => window.__tank.stored[1] === true && window.__tank.lifted === -1, null, 5000);
+    await frames(4);
+    check("dropping a decoration on the drawer puts it away (and presses nothing on the shelf)", hot && stored && (await page.evaluate(() => window.__tank.tool)) === "none",
+      JSON.stringify(await page.evaluate(() => ({ hot: window.__tank.drawer, stored: window.__tank.stored[1], tool: window.__tank.tool }))));
+    await click(...button("shop"));
+    await shopUp();
+    if ((await page.evaluate(() => window.__tank.tab)) !== 1) {
+      await click(...tabBtn(1));
+      await page.waitForFunction(() => window.__tank.tab === 1, { timeout: 8000 }).then(laidOut).catch(() => {});
+    }
+    await click(...centre(K.shopCards[4]));
+    check("its card places it back in the tank", await until(page, () => window.__tank.stored[1] === false && window.__tank.owned[1], null, 5000));
+    await click(...centre(K.shopClose));
+    await shopDown();
+    await page.evaluate((was) => window.__tank.stored.forEach((_, n) => n !== 1 && (window.__tank.stored[n] = was[n])), othersOut);
 
     // long-press a jelly: its card opens; rename it
     const jj = await page.evaluate(() => { const j = window.__tank.slots[0]; return { x: j.x, y: j.y }; });

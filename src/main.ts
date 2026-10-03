@@ -435,7 +435,12 @@ async function main() {
       audio.play("ui");
     },
   };
-  for (const name of Object.keys(press) as ButtonName[]) on(name, press[name]);
+  // v15: a decoration carried down to the drawer is let go over the shelf: Rive still clicks what's under the
+  // finger, so the cabinet's buttons ignore presses while one is carried and just after
+  let dragging = -1; // the decoration being carried (gestures below)
+  let dragEndedAt = -Infinity;
+  const carrying = () => dragging >= 0 || performance.now() - dragEndedAt < 400;
+  for (const name of Object.keys(press) as ButtonName[]) on(name, () => carrying() || press[name]());
   Array.from({ length: TAB_N }, (_, t) => t).forEach((t) =>
     on(`tab${t}`, () => {
       if (!isShopOpen(state)) return;
@@ -480,6 +485,10 @@ async function main() {
     } else if (r === "selected") {
       audio.play("ui"); // an owned theme picked again
       persist(state);
+    } else if (r === "putAway" || r === "placed") {
+      // v15: an owned decoration's card puts it in the drawer, or takes it out to where there's room
+      audio.play(r === "putAway" ? "putdown" : "pickup");
+      persist(state);
     } else {
       audio.play("ui");
     }
@@ -494,7 +503,6 @@ async function main() {
 
   // ---------------------------------------------------------------- gestures in the water
 
-  let dragging = -1;
   let settings: { readonly isOpen: boolean } | null = null;
   let backupOpen = () => false; // set once the backup panel exists
   let reqNote: RequestNote | null = null; // v12: today's requests (none in read-only tanks)
@@ -620,14 +628,18 @@ async function main() {
       if (slot >= 0) openCardFor(slot);
       return false;
     },
-    drag(x) {
-      if (dragging >= 0) moveDecorScreen(state, dragging, x);
+    drag(x, y) {
+      if (dragging < 0) return;
+      const wasHot = state.drawer.hot;
+      moveDecorScreen(state, dragging, x, y);
+      if (state.drawer.hot && !wasHot) buzz(8); // over the drawer: a let-go now puts it away
     },
     drop() {
       if (dragging < 0) return;
-      dropDecor(state);
+      const r = dropDecor(state);
       dragging = -1;
-      audio.play("buy");
+      dragEndedAt = performance.now();
+      audio.play(r === "stored" ? "putdown" : "buy");
       persist(state);
     },
   });

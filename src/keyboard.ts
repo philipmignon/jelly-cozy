@@ -187,7 +187,8 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
   help.textContent =
     "Tab moves between the jellies, the pearl, visitors and the shelf, and arrows jump to the nearest one that way. " +
     "Enter pets a jelly or presses a button, N opens a jelly's card. F feeds, S scrubs the glass, 1 to 4 pick up the foods and the sponge, " +
-    "L flips the light, B opens the shop, J the journal, the square brackets look left and right, M mutes, Escape puts things down.";
+    "L flips the light, B opens the shop, J the journal, the square brackets look left and right, M mutes, Escape puts things down. " +
+    "In the shop, Enter on a decoration you own puts it away, or places it again.";
   document.body.append(help);
   canvas.tabIndex = 0;
   canvas.setAttribute("role", "application");
@@ -300,7 +301,9 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
     const it = SHOP_ITEMS[i];
     if (!it) return "";
     const v = view(state);
-    const status = v[`use${i}`] ? "in use" : v[`own${i}`] ? "owned" : v[`lock${i}`] ? "not available yet" : "";
+    // v15: an owned decoration's card says where it is and what Enter does with it
+    const decor = it.kind === "decor" && state.owned[it.d] ? (state.stored[it.d] ? "put away, Enter places it" : "in the tank, Enter puts it away") : "";
+    const status = decor || (v[`use${i}`] ? "in use" : v[`own${i}`] ? "owned" : v[`lock${i}`] ? "not available yet" : "");
     const tab = CARDS[i]?.tab ?? 0;
     const list = TAB_ITEMS[tab] ?? [];
     const head = withTab ? `${titleCase(TABS[tab]?.name ?? "")} tab. ` : "";
@@ -314,6 +317,10 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
         return `Bought ${name}. ${dollars(state.dollars)} left.`;
       case "selected":
         return `${name} theme on.`;
+      case "putAway":
+        return `${name} put away. Enter places it again.`;
+      case "placed":
+        return `${name} placed in the tank.`;
       case "cantAfford":
         return `Not enough sand dollars: ${name} costs ${it?.price ?? 0}, you have ${state.dollars}.`;
       case "tankFull":

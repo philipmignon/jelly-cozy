@@ -641,9 +641,11 @@ describe("shop", () => {
     expect(s.dollars).toBe(35);
     const v = view(s);
     expect(v.own3).toBe(1);
-    expect(v.lock3).toBe(1);
+    expect(v.away3).toBe(0);
+    expect(v.lock3).toBe(0); // v15: an owned decoration's card stays bright: a tap puts it away
     expect(v.dec0).toBe(1);
-    expect(buy(s, 3)).toBe("owned");
+    expect(buy(s, 3)).toBe("putAway");
+    expect(buy(s, 3)).toBe("placed");
     expect(s.dollars).toBe(35);
   });
 

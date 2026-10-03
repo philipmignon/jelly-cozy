@@ -192,7 +192,9 @@ describe("v13 keepsakes in the tank", () => {
     s.themes[4] = true;
     const w = view(s);
     expect([w.lock26, w.own26, w.lock30, w.own30, w.use30]).toEqual([0, 1, 0, 1, 0]);
-    expect(buy(s, 26)).toBe("owned");
+    expect(buy(s, 26)).toBe("putAway"); // v15: an earned keepsake can be put away like a bought decoration
+    expect(s.owned[6]).toBe(true);
+    expect(buy(s, 26)).toBe("placed");
     expect(buy(s, 30)).toBe("selected");
     expect(s.theme).toBe(4);
     expect(view(s).theme4).toBe(1);

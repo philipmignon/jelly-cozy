@@ -4458,6 +4458,516 @@ def hw_contract(c):
 # ---- end Halloween event ----
 
 
+# ---- night visitors ----
+# Three rare visitors that only come at night (src/visitors.ts VISITOR_NIGHT), all embedded (28 small sprites,
+# ~8 KB of PNG). Art faces right at scaleX +1, like the day visitors.
+#   octopus  (props octoOn/S{i}/DY/SX/F0-3/C1/C2)  peeks over a reef rock: one node per spot (octoS{i}), clipped
+#            along that rock's top edge; shifts colour (octoC1 camouflage, octoC2 pale, over the red), reaches an
+#            arm toward a jelly. Origin = the point on the rock's edge it peeks over. Frames: 0 rest, 1 breathe,
+#            2 reach, 3 the reaching arm's tip flicked.
+#   manta    (props manta*)  a big soft shadow gliding through the far upper water (inside the Far parallax
+#            group, so mantaX is a far-layer x). Origin = the middle of its body. Frames 0-3: a slow wing beat.
+#   hermit   (props hermit*) a blue-legged hermit crab in a turban shell. Frames 0-1 walk the sand (origin =
+#            bottom-centre); 2-3 peek out of the dive helmet's front port (origin = the port's centre).
+NV_LIGHT = (-0.55, -0.75, 0.45)
+
+
+def nv_dist(mask):
+    """Distance (chamfer, px) from each pixel of `mask` to the nearest pixel outside it."""
+    INF = 99.0
+    d = {p: INF for p in mask}
+    xs = [p[0] for p in mask]
+    ys = [p[1] for p in mask]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    rt = math.sqrt(2)
+    for passes in ((range(y0, y1 + 1), range(x0, x1 + 1), ((-1, 0, 1), (0, -1, 1), (-1, -1, rt), (1, -1, rt))),
+                   (range(y1, y0 - 1, -1), range(x1, x0 - 1, -1), ((1, 0, 1), (0, 1, 1), (1, 1, rt), (-1, 1, rt)))):
+        rows, cols, nb = passes
+        for y in rows:
+            for x in cols:
+                if (x, y) not in d:
+                    continue
+                best = d[(x, y)]
+                for a, b, w in nb:
+                    q = (x + a, y + b)
+                    best = min(best, (d[q] if q in d else 0.0) + w)
+                d[(x, y)] = best
+    return d
+
+
+def nv_pillow(mask, rmp, R=4.0, light=NV_LIGHT, outline=True, bias=None, dither=0.6):
+    """Shade an arbitrary shape as a soft rounded pillow lit from the upper left: height from the distance to
+    the edge, normals from its slope. rmp is dark -> light; with `outline`, a selective outline (lit edges keep a
+    mid step, the rest go darkest). bias(x, y) -> a nudge to the light (paint, spots)."""
+    px = Px()
+    if not mask:
+        return px
+    d = nv_dist(mask)
+    h = {p: math.sqrt(min(v, R) / R) for p, v in d.items()}
+    ln = math.sqrt(sum(v * v for v in light))
+    lx, ly, lz = (v / ln for v in light)
+    n = len(rmp)
+    for (x, y) in mask:
+        gx = (h.get((x + 1, y), 0.0) - h.get((x - 1, y), 0.0)) / 2
+        gy = (h.get((x, y + 1), 0.0) - h.get((x, y - 1), 0.0)) / 2
+        nx, ny, nz = -gx * 2.2, -gy * 2.2, 1.0
+        nn = math.sqrt(nx * nx + ny * ny + nz * nz)
+        t = 0.12 + 0.88 * max(0.0, (nx * lx + ny * ly + nz * lz) / nn)
+        if bias:
+            t += bias(x, y)
+        lo = 1 if outline else 0
+        idx = lo + shade_index(t, n - lo, x, y, dither)
+        px.put(x, y, rmp[min(idx, n - 1)])
+    if outline:
+        for (x, y) in mask:
+            open_ = [(a, b) for a, b in ((1, 0), (-1, 0), (0, 1), (0, -1)) if (x + a, y + b) not in mask]
+            if not open_:
+                continue
+            ox = sum(a for a, _ in open_)
+            oy = sum(b for _, b in open_)
+            px.put(x, y, rmp[1] if ox * lx + oy * ly > 0.2 else rmp[0])
+    return px
+
+
+def nv_ellipse(cx, cy, rx, ry, rot=0.0):
+    """The pixels of a (rotated) ellipse."""
+    out = set()
+    ca, sa = math.cos(rot), math.sin(rot)
+    r = int(max(rx, ry)) + 2
+    for y in range(int(cy) - r, int(cy) + r + 1):
+        for x in range(int(cx) - r, int(cx) + r + 1):
+            dx, dy = x + 0.5 - cx, y + 0.5 - cy
+            u, v = dx * ca + dy * sa, -dx * sa + dy * ca
+            if (u / rx) ** 2 + (v / ry) ** 2 <= 1:
+                out.add((x, y))
+    return out
+
+
+def nv_stroke(pts, w0, w1):
+    """A tapering stroke along a polyline of float points: width w0 at the start, w1 at the end."""
+    out = set()
+    segs = list(zip(pts, pts[1:]))
+    total = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in segs) or 1
+    run = 0.0
+    for (ax, ay), (bx, by) in segs:
+        L = math.hypot(bx - ax, by - ay)
+        steps = max(1, int(L * 3))
+        for i in range(steps + 1):
+            t = i / steps
+            x, y = ax + (bx - ax) * t, ay + (by - ay) * t
+            r = (w0 + (w1 - w0) * (run + L * t) / total) / 2
+            for yy in range(math.floor(y - r - 1), math.ceil(y + r + 1)):
+                for xx in range(math.floor(x - r - 1), math.ceil(x + r + 1)):
+                    if (xx + 0.5 - x) ** 2 + (yy + 0.5 - y) ** 2 <= r * r + 0.15:
+                        out.add((xx, yy))
+        run += L
+    return out
+
+
+def nv_curve(p0, p1, p2, p3, n=20):
+    """A cubic bezier as a polyline."""
+    return [tuple((1 - t) ** 3 * a + 3 * (1 - t) ** 2 * t * b + 3 * (1 - t) * t * t * c + t ** 3 * d
+                  for a, b, c, d in zip(p0, p1, p2, p3)) for t in (i / n for i in range(n + 1))]
+
+
+def nv_paste(dst, src):
+    for (x, y), c in src.d.items():
+        dst.put(x, y, c)
+
+
+# ---- the octopus: a common octopus, mantle leaning back, one big gold eye with a bar pupil
+NV_OCTO_PALS = {
+    # dark -> light; then the papillae (dark spot, light spot) and the suckers
+    "red": (ramp("2e0a14", "5e1420", "962a2c", "c84a36", "e8784e", "ffb27a"), "5e1420", "ffb27a", "ffd8b8"),
+    "camo": (ramp("161c34", "2a3456", "46587e", "6a82a6", "93abc8", "c4d4e6"), "1e2644", "a8bcd6", "d0dcea"),
+    "pale": (ramp("4e3c50", "8a7088", "c2a8bc", "e6d2de", "faecf2", "ffffff"), "c2a8bc", "ffffff", "ffffff"),
+}
+NV_OCTO_EYE = (hx("f4c24a"), hx("b07a1a"), hx("160a0e"), hx("fff6dc"))  # iris, iris shadow, pupil, glint
+
+
+def nv_octo_body(frame):
+    """The masks: (mantle+head, arms, reach arm or None). Origin = the rock-top point it peeks over."""
+    swell = 0.5 if frame == 1 else 0.0
+    mantle = nv_ellipse(-4.2, -12.2 - swell, 6.3 + swell, 7.9 + swell, rot=-0.5)
+    neck = nv_ellipse(-1.6, -7.6, 5.6, 4.6)
+    head = nv_ellipse(0.6, -4.2, 6.2, 4.2)
+    body = mantle | neck | head
+    # below the rock edge (hidden in the tank, whole in the journal): the web and five arms, curling outward
+    arms = nv_ellipse(0.2, 0.2, 6.4, 2.8)
+    for x0, side, L in ((-5.0, -1, 8.5), (-2.4, -1, 10.5), (0.3, 1, 11.5), (3.0, 1, 10.0), (5.4, 1, 8.0)):
+        out = side * (1.2 + abs(x0) * 0.35)
+        pts = nv_curve((x0, -1.0), (x0 + out * 0.4, 3.5), (x0 + out * 1.4, L - 2.5), (x0 + out * 2.6, L - 3.5), 14)
+        tip = nv_curve(pts[-1], (x0 + out * 3.6, L - 4.5), (x0 + out * 3.4, L - 6.4), (x0 + out * 2.4, L - 6.0), 6)
+        arms |= nv_stroke(pts + tip[1:], 3.2, 1.0)
+    # arm tips curled up over the rock's top, front and back
+    front = nv_curve((4.0, -0.6), (7.6, -0.8), (10.0, -3.2), (8.4, -5.4), 12)
+    back = nv_curve((-5.4, -0.6), (-8.8, -0.8), (-10.4, -3.0), (-9.0, -4.8), 12)
+    arms |= nv_stroke(front, 3.0, 1.2) | nv_stroke(back, 2.6, 1.0)
+    reach = None
+    if frame >= 2:
+        if frame == 2:  # up and forward toward the jelly, the tip curling over
+            pts = nv_curve((5.0, -2.0), (12, -4), (13, -13), (18.5, -18.5), 18) + nv_curve((18.5, -18.5), (21.5, -21.8), (24.2, -19.2), (21.8, -17.2), 10)[1:]
+        else:  # the flick: the tip whipped the other way, the arm a touch lower
+            pts = nv_curve((5.0, -2.0), (12, -3), (14, -11), (19.5, -15.5), 18) + nv_curve((19.5, -15.5), (23.5, -18), (25.2, -13.6), (22.6, -13.0), 10)[1:]
+        reach = nv_stroke(pts, 3.2, 1.0)
+    return body, arms, reach
+
+
+def octo_art(frame, pal="red"):
+    rmp, spot_d, spot_l, sucker = NV_OCTO_PALS[pal]
+    spot_d, spot_l, sucker = hx(spot_d), hx(spot_l), hx(sucker)
+    body, arms, reach = nv_octo_body(frame)
+    px = Px()
+    mottle = (lambda x, y: -0.32 if fbm(x * 0.32, y * 0.32, 71) > 0.56 else 0.06) if pal == "camo" else (lambda x, y: 0.0)
+    nv_paste(px, nv_pillow(arms - body, rmp, R=2.0, bias=lambda x, y: mottle(x, y) - 0.08))
+    if reach:
+        nv_paste(px, nv_pillow(reach, rmp, R=1.6, bias=mottle))
+    nv_paste(px, nv_pillow(body, rmp, R=4.5, bias=mottle))
+    # papillae: little dark and light bumps over the mantle
+    for (x, y) in body:
+        if (x, y + 1) in body and (x, y - 1) in body and (x - 1, y) in body and (x + 1, y) in body and y < -6:
+            h = _hash2(x, y, 7 if pal != "camo" else 9)
+            if h < 0.09:
+                px.put(x, y, spot_d)
+            elif h > 0.95:
+                px.put(x, y, spot_l)
+    # suckers along the undersides of the curled tips (and the reaching arm)
+    for pts in ((8, -2), (9, -3), (-8, -2), (-9, -3)):
+        if px.has(*pts):
+            px.put(pts[0], pts[1], sucker)
+    if reach:
+        for x, y in sorted(reach):
+            if (x, y + 1) not in reach and (x + y) % 2 == 0 and 7 < x < 22:
+                px.put(x, y, sucker)
+    # the eye: a raised lid in the body's colour, a gold iris, a dark bar pupil, one glint
+    ex, ey = 2, -6
+    lid = nv_ellipse(ex + 0.5, ey + 0.5, 3.0, 2.6)
+    for (x, y) in lid:
+        if (x, y) in body:
+            px.put(x, y, rmp[4] if y < ey else rmp[2])
+    shut = 1 if frame == 1 else 0  # it squints a little as it breathes
+    for (x, y) in nv_ellipse(ex + 0.5, ey + 0.5 + shut * 0.5, 2.1, 1.6 - shut * 0.5):
+        px.put(x, y, NV_OCTO_EYE[1] if y > ey else NV_OCTO_EYE[0])
+    for x in range(ex - 1, ex + 2):
+        px.put(x, ey, NV_OCTO_EYE[2])
+    if not shut:
+        px.put(ex - 1, ey - 1, NV_OCTO_EYE[3])
+    # the far eye, just a bump and a sliver of gold behind the mantle's curve
+    px.put(-3, -7, rmp[4])
+    px.put(-4, -7, NV_OCTO_EYE[1])
+    px.put(-3, -6, NV_OCTO_EYE[2])
+    # the siphon, a little tube low on the far side
+    for (x, y) in nv_stroke([(-6.0, -3.0), (-8.0, -2.4)], 1.8, 1.4):
+        if not px.has(x, y):
+            px.put(x, y, rmp[2])
+    return px
+
+
+# ---- the manta's shadow: seen from below as it glides over, a broad diamond with its wings swept back, the
+# cephalic fins curled forward and a long whip tail. One soft dark tone; soften() blurs it like the far layer.
+NV_MANTA_TIP = ((-8, 23), (-9.5, 20.5), (-11, 16.5), (-9.5, 20.5))  # wingtip (x, half-span) through the beat
+NV_MANTA_SHADOW = hx("071330", 168)
+
+
+def nv_manta_mask(frame):
+    tx, ty = NV_MANTA_TIP[frame]
+    curl = (0.0, 1.5, 3.0, 1.5)[frame]
+    mask = set()
+    for sgn in (-1, 1):
+        lead = nv_curve((11.0, 3.0 * sgn), (7.5, 12 * sgn), (0 - curl, (ty - 1) * sgn), (tx, ty * sgn), 24)
+        trail = nv_curve((tx, ty * sgn), (-6.5 - curl * 0.3, (ty - 8) * sgn), (-6.5, 6 * sgn), (-11, 1.8 * sgn), 24)
+        outline = lead + trail + [(-12, 0), (11.5, 0)]
+        xs = [p[0] for p in outline]
+        ys = [p[1] for p in outline]
+        for y in range(math.floor(min(ys)) - 1, math.ceil(max(ys)) + 2):
+            for x in range(math.floor(min(xs)) - 1, math.ceil(max(xs)) + 2):
+                cx, cy = x + 0.5, y + 0.5
+                inside = False
+                for (ax, ay), (bx, by) in zip(outline, outline[1:] + outline[:1]):
+                    if (ay > cy) != (by > cy) and cx < ax + (cy - ay) * (bx - ax) / (by - ay):
+                        inside = not inside
+                if inside:
+                    mask.add((x, y))
+    mask |= nv_ellipse(4, 0, 9.5, 3.4)  # the body down the middle
+    for sgn in (-1, 1):  # cephalic fins, curled forward
+        mask |= nv_stroke(nv_curve((10.5, 2.0 * sgn), (13.5, 2.4 * sgn), (15.5, 3.4 * sgn), (14.5, 4.6 * sgn), 8), 1.8, 1.0)
+    wav = (0.0, 0.6, 0.0, -0.6)[frame]
+    mask |= nv_stroke([(-12 - i, wav * math.sin(i * 0.35)) for i in range(0, 22)], 1.4, 1.0)
+    return mask
+
+
+def manta_art(frame):
+    """The shadow: one dark tone, its edge a dithered step lighter, softened (a far thing, out of focus)."""
+    mask = nv_manta_mask(frame)
+    px = Px()
+    for (x, y) in mask:
+        edge = sum((x + a, y + b) not in mask for a, b in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+        a = NV_MANTA_SHADOW[3] if not edge else round(NV_MANTA_SHADOW[3] * (0.62 if (x + y) % 2 else 0.45))
+        px.put(x, y, NV_MANTA_SHADOW[:3] + (a,))
+    return soften(px, hx("1f78b8"), 0.55)
+
+
+def manta_portrait():
+    """For the journal: the manta as it is, from below: a white belly with dark spots, charcoal wing margins."""
+    mask = nv_manta_mask(0)
+    back = ramp("0e121c", "1c2230", "2e3646", "444e60")
+    belly = ramp("1c2230", "6a7488", "b8c2d0", "e4eaf0", "fafcff")
+    d = nv_dist(mask)
+    px = nv_pillow(mask, belly, R=5.0, bias=lambda x, y: 0.1)
+    for (x, y), v in d.items():
+        rim = v < (2.6 if abs(y) > 6 else 1.6)
+        if rim and px.get(x, y) not in (belly[0],):
+            px.put(x, y, back[1 + shade_index(0.5 - 0.3 * (y / 20), 3, x, y)])
+    for k in range(5):  # gill slits, two short rows down the belly
+        for sgn in (-1, 1):
+            px.put(1 - k, sgn * 2, belly[2])
+    return px
+
+
+# ---- the hermit crab: blue legs banded orange, an orange-stalked pair of eyes, a cream and brown turban shell
+R_NV_TURBAN = ramp("3a2016", "6a4028", "9e6a40", "cc9a62", "ecc88e", "fff0cc")
+R_NV_LEG = ramp("0e1a3a", "1e3a7a", "2e62b8", "4a8ae0", "8ec0ff")
+R_NV_BAND = ramp("6a1e10", "c04a1c", "f08a34", "ffc070")
+NV_EYE = hx("120a12")
+
+
+def nv_leg(px, pts, frame_band=True):
+    """A jointed leg as a 1-px polyline: blue, an orange band at each joint, a dark tip."""
+    line_px(px, pts, R_NV_LEG[2])
+    for (x, y) in pts[1:-1]:
+        px.put(math.floor(x), math.floor(y), R_NV_BAND[2])
+    tx, ty = pts[-1]
+    px.put(math.floor(tx), math.floor(ty), R_NV_LEG[0])
+
+
+def nv_eyestalk(px, x, y0, y1, glint=True):
+    for y in range(math.floor(y1) + 1, math.floor(y0) + 1):
+        px.put(x, y, R_NV_BAND[2] if (y - math.floor(y1)) % 3 else R_NV_BAND[1])
+    px.put(x, math.floor(y1), NV_EYE)
+    px.put(x + 1, math.floor(y1), NV_EYE)
+    if glint:
+        px.put(x, math.floor(y1) - 1, hx("ffffff"))
+
+
+def nv_claw(px, cx, cy, s=1.0, open_=0.0):
+    m = nv_ellipse(cx, cy, 2.3 * s, 1.7 * s)
+    claw = nv_pillow(m, R_NV_LEG, R=1.5)
+    nv_paste(px, claw)
+    tip = math.floor(cx + 2.2 * s)
+    px.put(tip, math.floor(cy) - (1 if open_ else 0), R_NV_BAND[2])
+    px.put(tip + 1, math.floor(cy) - (1 if open_ else 0), R_NV_BAND[3])
+    px.put(tip, math.floor(cy) + 1, R_NV_BAND[1])
+    for (x, y) in m:  # white-tipped granules
+        if (x * 3 + y * 5) % 7 == 0 and (x, y - 1) in m:
+            px.put(x, y, R_NV_LEG[4])
+
+
+def hermit_walk(frame):
+    """Walking right on the sand. Origin = bottom-centre."""
+    px = Px()
+    bob = -1 if frame == 1 else 0
+    # far legs, in shadow
+    for j, lx in enumerate((2.5, 5.0)):
+        sw = 1 if (j + frame) % 2 else -1
+        line_px(px, [(lx, -3 + bob), (lx + 2.0, -4.5 + bob), (lx + 3.5 + sw, 0.5)], R_NV_LEG[1])
+    # the shell: a low turban, a whorl and a little spire on top, brown spiral bands round it
+    shell = nv_ellipse(-2.8, -4.6 + bob, 5.8, 4.4) | nv_ellipse(-3.6, -8.4 + bob, 3.9, 2.4) | nv_ellipse(-4.2, -10.4 + bob, 1.9, 1.2)
+    sp = nv_pillow(shell, R_NV_TURBAN, R=3.0, bias=lambda x, y: 0.12)
+    for (x, y) in shell:  # brown spiral bands, sloping a little with the whorls (not over the outline)
+        c = sp.get(x, y)
+        if c in (R_NV_TURBAN[0], R_NV_TURBAN[1]) or y - bob > -2:
+            continue
+        if math.floor(y - bob + (x + 3) * 0.2) % 3 == 0:
+            sp.put(x, y, R_NV_TURBAN[2] if x < -4 else R_NV_TURBAN[1])
+    nv_paste(px, sp)
+    # the aperture, low on the front, the crab coming out of it
+    for (x, y) in nv_ellipse(2.4, -3.0 + bob, 1.8, 2.4):
+        px.put(x, y, hx("1e100c"))
+    nv_paste(px, nv_pillow(nv_ellipse(3.8, -3.8 + bob, 2.4, 1.9), R_NV_LEG, R=1.6))
+    # near legs: blue, orange at the knee, a dark tip
+    for j, lx in enumerate((3.0, 5.5)):
+        sw = 1 if (j + frame + 1) % 2 else -1
+        nv_leg(px, [(lx, -2.5 + bob), (lx + 2.5, -4.2 + bob), (lx + 4.0 + sw, 0.5)])
+    # eyes on stalks, antennae swept forward
+    nv_eyestalk(px, 4, -5 + bob, -9 + bob)
+    nv_eyestalk(px, 6, -5 + bob, -8 + bob, glint=False)
+    line_px(px, [(6.5, -6 + bob), (9.5, -9 + bob), (12, -9.5 + bob)], R_NV_BAND[1])
+    # claws: the small one behind, the big one in front and low
+    nv_claw(px, 7.8, -5.0 + bob, 0.7)
+    nv_claw(px, 7.4, -2.4 + bob, 1.0, open_=frame)
+    contact_shadow(px, -8, 10)
+    return px
+
+
+def hermit_peek(frame):
+    """Peeking out of the helmet's front port. Origin = the port's centre (dark interior radius ~3.8)."""
+    px = Px()
+    if frame == 2:  # just the eyes, low in the port
+        for (x, y) in nv_ellipse(0.5, 3.6, 2.6, 1.4):
+            px.put(x, y, R_NV_LEG[1] if y >= 3 else R_NV_LEG[2])
+        nv_eyestalk(px, -1, 3, 0)
+        nv_eyestalk(px, 1, 3, 0.5, glint=False)
+        return px
+    # out: eyes up, an antenna poking out, a claw over the port's lower rim
+    for (x, y) in nv_ellipse(0.5, 2.6, 3.0, 1.8):
+        px.put(x, y, R_NV_LEG[2] if y < 2 else R_NV_LEG[1])
+    nv_eyestalk(px, -1, 2, -2.5)
+    nv_eyestalk(px, 1, 2, -2, glint=False)
+    line_px(px, [(2, 0), (4.5, -3.5), (7.5, -5)], R_NV_BAND[1])
+    nv_claw(px, 2.2, 4.6, 1.0, open_=1)
+    return px
+
+
+def hermit_art(frame):
+    return hermit_walk(frame) if frame < 2 else hermit_peek(frame)
+
+
+# ---- placing them (called from the scene, in marked lines). Night visitors only come at night, so the octopus
+# and the hermit crab are drawn over the Night layer (WorldMid, behind the jellies), each with a lighter night tint
+# of its own like the diver's, or the dark would swallow them. The octopus's rock can't be in front of it there,
+# so each of its spots clips it along that rock's top edge instead. The manta is a shadow: it stays in the Far
+# group, under the Night layer, and reads as a darker shape against the night water.
+NV_OCTO_CLIP = 2   # rows of the octopus drawn below its peek point (the clip trims them along the rock's edge)
+NV_OCTO_RISE = 15  # how far below its peek point it starts (and slips back to): all of it under the edge
+NV_OCTO_HALF = 6   # the half width of rock it needs under its peek point
+NV_OCTO_EDGE = 18  # how far either side the clip follows the rock's edge
+NV_NIGHT = hx("08103a", 120)  # their night tint: lighter than the Night layer (they only come at night)
+NV_BOXES = {}  # contract.visitors entries: each node's art extent around its origin (logical)
+
+
+def nv_clip(px, y_max):
+    out = Px()
+    out.d = {p: c for p, c in px.d.items() if p[1] <= y_max}
+    return out
+
+
+def nv_octo_spots(reef):
+    """Where the octopus can peek over a reef rock (logical): on each big rock, the highest point of its top
+    edge with solid rock under it, NV_OCTO_HALF either side and NV_OCTO_RISE + NV_OCTO_CLIP down, so it can
+    rise from (and sink back to) out of sight. Only rock counts (not the corals growing on it).
+    (x, y, tier, edge): edge = the rock's top (dy from y) for dx in -NV_OCTO_EDGE..NV_OCTO_EDGE."""
+    rock = set(R_ROCK)
+    solid = lambda x, y: (c := reef.get(x, y)) is not None and c in rock
+
+    def top(x):
+        ys = [y for y in range(280, 352) if solid(x, y) and solid(x, y + 1) and solid(x, y + 2)]
+        return min(ys) if ys else None
+
+    spots = []
+    for x_lo, x_hi in ((22, 60), (190, 224), (324, 356)):
+        best = None
+        for x in range(x_lo, x_hi + 1):
+            tops = [top(x + dx) for dx in range(-NV_OCTO_HALF, NV_OCTO_HALF + 1)]
+            if None in tops:
+                continue
+            y = max(tops) + 1  # every column's rock reaches up to here
+            if all(reef.has(x + dx, y + dy) for dx in range(-NV_OCTO_HALF, NV_OCTO_HALF + 1)
+                   for dy in range(0, NV_OCTO_RISE + NV_OCTO_CLIP + 1)):
+                if best is None or y < best[1]:
+                    best = (x, y)
+        if best:
+            x, y = best
+            edge, last = [], 0
+            for dx in range(-NV_OCTO_EDGE, NV_OCTO_EDGE + 1):
+                t = top(x + dx)
+                last = t - y if t is not None else last  # past the rock's end: keep its last height
+                edge.append(last)
+            spots.append((x, y, 0 if x < TIER_W[0] - GLASS_L else 1 if x < TIER_W[1] - GLASS_L else 2, edge))
+    return spots
+
+
+def nv_frames(key, title, art, frames):
+    return [image(f"{title}{f}", lambda f=f: art(f), opacity=1 if f == 0 else 0, node_name=f"{title}F{f}",
+                  binds=[bind(prop(f"{key}F{f}", default=1 if f == 0 else 0), 18)]) for f in frames]
+
+
+def nv_tint(key, title, art, frames):
+    """The night tint: the frames as dark silhouettes, faded in with nightShade."""
+    return node(f"{title}Night", list(reversed([
+        image(f"{title}Night{f}", lambda f=f: silhouette(art(f), NV_NIGHT), opacity=1 if f == 0 else 0,
+              binds=[bind(prop(f"{key}F{f}", default=1 if f == 0 else 0), 18)]) for f in frames])),
+        opacity=0, binds=[bind(prop("nightShade"), 18)])
+
+
+def nv_box(names):
+    bx = [sprites[n] for n in names]
+    return (min(b[1] for b in bx), min(b[2] for b in bx), max(b[3] for b in bx) + 1, max(b[4] for b in bx) + 1)
+
+
+def nv_octo_mid(spots):
+    """WorldMid: one node per spot (octoS{i}, one-hot), at the spot, clipped above its rock's edge. Inside, the
+    octopus rises and sinks (octoDY, ≥ 0 = that far down), faces octoSX, in three colours (octoC1 camouflage and
+    octoC2 pale fade in over the red), with its night tint on top."""
+    art = lambda pal: (lambda f: nv_clip(octo_art(f, pal), NV_OCTO_CLIP))
+    out = []
+    for i, (x, y, _, edge) in enumerate(spots):
+        base = nv_frames("octo", "Octo", art("red"), range(4))
+        camo = node("OctoCamo", list(reversed(nv_frames("octo", "OctoCamo", art("camo"), range(4)))), opacity=0, binds=[bind(prop("octoC1"), 18)])
+        pale = node("OctoPale", list(reversed(nv_frames("octo", "OctoPale", art("pale"), range(4)))), opacity=0, binds=[bind(prop("octoC2"), 18)])
+        tint = nv_tint("octo", "Octo", art("red"), range(4))
+        octo = node("Octo", [tint, pale, camo] + list(reversed(base)), y=NV_OCTO_RISE * P,
+                    binds=[bind(prop("octoDY", default=NV_OCTO_RISE * P), 14), bind(prop("octoSX", default=1), 16)])
+        # the clip: everything above the rock's top edge, NV_OCTO_EDGE either side (a path with no fill)
+        pts = [(dx * P, e * P) for dx, e in zip(range(-NV_OCTO_EDGE, NV_OCTO_EDGE + 1), edge)]
+        pts = [pts[0]] + [q for a, b in zip(pts, pts[1:]) for q in ((b[0], a[1]), b)]  # step along the pixel edge
+        pts += [(NV_OCTO_EDGE * P, -45 * P), (-NV_OCTO_EDGE * P, -45 * P)]
+        cid = nid()
+        verts = "".join(f'<StraightVertex x="{px_}" y="{py_}"/>' for px_, py_ in pts)
+        clip = f'<Shape name="OctoRock{i}" id="{cid}"><PointsPath isClosed="true" name="p">{verts}</PointsPath></Shape>'
+        inner = node("OctoClipped", [f'<ClippingShape sourceId="{cid}" name="Clip"/>', octo])
+        out.append(node(f"OctoSpot{i}", [inner, clip], x=x * P, y=y * P, opacity=1 if i == 0 else 0,
+                        binds=[bind(prop(f"octoS{i}", default=1 if i == 0 else 0), 18)]))
+    NV_BOXES["octo"] = nv_box([f"Octo{f}" for f in range(4)])
+    return node("Octopus", list(reversed(out)), opacity=0, binds=[bind(prop("octoOn"), 18)])
+
+
+def nv_manta_node():
+    """In the Far parallax group: the manta's shadow (mantaX is a far-layer x: world x = mantaX - camX * (1 - Far))."""
+    frames = nv_frames("manta", "Manta", manta_art, range(4))
+    NV_BOXES["manta"] = nv_box([f"Manta{f}" for f in range(4)])
+    return node("Manta", list(reversed(frames)), x=120 * P, y=40 * P, opacity=0,
+                binds=[bind(prop("mantaOn"), 18), bind(prop("mantaX", default=120 * P), 13), bind(prop("mantaY", default=40 * P), 14),
+                       bind(prop("mantaSX", default=1), 16)])
+
+
+def nv_hermit_node():
+    """WorldMid: the hermit crab, walking (frames 0-1, origin on the sand) or peeking out of the helmet's port
+    (frames 2-3, origin = the port's centre), with its night tint."""
+    frames = nv_frames("hermit", "Hermit", hermit_art, range(4))
+    NV_BOXES["hermit"] = nv_box(["Hermit0", "Hermit1"])
+    NV_BOXES["hermitPeek"] = nv_box(["Hermit2", "Hermit3"])
+    return node("Hermit", [nv_tint("hermit", "Hermit", hermit_art, range(4))] + list(reversed(frames)), x=120 * P, y=WATER_BOT * P, opacity=0,
+                binds=[bind(prop("hermitOn"), 18), bind(prop("hermitX", default=120 * P), 13), bind(prop("hermitY", default=WATER_BOT * P), 14),
+                       bind(prop("hermitSX", default=1), 16)])
+
+
+def nv_contract(c, spots):
+    c["visitors"].update({k: {"x0": b[0] * P, "y0": b[1] * P, "x1": b[2] * P, "y1": b[3] * P} for k, b in NV_BOXES.items()})
+    c["octoSpots"] = [{"x": x * P, "y": y * P, "tier": t, "rise": NV_OCTO_RISE * P} for x, y, t, _ in spots]
+    c["hermitHome"] = {"decor": 2, "dx": -2 * P, "dy": -11 * P}  # the dive helmet's front port, from its base point
+    c["mantaBand"] = {"y0": 26 * P, "y1": 62 * P}  # the upper water it glides through (far-layer y)
+    c["visitorOrigin"].update({
+        "octo": "the point on a reef rock's top edge it peeks over (octoSpots, octoS{i}); octoDY = how far below it",
+        "manta": "the middle of its body, in far-layer x (parallax Far)",
+        "hermit": "walking (frames 0-1): bottom-centre on the sand; peeking (2-3): the helmet port's centre (hermitPeek box)"})
+
+
+def nv_portraits():
+    """The journal's visitor log: each visitor kind's portrait (key v<kind>) and a dark silhouette (v<kind>s)."""
+    arts = {"turtle": turtle_art(0), "seahorse": seahorse_art(0), "diver": diver_art(0), "bat": hw_bat(2),
+            "octopus": octo_art(0), "manta": manta_portrait(), "hermit": hermit_walk(0)}
+    out = {}
+    for k, px in arts.items():
+        out[f"v{k}"] = data_url(px)
+        sil = Px()
+        for (x, y), c in px.d.items():
+            if c[3] >= 40:
+                sil.put(x, y, hx("141a33", 255 if c[3] >= 110 else round(70 + c[3])))
+        out[f"v{k}s"] = data_url(sil)
+    return out
+# ---- end night visitors ----
+
+
 # ---------------------------------------------------------------- v5: walls, the medium stretch, the cave
 
 def side_wall_art(right):
@@ -7081,6 +7591,7 @@ for school, (y0, flip, dur, n, x_from, x_to, phase) in enumerate([(160, False, 3
     ])
     frame_cycle(f"School{school}Tail", f_ids, [0, 1], 14 + school * 3)
 
+far_kids.append(nv_manta_node())  # ---- night visitors ---- the manta glides through the far upper water
 world.append(depth("Far", far_kids))
 
 world.append(theme_rects("FogFar", lambda t: [(0, hx(THEME_FOG_FAR[t][0], 0)), (0.55, hx(THEME_FOG_FAR[t][1], 0)),
@@ -7306,6 +7817,7 @@ urchin(reef, 322, 345, 2)
 starfish(reef, 270, 346, 3)
 shell(reef, 282, 345)
 world.append(image("CaveArch", ARCH_PX))
+NV_SPOTS = nv_octo_spots(reef)  # ---- night visitors ---- the reef rocks the octopus can peek over
 world.append(image("Reef", reef))
 
 # v5 large stretch: the arch was drawn before the reef; now its floor (a boulder) and the anemones
@@ -7559,6 +8071,8 @@ mid.append(node("CaveGlow", list(reversed(cave_halos + [image("CaveRimGlow", rim
                 binds=[bind(prop("nightShade"), 18, NIGHT_GLOW_CONV)]))
 # ---- Halloween event ---- the pumpkins' candles and the brew's glow, over the Night layer
 mid.append(hw_glow_node())
+mid.append(nv_octo_mid(NV_SPOTS))  # ---- night visitors ---- over the Night layer, behind the jellies
+mid.append(nv_hermit_node())  # ---- night visitors ----
 
 FOOD_N = 16  # v8: the pool grows for sprinkling
 FOOD_KINDS = ["Flakes", "BrineShrimp", "Plankton"]
@@ -8744,6 +9258,7 @@ contract = {
 hw_contract(contract)  # ---- Halloween event ----
 keep_contract(contract)  # ---- keepsakes ----
 store_contract(contract)  # ---- put away ----
+nv_contract(contract, NV_SPOTS)  # ---- night visitors ----
 # ---- asset groups: each group's PNGs packed into one file (base64 in JSON, a type every host serves and
 # compresses); the contract lists them with a content hash the host adds to the URL so a new build busts caches
 SPRITE_DIR = ROOT / "public" / "sprites"
@@ -8804,6 +9319,7 @@ for k in range(len(SPECIES)):
     journal_art[f"{k}s"] = data_url(sil)
 for m, i in enumerate(KEEP_ITEM_IDS):  # ---- keepsakes ---- the journal's keepsakes page: milestone m's reward
     journal_art[f"keep{m}"] = data_url(keep_icon(i))
+journal_art.update(nv_portraits())  # ---- night visitors ---- the visitor log
 (ROOT / "src" / "journal-art.json").write_text(json.dumps(journal_art, indent=1))
 
 

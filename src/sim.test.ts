@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { openSandBounds, sandUnder, snailBounds, walkerBounds, helperWorld } from "./helpers";
 import { FLING_TAU } from "./camera";
-import { DIVER, VISITOR_PROP, boxFacing, planVisit, visitsDuring } from "./visitors";
+import { DIVER, VISITOR_PROP, boxFacing, nightVisitor, planVisit, visitsDuring } from "./visitors";
 import { PULSE_OVERSHOOT, PULSE_PEAK, PULSE_REST, PULSE_SWELL, SWELL_AT, TENT_WAVES_PER_PULSE, TILT, newTilt, pulseFrame, stepTilt, tiltTarget } from "./motion";
 import { SPOT_R, murkOf } from "./dirt";
 import { DECOR_N, OPEN_SAND, OPEN_SANDS, TIERS, glassRightOf, openSandsOf, SNAIL_FLOOR, BABY_SECONDS, CRAB_SIZE, GLIDE_TRAIL, PULSE_TRAIL, SHRIMP_SIZE, SNAIL_SIZE, TRAIL_FAN, TRAIL_L, TRAIL_N, TRAIL_NEUTRAL, TRAIL_R, TRAIL_STREAM, decorY } from "./species";
@@ -2688,7 +2688,7 @@ describe("v7: visitors", () => {
       }
     }
     expect(starts.length).toBeGreaterThanOrEqual(6);
-    expect([...kinds].sort()).toEqual(VISITORS.filter((_, k) => visitsDuring(k, null)).sort()); // no event: no bat
+    expect([...kinds].sort()).toEqual(VISITORS.filter((_, k) => visitsDuring(k, null) && !nightVisitor(k)).sort()); // no event: no bat; by day: no night visitors
   });
 
   it("never arrives while the shop is open; a visit holds still under the shop", () => {

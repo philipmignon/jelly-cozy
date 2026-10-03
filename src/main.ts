@@ -7,6 +7,8 @@ import { attachKeyboard, type ButtonName, type Keyboard } from "./keyboard";
 import { readReducedMotion, writeReducedMotion } from "./a11y";
 import { createSettings } from "./hud";
 import { createJournal } from "./journal";
+import { openAlbum, shrink } from "./album";
+import { createAlbumPage } from "./albumpage";
 import { createKeepNote } from "./keepnote";
 import { connectCloud, savedAt, type CloudSync } from "./cloud";
 import { SHELL_DOLLARS, connectFriends, giftLines, liveId, type Friends, type Gift } from "./friends";
@@ -80,6 +82,8 @@ import {
   toSave,
   toggleLamp,
   view,
+  visitorLog,
+  THEME_NAMES,
   type BuyResult,
   type State,
 } from "./sim";
@@ -250,7 +254,9 @@ async function main() {
   });
   const audio = createTankAudio();
   const overlay = createOverlay();
-  const book = createJournal(() => journal(state), () => keepsakes(state));
+  // v14: the journal's Visitors page (the visitor log) and the photo Album (IndexedDB; null where storage is blocked)
+  const albumPage = createAlbumPage(openAlbum, savePng);
+  const book = createJournal(() => journal(state), () => keepsakes(state), { visitors: () => visitorLog(state), album: albumPage });
   // v13: keepsake notes wait their turn: after the away note, never over a tip or another note.
   // Milestones an older save already reached on load arrive as one summary (one entry in the queue).
   const keepNote = createKeepNote(() => book.open("keepsakes"));
@@ -744,6 +750,17 @@ async function main() {
       const f = () => (pacer.drawn >= until ? resolve() : requestAnimationFrame(f));
       requestAnimationFrame(f);
     });
+  /** v14: keep a half-size copy in the album, with the date, the theme and the jellies in shot (or in the tank). */
+  const keepPhoto = async (shot: HTMLCanvasElement, now: number) => {
+    const album = await openAlbum();
+    if (!album) return;
+    const img = await shrink(shot);
+    if (!img) return;
+    const { x0, x1 } = viewSpan(state);
+    const all = state.slots.flatMap((j) => (j ? [j] : []));
+    const inShot = all.filter((j) => j.x > x0 && j.x < x1);
+    await album.add({ at: now, theme: THEME_NAMES[state.theme] ?? THEME_NAMES[0], names: (inShot.length ? inShot : all).map((j) => j.name) }, img);
+  };
   const takePhoto = async () => {
     if (photoBusy) return;
     photoBusy = true;
@@ -766,8 +783,10 @@ async function main() {
       flash();
       audio.play("shutter");
       buzz(18);
+      const kept = READ_ONLY ? null : keepPhoto(shot, now); // v14: into the album too (not the demo's, not a friend's tank)
       const blob = await toPng(shot);
       const saved = blob ? await savePng(blob, photoFilename(now)) : "failed";
+      await kept;
       if (saved === "failed") showNote("The photo couldn't be saved here.");
     } finally {
       photoHide = false;
@@ -787,7 +806,7 @@ async function main() {
     client,
     // v13: a keepsake note, and the "updated" chip while focus is on it
     busy: () =>
-      overlay.busy || overlay.cardSlot !== null || book.isOpen || sharePanel.isOpen || backupPanel.isOpen || !!reqNote?.isOpen || settingsUi.isOpen || keepNote.isOpen || !!updateChip()?.contains(document.activeElement),
+      overlay.busy || overlay.cardSlot !== null || book.isOpen || albumPage.viewing || sharePanel.isOpen || backupPanel.isOpen || !!reqNote?.isOpen || settingsUi.isOpen || keepNote.isOpen || !!updateChip()?.contains(document.activeElement),
     audio,
     press: (name) => press[name](),
     tapWorld,

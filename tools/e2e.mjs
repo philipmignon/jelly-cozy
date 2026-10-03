@@ -567,7 +567,7 @@ async function main() {
     const errors = [];
     page.on("pageerror", (e) => errors.push(String(e)));
     await page.goto(`http://localhost:${PORT}/?fast=1`);
-    await page.evaluate(() => localStorage.clear());
+    await page.evaluate(() => { localStorage.clear(); indexedDB.deleteDatabase("jellytank-album"); }); // v14: and the photo album
     await page.reload();
     await page.waitForFunction(() => window.__tank && window.__tank.t > 0.5, { timeout: 15000 });
 
@@ -990,6 +990,59 @@ async function main() {
       !!photo && photo.type === "image/png" && photo.h > photo.w && photo.w > 300 && photo.colours > 200 && photo.lit > 200,
       JSON.stringify(photo),
     );
+
+    // v14: the photo is kept in the album too: the journal's Album page (the last page) shows one thumbnail dated
+    // today; it opens larger and closes; deleting asks twice
+    await page.click(".jt-gear");
+    await page.click(".jt-menu-journal");
+    await until(page, () => !document.querySelector(".jt-book").hidden, null, 5000);
+    await page.evaluate(() => {
+      for (let i = 0; i < 20 && document.querySelector(".jt-album-page").hidden; i++) document.querySelector(".jt-book .prev").click();
+    });
+    const today = await page.evaluate(() => {
+      const d = new Date();
+      return `${d.getDate()} ${["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"][d.getMonth()]} ${d.getFullYear()}`;
+    });
+    const albumOne = await until(page, () => document.querySelectorAll(".jt-album-thumb img").length === 1 && document.querySelector(".jt-album-thumb img").complete
+      && document.querySelector(".jt-album-thumb img").naturalWidth > 0, null, 8000);
+    const thumb = await page.evaluate(() => ({ n: document.querySelectorAll(".jt-album-thumb").length, date: document.querySelector(".jt-album-date")?.textContent, count: document.querySelector(".jt-book-count").textContent }));
+    check("album: the photo is kept, one thumbnail with today's date", albumOne && thumb.n === 1 && thumb.date === today && /1 of 12/.test(thumb.count), JSON.stringify({ ...thumb, today }));
+    await shot("album");
+    await page.click(".jt-album-thumb");
+    const viewing = await until(page, () => !document.querySelector(".jt-album-view").hidden && document.querySelector(".jt-album-big").naturalWidth > 0, null, 5000);
+    const cap = await page.evaluate(() => ({
+      text: document.querySelector(".jt-album-cap").textContent,
+      theme: ["Reef", "Kelp Forest", "Coral Garden", "Arctic", "Moonlit Lagoon"][window.__tank.theme],
+      names: window.__tank.slots.filter(Boolean).map((j) => j.name),
+    }));
+    check("album: a thumbnail opens larger with its caption (date, theme, names)",
+      viewing && cap.text.startsWith(today) && cap.text.includes(` · ${cap.theme} · `) && cap.names.some((n) => cap.text.includes(n)), JSON.stringify(cap));
+    await shot("album-view");
+    await page.keyboard.press("Escape");
+    const closedView = await until(page, () => document.querySelector(".jt-album-view").hidden, null, 3000);
+    const viewAfter = await page.evaluate(() => ({ book: !document.querySelector(".jt-book").hidden, focus: document.activeElement?.classList.contains("jt-album-thumb") }));
+    check("album: Escape closes the photo, not the journal, and focus goes back to its thumbnail", closedView && viewAfter.book && viewAfter.focus, JSON.stringify(viewAfter));
+    await page.click(".jt-album-thumb");
+    await until(page, () => !document.querySelector(".jt-album-view").hidden, null, 3000);
+    await page.click(".jt-album-del");
+    const asked = await page.evaluate(() => ({ open: !document.querySelector(".jt-album-view").hidden, label: document.querySelector(".jt-album-del").textContent, n: document.querySelectorAll(".jt-album-thumb").length }));
+    check("album: delete asks twice (the first tap only arms it)", asked.open && /again/i.test(asked.label) && asked.n === 1, JSON.stringify(asked));
+    await page.click(".jt-album-del");
+    const gone = await until(page, () => document.querySelector(".jt-album-view").hidden && document.querySelectorAll(".jt-album-thumb").length === 0 && /0 of 12/.test(document.querySelector(".jt-book-count").textContent), null, 5000);
+    check("album: the second tap deletes it", gone);
+
+    // v14: the visitor log: a night visitor's sighting shows on the Visitors page (just before the Album)
+    await page.evaluate(() => { window.__tank.visitorsSeen.octopus = { n: 2, first: Date.now() }; });
+    await page.click(".jt-book .prev");
+    const vrow = await page.evaluate(() => {
+      const r = document.querySelector('.jt-vlog-row[data-kind="octopus"]');
+      const unmet = document.querySelector('.jt-vlog-row[data-kind="manta"]');
+      return { shown: !document.querySelector(".jt-vlog-page").hidden, met: r?.classList.contains("met"), text: r?.textContent, unmet: unmet?.textContent, rows: document.querySelectorAll(".jt-vlog-row").length };
+    });
+    check("visitor log: the octopus row shows times seen and first seen; unmet ones are ???", vrow.shown && vrow.met && /octopus/i.test(vrow.text) && /seen 2 times/i.test(vrow.text) && vrow.text.includes(today) && /\?\?\?/.test(vrow.unmet) && vrow.rows === 7, JSON.stringify(vrow));
+    await shot("visitors");
+    await page.click(".jt-book-x");
+
     await page.click(".jt-gear");
     await page.click(".jt-menu-share");
     await sleep(150);

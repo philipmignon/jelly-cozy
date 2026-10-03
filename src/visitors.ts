@@ -9,20 +9,44 @@
  * Seasonal visitors (VISITOR_SEASON) only come while their event is on: the Halloween bat flutters in,
  * hangs upside down from the hood's front lip (origin = its feet's grip, y = contract.batHangY), stretches
  * now and then, and flutters off. Frames: 0 hanging wrapped, 1 hanging stretching, 2-3 flying.
+ *
+ * v14 night visitors (VISITOR_NIGHT) only come while night is showing, now and then in place of a day visitor
+ * (NIGHT_VISIT_CHANCE), and leave when the light comes on:
+ *   octopus  peeks over a reef rock (contract.octoSpots; drawn over the Night layer, clipped along the rock's
+ *            edge), shifts between red and rock-grey camouflage, reaches an arm toward a jelly (a quick tip flick,
+ *            not with reduced motion), flushes pale when greeted, and slips back down. Origin = the spot on the
+ *            rock's edge; `dy` = how far below it. Frames: 0 rest, 1 breathe, 2 reach, 3 reach flicked.
+ *   manta    a big soft shadow gliding through the far upper water, in the Far parallax group: `gx` is its
+ *            far-layer x, and `x` (world, for taps) follows the camera: x = gx - camX * (1 - parallax.Far).
+ *            Frames 0-3: a slow wing beat. Greeted, it eases a little faster (not with reduced motion).
+ *   hermit   a hermit crab. With the dive helmet owned and in view it walks over, slips inside and peeks out of
+ *            the front port (contract.hermitHome); otherwise it wanders along the sand. Frames 0-1 walk (origin
+ *            bottom-centre on the sand), 2-3 peek (origin the port's centre: the hermitPeek box).
  */
 import type { SeasonId } from "./season";
 import { K, P, clamp, num } from "./species";
 
-export const VISITORS = ["turtle", "seahorse", "diver", "bat"] as const;
+export const VISITORS = ["turtle", "seahorse", "diver", "bat", "octopus", "manta", "hermit"] as const;
 export type VisitorKind = (typeof VISITORS)[number];
 export const TURTLE = 0;
 export const SEAHORSE = 1;
 export const DIVER = 2;
 export const BAT = 3;
-/** The view-model prefix for each visitor: `{prefix}On X Y SX F0..F3`. */
-export const VISITOR_PROP = ["turtle", "horse", "diver", "bat"] as const;
+export const OCTOPUS = 4;
+export const MANTA = 5;
+export const HERMIT = 6;
+/** The view-model prefix for each visitor: `{prefix}On X Y SX F0..F3` (v14: see writeVisitors in sim.ts for the octopus). */
+export const VISITOR_PROP = ["turtle", "horse", "diver", "bat", "octo", "manta", "hermit"] as const;
 /** The event a visitor belongs to (it only comes while that is on); null = all year. */
-export const VISITOR_SEASON: readonly (SeasonId | null)[] = [null, null, null, "halloween"];
+export const VISITOR_SEASON: readonly (SeasonId | null)[] = [null, null, null, "halloween", null, null, null];
+/** v14: night visitors only come while night is showing. */
+export const VISITOR_NIGHT: readonly boolean[] = [false, false, false, false, true, true, true];
+/** v14: what to call each visitor out loud and in the visitor log. */
+export const VISITOR_NAMES = ["sea turtle", "seahorse", "mini diver", "bat", "octopus", "manta ray", "hermit crab"] as const;
+/** v14: at night, the chance that the next visit is a night visitor's. */
+export const NIGHT_VISIT_CHANCE = 0.35;
+/** v14: is visitor `k` one of the night ones? */
+export const nightVisitor = (k: number) => VISITOR_NIGHT[k] === true;
 /** Can visitor `k` come while `event` is on? */
 export const visitsDuring = (k: number, event: SeasonId | null) => {
   const s = VISITOR_SEASON[k] ?? null;
@@ -66,6 +90,9 @@ const BOX_FALLBACK: Box[] = [
   { x0: -9, y0: -96, x1: 42, y1: 12 },
   { x0: -39, y0: -90, x1: 51, y1: 51 },
   { x0: -57, y0: 0, x1: 57, y1: 81 },
+  { x0: -45, y0: -63, x1: 72, y1: 9 },
+  { x0: -102, y0: -69, x1: 48, y1: 69 },
+  { x0: -27, y0: -39, x1: 39, y1: 6 },
 ];
 /** Each visitor's art extent around its origin at sx +1 (contract.visitors). */
 export const VISITOR_BOX: readonly Box[] = VISITOR_PROP.map((key, i) => {
@@ -74,11 +101,66 @@ export const VISITOR_BOX: readonly Box[] = VISITOR_PROP.map((key, i) => {
   const [x0, y0, x1, y1] = [num(o.x0), num(o.y0), num(o.x1), num(o.y1)];
   return x0 !== null && y0 !== null && x1 !== null && y1 !== null && x1 > x0 && y1 > y0 ? { x0, y0, x1, y1 } : BOX_FALLBACK[i]!;
 });
+const mirror = (b: Box, sx: 1 | -1): Box => (sx > 0 ? b : { x0: -b.x1, y0: b.y0, x1: -b.x0, y1: b.y1 });
 /** The box mirrored for a visitor facing `sx`. */
-export const boxFacing = (k: number, sx: 1 | -1): Box => {
-  const b = VISITOR_BOX[k]!;
-  return sx > 0 ? b : { x0: -b.x1, y0: b.y0, x1: -b.x0, y1: b.y1 };
+export const boxFacing = (k: number, sx: 1 | -1): Box => mirror(VISITOR_BOX[k]!, sx);
+
+// ---------------------------------------------------------------- v14: the night visitors' places (contract)
+
+const C = K as unknown as {
+  visitors?: Record<string, Record<string, unknown>>;
+  octoSpots?: unknown;
+  hermitHome?: Record<string, unknown>;
+  mantaBand?: Record<string, unknown>;
+  parallax?: Record<string, unknown>;
 };
+/** The hermit crab peeking out of the helmet's port (frames 2-3): its box around the port's centre. */
+export const HERMIT_PEEK_BOX: Box = (() => {
+  const o = C.visitors?.hermitPeek ?? {};
+  const [x0, y0, x1, y1] = [num(o.x0), num(o.y0), num(o.x1), num(o.y1)];
+  return x0 !== null && y0 !== null && x1 !== null && y1 !== null ? { x0, y0, x1, y1 } : { x0: -6, y0: -15, x1: 24, y1: 18 };
+})();
+/** The box of a visit as it is drawn now (the hermit's peek frames sit round the port, not on the sand). */
+export const boxOf = (v: Pick<Visit, "kind" | "sx" | "f">): Box => (v.kind === HERMIT && v.f >= 2 ? mirror(HERMIT_PEEK_BOX, v.sx) : boxFacing(v.kind, v.sx));
+
+export interface OctoSpot {
+  x: number;
+  y: number;
+  tier: number;
+  /** how far below its spot it starts and slips back to (hidden by the rock) */
+  rise: number;
+}
+/** Where the octopus can peek over a reef rock (world): one node per spot in the .riv (octoS{i}). */
+export const OCTO_SPOTS: readonly OctoSpot[] = (() => {
+  const out: OctoSpot[] = [];
+  if (Array.isArray(C.octoSpots))
+    for (const v of C.octoSpots) {
+      const o = (v ?? {}) as Record<string, unknown>;
+      const x = num(o.x);
+      const y = num(o.y);
+      if (x !== null && y !== null) out.push({ x, y, tier: num(o.tier) ?? 0, rise: num(o.rise) ?? 45 });
+    }
+  return out.length ? out : [{ x: 87, y: 945, tier: 0, rise: 45 }];
+})();
+/** The decoration the hermit crab moves into (the dive helmet) and its port's centre from that decoration's base. */
+export const HERMIT_HOME = { decor: num(C.hermitHome?.decor) ?? 2, dx: num(C.hermitHome?.dx) ?? -6, dy: num(C.hermitHome?.dy) ?? -33 };
+/** The manta's band of far upper water (y), and the Far layer's parallax. */
+export const MANTA_BAND = { y0: num(C.mantaBand?.y0) ?? 78, y1: num(C.mantaBand?.y1) ?? 186 };
+export const FAR_PARALLAX = num(C.parallax?.Far) ?? 0.35;
+/** The world x of a far-layer x with the camera at camX (≤ 0). */
+export const farToWorld = (fx: number, camX: number) => fx - camX * (1 - FAR_PARALLAX);
+
+/** The octopus: rising to its first peek (eyes only), up the rest of the way, a breath, a reach, its colours. */
+export const OCTO_PEEK = 0.45; // the first peek: this much of the rise still below the edge
+export const OCTO_REACH = 2.6; // a reach lasts this long, s
+export const OCTO_REACH_NEAR = 360; // it reaches for a jelly this close (world px)
+export const OCTO_CAMO_PERIOD = 9; // red -> rock-grey -> red, s
+/** The hermit crab's walking speed (px/s), and how long it takes to slip inside the helmet and look out. */
+export const HERMIT_SPEED = 24;
+export const HERMIT_SLIP = 0.6;
+/** The manta: a visit is shorter than the others' (one glide across), 16-24 s. */
+export const MANTA_MIN = 16;
+export const MANTA_SPREAD = 8;
 
 export interface Grip {
   x: number;
@@ -106,6 +188,20 @@ export const KELP_GRIPS: readonly Grip[] = (() => {
 export interface Stretch {
   x0: number;
   x1: number;
+  /** v14: the camera's x offset (camX, ≤ 0), for the manta's parallax; 0 when left out */
+  cam?: number;
+}
+
+/** v14: what else a night visitor plans with: the dive helmet's base point (world) if the hermit crab could move in. */
+export interface PlanContext {
+  home?: { x: number; y: number } | null;
+}
+
+/** v14: what else a step needs: reduced motion, the camera (the manta), where the helmet is now (the hermit). */
+export interface StepContext {
+  reduced?: boolean;
+  cam?: number;
+  home?: { x: number; y: number } | null;
 }
 
 export interface Visit {
@@ -142,6 +238,14 @@ export interface Visit {
   nextMove: number;
   ylo: number;
   yhi: number;
+  /** v14 octopus: its spot (OCTO_SPOTS), how far below it, its colours (camouflage, pale) 0..1 */
+  spot: number;
+  dy: number;
+  c1: number;
+  c2: number;
+  /** v14 hermit: its own fade (slipping into the helmet and looking out), and whether it's going there */
+  vis: number;
+  home: boolean;
 }
 
 const smooth = (t: number) => {
@@ -189,6 +293,12 @@ function base(kind: number, dur: number): Visit {
     nextMove: 0,
     ylo: 0,
     yhi: 0,
+    spot: -1,
+    dy: 0,
+    c1: 0,
+    c2: 0,
+    vis: 1,
+    home: false,
   };
 }
 
@@ -196,7 +306,8 @@ function base(kind: number, dur: number): Visit {
  * A new visit of `kind` somewhere on stage (the view, inside the glass); null when it can't fit
  * (no kelp the seahorse can reach in view). `tier` gates the kelp grips.
  */
-export function planVisit(kind: number, st: Stretch, tier: number, rand: () => number): Visit | null {
+export function planVisit(kind: number, st: Stretch, tier: number, rand: () => number, ctx: PlanContext = {}): Visit | null {
+  if (nightVisitor(kind)) return planNight(kind, st, tier, rand, ctx);
   const v = base(kind, VISIT_MIN + rand() * VISIT_SPREAD);
   const total = v.leaveAt + LEAVE_TIME;
   if (kind === TURTLE) {
@@ -300,13 +411,16 @@ export function cheer(v: Visit): void {
  * Advance a visit by dt. v8: `aim` (world, for the diver's origin) is a patch of dirty glass it would like
  * to work on: when it next shifts spot it goes there (within its stretch) instead of somewhere random.
  */
-export function stepVisit(v: Visit, dt: number, rand: () => number, aim: { x: number; y: number } | null = null): void {
+export function stepVisit(v: Visit, dt: number, rand: () => number, aim: { x: number; y: number } | null = null, ctx: StepContext = {}): void {
   v.age += dt;
   const a = v.age;
   const leaving = a >= v.leaveAt;
   const lp = clamp((a - v.leaveAt) / LEAVE_TIME);
   v.on = leaving ? 1 - lp : clamp(a / ARRIVE_TIME);
-  if (v.kind === TURTLE) {
+  if (v.kind === OCTOPUS) stepOctopus(v, dt, rand, aim, ctx, leaving, lp);
+  else if (v.kind === MANTA) stepManta(v, dt, ctx, leaving);
+  else if (v.kind === HERMIT) stepHermit(v, dt, rand, ctx, leaving);
+  else if (v.kind === TURTLE) {
     // a stroke every ~2.4 s (twice as quick when it's happy); it surges on the downstroke
     const period = v.happy ? 1.1 : 2.4;
     v.phase = (v.phase + dt / period) % 1;
@@ -398,14 +512,224 @@ function stepBat(v: Visit, dt: number, rand: () => number, leaving: boolean, lp:
 
 /** Is world (x, y) on the visitor (its box, a finger's width more)? Only while it can be seen. */
 export function visitorHit(v: Visit, x: number, y: number): boolean {
-  if (v.on < 0.25) return false;
-  const b = boxFacing(v.kind, v.sx);
+  if (v.on * v.vis < 0.25) return false;
+  const b = boxOf(v);
   const pad = 4 * P;
   return x >= v.x + b.x0 - pad && x <= v.x + b.x1 + pad && y >= v.y + b.y0 - pad && y <= v.y + b.y1 + pad;
 }
 
 /** The middle of the visitor's art, for the sparkle and the "+N". */
 export function visitorCentre(v: Visit): { x: number; y: number } {
-  const b = boxFacing(v.kind, v.sx);
+  const b = boxOf(v);
   return { x: v.x + (b.x0 + b.x1) / 2, y: v.y + (b.y0 + b.y1) / 2 };
+}
+
+// ---------------------------------------------------------------- v14: night visitors
+
+/** Does the octopus at spot `sp`, facing `sx`, fit inside [lo, hi]? */
+const octoFits = (sp: OctoSpot, sx: 1 | -1, lo: number, hi: number) => {
+  const b = boxFacing(OCTOPUS, sx);
+  return sp.x + b.x0 >= lo && sp.x + b.x1 <= hi;
+};
+/** The sand the hermit crab walks on (its origin's y). */
+const sandWalkY = () => K.waterBot - 2 * P;
+
+function planNight(kind: number, st: Stretch, tier: number, rand: () => number, ctx: PlanContext): Visit | null {
+  if (kind === OCTOPUS) {
+    const v = base(kind, VISIT_MIN + rand() * VISIT_SPREAD);
+    const ok = OCTO_SPOTS.flatMap((sp, i) => (sp.tier <= tier && (octoFits(sp, 1, st.x0, st.x1) || octoFits(sp, -1, st.x0, st.x1)) ? [i] : []));
+    if (!ok.length) return null;
+    v.spot = ok[Math.floor(rand() * ok.length) % ok.length]!;
+    const sp = OCTO_SPOTS[v.spot]!;
+    // it faces the middle of the view, if it fits that way round
+    const toward: 1 | -1 = st.x0 + st.x1 >= 2 * sp.x ? 1 : -1;
+    v.sx = octoFits(sp, toward, st.x0, st.x1) ? toward : toward > 0 ? -1 : 1;
+    v.lo = st.x0;
+    v.hi = st.x1;
+    v.x = sp.x;
+    v.dy = sp.rise;
+    v.y = sp.y + v.dy;
+    v.t0 = -1; // no reach yet
+    v.nextMove = 6 + rand() * 3;
+    v.ylo = Number.NaN; // how far down it was when it started to leave
+    return v;
+  }
+  if (kind === MANTA) {
+    const v = base(kind, MANTA_MIN + rand() * MANTA_SPREAD);
+    const total = v.leaveAt + LEAVE_TIME;
+    v.sx = rand() < 0.5 ? 1 : -1;
+    const r = xRange(MANTA, v.sx, st, 2 * P);
+    if (!r) return null;
+    // the stretch in far-layer x (the Far group lags the camera)
+    const shift = farToWorld(0, st.cam ?? 0);
+    v.lo = r[0] - shift;
+    v.hi = r[1] - shift;
+    v.gx = v.sx > 0 ? v.lo : v.hi;
+    v.vx = (v.sx * (v.hi - v.lo)) / total;
+    const b = VISITOR_BOX[MANTA]!;
+    const ylo = Math.max(MANTA_BAND.y0, K.waterTop - b.y0 + 4 * P);
+    v.baseY = ylo + rand() * Math.max(0, MANTA_BAND.y1 - ylo);
+    v.dur = 1; // the manta keeps its speed-up here (eased toward 1.6 once greeted; 1 = none)
+    v.phase = rand();
+    v.x = farToWorld(v.gx, st.cam ?? 0);
+    v.y = v.baseY;
+    return v;
+  }
+  // the hermit crab
+  const v = base(kind, VISIT_MIN + rand() * VISIT_SPREAD * 0.5);
+  v.y = v.ylo = sandWalkY();
+  const home = ctx.home ?? null;
+  if (home) {
+    const port = { x: home.x + HERMIT_HOME.dx, y: home.y + HERMIT_HOME.dy };
+    const portIn = [1, -1].every((sx) => {
+      const b = mirror(HERMIT_PEEK_BOX, sx as 1 | -1);
+      return port.x + b.x0 >= st.x0 && port.x + b.x1 <= st.x1;
+    });
+    // it walks toward the helmet from the side with more room, facing it
+    const from: 1 | -1 = home.x - st.x0 > st.x1 - home.x ? -1 : 1;
+    v.sx = from > 0 ? -1 : 1;
+    const r = xRange(HERMIT, v.sx, st, 2 * P);
+    if (portIn && r) {
+      v.home = true;
+      v.gx = port.x;
+      v.gy = port.y;
+      v.lo = r[0];
+      v.hi = r[1];
+      v.fx = clamp(home.x + from * (90 + rand() * 90), v.lo, v.hi);
+      v.x = v.fx;
+      v.t0 = -1; // when it got to the helmet
+      v.nextMove = 0;
+      return v;
+    }
+  }
+  // no helmet (or not in view): it wanders along the sand, pausing now and then
+  v.sx = rand() < 0.5 ? 1 : -1;
+  const r = xRange(HERMIT, v.sx, st, 2 * P);
+  if (!r) return null;
+  [v.lo, v.hi] = r;
+  v.x = v.sx > 0 ? v.lo + rand() * (v.hi - v.lo) * 0.3 : v.hi - rand() * (v.hi - v.lo) * 0.3;
+  v.vx = v.sx * HERMIT_SPEED;
+  v.t0 = -Infinity; // when its last pause began
+  v.nextMove = 3 + rand() * 3;
+  return v;
+}
+
+/** The octopus: rises to a first peek, then the rest of the way; breathes, changes colour, reaches; slips down. */
+function stepOctopus(v: Visit, dt: number, rand: () => number, aim: { x: number; y: number } | null, ctx: StepContext, leaving: boolean, lp: number): void {
+  const sp = OCTO_SPOTS[v.spot] ?? OCTO_SPOTS[0]!;
+  const a = v.age;
+  if (!leaving) {
+    const first = smooth(a / 2.4);
+    const rest = smooth((a - 3.4) / 1.2);
+    v.dy = sp.rise * (1 - (1 - OCTO_PEEK) * first - OCTO_PEEK * rest);
+  } else {
+    if (Number.isNaN(v.ylo)) v.ylo = v.dy;
+    v.dy = v.ylo + (sp.rise - v.ylo) * smooth(lp * 1.3);
+  }
+  v.x = sp.x;
+  v.y = sp.y + v.dy;
+  // colours: drifting between red and the rock's grey; a greeting flushes it pale
+  const camo = 0.5 - 0.5 * Math.cos((2 * Math.PI * Math.max(0, a - 3)) / OCTO_CAMO_PERIOD);
+  v.c2 = v.happy ? Math.min(1, v.c2 + dt / 0.4) : Math.max(0, v.c2 - dt / 0.8);
+  v.c1 = v.happy ? Math.max(0, v.c1 - dt / 0.4) : camo;
+  // a breath every 1.6 s
+  v.phase = (v.phase + dt / 1.6) % 1;
+  v.f = v.phase < 0.55 ? 0 : 1;
+  // now and then it reaches an arm toward a jelly nearby (facing it, if it fits that way round)
+  if (v.t0 < 0 && !leaving && !v.happy && a >= v.nextMove && v.dy < 2) {
+    v.nextMove = a + 7 + rand() * 4;
+    if (aim && Math.abs(aim.x - v.x) <= OCTO_REACH_NEAR && aim.y < v.y) {
+      const sx: 1 | -1 = aim.x >= v.x ? 1 : -1;
+      if (octoFits(sp, sx, v.lo, v.hi)) v.sx = sx;
+      v.t0 = a;
+    }
+  }
+  if (v.t0 >= 0) {
+    const r = a - v.t0;
+    if (r >= OCTO_REACH || leaving || v.happy) v.t0 = -1;
+    else {
+      // the tip flicks twice (held still with reduced motion)
+      const flick = !ctx.reduced && ((r >= 0.7 && r < 0.88) || (r >= 1.45 && r < 1.63));
+      v.f = flick ? 3 : 2;
+    }
+  }
+}
+
+/** The manta glides across at its own pace (a little quicker once greeted, eased; not with reduced motion). */
+function stepManta(v: Visit, dt: number, ctx: StepContext, leaving: boolean): void {
+  const a = v.age;
+  const want = v.happy && !ctx.reduced ? 1.6 : 1;
+  v.dur += (want - v.dur) * Math.min(1, dt * 1.2);
+  v.gx = clamp(v.gx + v.vx * v.dur * dt, v.lo, v.hi);
+  if (!leaving && (v.gx <= v.lo || v.gx >= v.hi) && a > ARRIVE_TIME) v.leaveAt = a; // reached the far side: fade out
+  v.y = v.baseY + 6 * Math.sin((a * 2 * Math.PI) / 9);
+  v.phase = (v.phase + dt / (v.happy && !ctx.reduced ? 1.9 : 2.6)) % 1;
+  v.f = Math.floor(v.phase * 4) % 4;
+  v.x = farToWorld(v.gx, ctx.cam ?? 0);
+}
+
+/** The hermit crab: to the helmet and in, then peeking out of its port; or a wander along the sand. */
+function stepHermit(v: Visit, dt: number, rand: () => number, ctx: StepContext, leaving: boolean): void {
+  const a = v.age;
+  const walk = (speed: number) => {
+    v.phase = (v.phase + dt / 0.5) % 1;
+    v.f = v.phase < 0.5 ? 0 : 1;
+    v.x = clamp(v.x + v.sx * speed * dt, v.lo, v.hi);
+  };
+  const quick = v.happy && !ctx.reduced ? 1.5 : 1;
+  if (v.home) {
+    const home = ctx.home === undefined ? { x: v.gx - HERMIT_HOME.dx, y: v.gy - HERMIT_HOME.dy } : ctx.home;
+    if (!home) {
+      // the helmet was picked up (or is gone): it scuttles off
+      v.home = false;
+      if (!leaving) v.leaveAt = a;
+      return;
+    }
+    v.gx = home.x + HERMIT_HOME.dx;
+    v.gy = home.y + HERMIT_HOME.dy;
+    if (v.t0 < 0) {
+      // walking over: it stops at the helmet's middle and slips in
+      if (leaving) return;
+      const before = v.x;
+      walk(HERMIT_SPEED * quick);
+      if ((before - home.x) * (v.x - home.x) <= 0 || v.x <= v.lo || v.x >= v.hi) v.t0 = a;
+      return;
+    }
+    const r = a - v.t0;
+    if (r < HERMIT_SLIP) {
+      v.vis = 1 - smooth(r / HERMIT_SLIP); // in it goes
+      return;
+    }
+    // inside: a moment's pause, then it looks out of the port
+    v.x = v.gx;
+    v.y = v.gy;
+    v.vis = smooth((r - HERMIT_SLIP - 0.8) / HERMIT_SLIP);
+    if (leaving) {
+      v.f = 2; // ducks back in as it goes
+      return;
+    }
+    if (v.happy) {
+      v.f = ctx.reduced ? 3 : Math.floor(a / 0.25) % 2 ? 3 : 2; // a wave of the claw
+      return;
+    }
+    if (v.f < 2) {
+      v.f = 2;
+      v.nextMove = a + 1.2;
+    }
+    if (a >= v.nextMove) {
+      v.f = v.f === 2 ? 3 : 2;
+      v.nextMove = a + (v.f === 3 ? 2.5 + rand() * 1.5 : 1.2 + rand() * 0.8);
+      if (v.f === 3 && rand() < 0.3) v.sx = v.sx > 0 ? -1 : 1; // and looks the other way
+    }
+    return;
+  }
+  // wandering: steps along, a pause every few seconds, gone at the end of its stretch
+  if (leaving) return;
+  if (a >= v.nextMove) {
+    v.t0 = a;
+    v.nextMove = a + 1.2 + 3 + rand() * 3;
+  }
+  if (a - v.t0 < 1.2) v.f = 0;
+  else walk(HERMIT_SPEED * quick);
+  if ((v.x <= v.lo && v.sx < 0) || (v.x >= v.hi && v.sx > 0)) v.leaveAt = Math.min(v.leaveAt, a);
 }

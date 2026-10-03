@@ -7,7 +7,7 @@
 //      only one cache is left, and the tank still works offline
 //   OFFLINE_PORT=5213 [OFFLINE_NET=slow] node tools/offline.mjs
 import { createServer } from "node:http";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { extname, join } from "node:path";
 import puppeteer from "puppeteer-core";
@@ -44,6 +44,7 @@ const server = createServer((req, res) => {
 }).listen(PORT, "127.0.0.1");
 
 const SPECIES_KEYS = JSON.parse(readFileSync("src/contract.json", "utf8")).species;
+mkdirSync("shots", { recursive: true });
 let failures = 0;
 const check = (name, ok, extra = "") => {
   console.log(`${ok ? "ok  " : "FAIL"} ${name}${extra ? `  (${extra})` : ""}`);

@@ -2,11 +2,13 @@
 //   npm run build && node tools/loadtime.mjs   (serves dist/ as GitHub Pages does: gzip for text, the .riv,
 //                                               PNGs and wasm... as they are; the service worker bypassed)
 //   LOAD_PORT=5211                              (the port, default 5196)
+//   LOAD_TANKS=new                              (only these tanks: new, full, new-halloween, full-halloween)
+//   LOAD_JSON=out.json                          (also write the numbers as JSON, for tools/budget.mjs)
 // Two tanks: a NEW one (a moon polyp, empty storage) and a FULL one (Large tank, seven jellies of seven species),
 // each with no seasonal event (?season=none) and on a first visit during Halloween (?season=halloween: the
 // event's art, ev-halloween, comes on top of the jellies'; `every jelly drawn` then also waits for the decor).
 import { createServer } from "node:http";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { extname, join } from "node:path";
 import puppeteer from "puppeteer-core";
@@ -37,12 +39,16 @@ const FULL = JSON.stringify({
   v: 11, tier: 2, dollars: 500, lastSeen: now, night: false, lamp: null,
   slots: [[0, 3], [1, 3], [2, 2], [3, 3], [4, 3], [5, 2], [6, 3]].map(([k, g], i) => ({ k, g, name: `J${i}`, born: now - 864e5 })),
 });
-const tanks = {
-  new: { save: null, season: "none" },
-  "full (7 jellies, 7 species)": { save: FULL, season: "none" },
-  "new, first Halloween visit": { save: null, season: "halloween" },
-  "full, first Halloween visit": { save: FULL, season: "halloween" },
+const allTanks = {
+  new: { id: "new", save: null, season: "none" },
+  "full (7 jellies, 7 species)": { id: "full", save: FULL, season: "none" },
+  "new, first Halloween visit": { id: "new-halloween", save: null, season: "halloween" },
+  "full, first Halloween visit": { id: "full-halloween", save: FULL, season: "halloween" },
 };
+const only = process.env.LOAD_TANKS?.split(",").map((t) => t.trim());
+const tanks = Object.fromEntries(Object.entries(allTanks).filter(([, t]) => !only || only.includes(t.id)));
+const profileIds = { "fast 4G (9 Mbps, 85 ms)": "fast4g", "slow 4G (1.6 Mbps, 150 ms)": "slow4g" };
+const results = [];
 const browser = await puppeteer.launch({ channel: "chrome", headless: true, args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
 for (const [tank, { save, season }] of Object.entries(tanks)) {
   for (const [name, net] of Object.entries(profiles)) {
@@ -87,9 +93,11 @@ for (const [tank, { save, season }] of Object.entries(tanks)) {
     // the browser's own first paint: when the loading screen showed
     const loaderAt = await p.evaluate(() => performance.getEntriesByName("first-contentful-paint")[0]?.startTime ?? performance.getEntriesByName("first-paint")[0]?.startTime ?? -1);
     const s_ = (ms) => `${(ms / 1000).toFixed(1)} s`;
+    results.push({ tank: tanks[tank].id, net: profileIds[name], loaderMs: Math.round(loaderAt), firstFrameMs: Math.round(lt.first), kbAtFirstFrame: lt.kb, allDrawnMs: Math.round(lt.all), kbTotal: Math.round(bytes / 1024) });
     console.log(`${tank}, ${name}: loading screen ${s_(loaderAt)}, first frame ${s_(lt.first)} (${lt.kb} KB by then), every jelly${season === "none" ? "" : " and the decor"} drawn ${s_(lt.all)}; ${Math.round(bytes / 1024)} KB in all`);
     await p.close();
   }
 }
 await browser.close();
 server.close();
+if (process.env.LOAD_JSON) writeFileSync(process.env.LOAD_JSON, JSON.stringify(results, null, 1));

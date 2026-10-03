@@ -6,6 +6,8 @@
 //   BATTERY_SECONDS=10         the length of each measured window
 //   BATTERY_RUNS=2             runs per scenario (the median is printed)
 //   BATTERY_SCENARIOS=idle,busy,hidden,saver
+//   BATTERY_RATES=1,4          the CPU throttling rates to run (default both)
+//   BATTERY_JSON=out.json      also write the medians as JSON, for tools/budget.mjs
 //   BATTERY_GL=swiftshader     software GL, where headless Chrome gets no GPU (it is slow, ~13 fps here, and
 //                              burns several cores: useless for battery numbers, fine for "does it run")
 //
@@ -15,7 +17,7 @@
 // cores: compare numbers from back-to-back runs, not across days. With 4x throttling, read `main`: Chrome's
 // throttling itself costs CPU in another process (a hidden tab shows ~300 ms/s of `cpu` that isn't the tank).
 import { createServer } from "node:http";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { extname, join } from "node:path";
 import puppeteer from "puppeteer-core";
@@ -150,15 +152,19 @@ function centre(name) {
 const browser = await puppeteer.launch({ channel: "chrome", headless: true, args: GL });
 const scenarios = (process.env.BATTERY_SCENARIOS ?? "idle,busy,hidden,saver").split(",");
 console.log(`${SECONDS} s windows, median of ${RUNS}; cpu = all of Chrome's processes, main = the page's main thread (ms of CPU per second)`);
-for (const cpuRate of [1, 4]) {
+const results = [];
+for (const cpuRate of (process.env.BATTERY_RATES ?? "1,4").split(",").map(Number)) {
   for (const sc of scenarios) {
     const saver = sc === "saver";
     const runs = [];
     for (let r = 0; r < RUNS; r++) runs.push(await measure(browser, { scenario: saver ? "idle" : sc, cpuRate, saver }));
     const f = (k, d = 0) => median(runs.map((x) => x[k])).toFixed(d);
     const label = saver ? "idle, battery saver on" : sc;
+    const med = (k) => median(runs.map((x) => x[k]));
+    results.push({ scenario: sc, cpuRate, fps: med("fps"), cpu: med("cpu"), main: med("main"), script: med("script"), hidden: runs.every((x) => x.hidden), runs: runs.length });
     console.log(`${cpuRate}x CPU, ${label.padEnd(22)} ${f("fps").padStart(3)} fps   cpu ${f("cpu").padStart(4)} ms/s   main ${f("main").padStart(4)} ms/s   script ${f("script").padStart(4)} ms/s${runs.some((x) => sc === "hidden" && !x.hidden) ? "   (page was NOT hidden)" : ""}`);
   }
 }
 await browser.close();
 server.close();
+if (process.env.BATTERY_JSON) writeFileSync(process.env.BATTERY_JSON, JSON.stringify(results, null, 1));

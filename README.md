@@ -66,9 +66,27 @@ npm run riv:shot    # the same, plus a screenshot of the artboard
 
 ## Deploy
 
-GitHub Pages is the game's only home. `.github/workflows/pages.yml` runs the unit tests, builds `dist/` and deploys it on every push to `main`, once the repo variable `PAGES_ENABLED` is `true` (Settings → Pages → Source: GitHub Actions); it can also be run by hand from the Actions tab. CI runs no Python or Rive CLI, so the generated files above must be committed.
+GitHub Pages is the game's only home. `.github/workflows/pages.yml` builds `dist/` and deploys it after the Test workflow passes on a push to `main`, once the repo variable `PAGES_ENABLED` is `true` (Settings → Pages → Source: GitHub Actions). You can also start it by hand from the Actions tab; it runs the tests first. CI runs no Python or Rive CLI, so commit the generated files above.
 
 `vite build` writes `dist/sw.js` from `src/sw.js` with the build's file list, and `src/offline.ts` registers it once the tank is on screen (`index.html` opts in with `<meta name="jellytank-sw">`; the dev server never runs it). The page is network-first, so a deploy shows up on the next load. The room's code and art are listed for the worker to cache as they load, not up front, so a phone never fetches them.
+
+## Safety net
+
+`.github/workflows/test.yml` runs on every push and pull request: the merge guard, `tsc`, the unit tests, the build, the byte budgets, then `e2e`, `offline` and `phones` in headless Chrome (SwiftShader for WebGL). A failed run uploads `shots/`; every run uploads `shots/e2e-report.json`. Pages deploys `main` only after it passes.
+
+```sh
+npm run guard          # conflict markers, sources emptied or cut by more than 40%, sprite groups that don't match src/contract.json
+npm run hooks          # opt-in: a pre-commit hook that runs the guard on what you stage (-- --force replaces another hook)
+npm run budget:bytes   # dist/ sizes against tools/budgets.json (CI runs this)
+npm run budget         # bytes plus load time and battery on this machine (local only)
+npm run test:explore   # the property tests with random seeds, ten times as many runs
+```
+
+The guard compares with the merge base of `origin/main` (`--base <ref>` for another). To cut a file on purpose, list it in `tools/guard-allow.txt` or put `Guard-Allow-Shrink: <path>` in the commit message.
+
+`tools/budgets.json` holds the budgets and their tolerances: 10% on bytes, 15% on load time, 25% on an idle tank's CPU (it swung that much between runs here). An idle tank must draw 30 fps, give or take 15%, and a hidden one nothing. Load time and CPU numbers depend on the machine, so reseed them on yours with `node tools/budget.mjs --perf --seed` before you rely on them, and note the machine's load in the commit.
+
+The property tests (`src/*.prop.test.ts`, fast-check) run with a fixed seed so CI gives the same answer every time; `FC_SEED=<n>` replays a failure. `src/clock.test.ts` checks night, Halloween, the daily turnover and time away in seven time zones, across their 2026 DST changes.
 
 ## Layout
 
@@ -84,5 +102,5 @@ GitHub Pages is the game's only home. `.github/workflows/pages.yml` runs the uni
 - `src/share.ts`, `src/tankcode.ts`: share codes and save backups
 - `src/season.ts`, `src/photo.ts`, `src/spritegroups.ts`: seasons, photo mode, on-demand sprite groups
 - `src/sw.js`, `src/offline.ts`: the Pages service worker and its registration
-- `tools/`: the browser checks above
+- `tools/`: the browser checks above, the merge guard (`guard.mjs`) and the budgets (`budget.mjs`, `budgets.json`)
 - `docs/`: feature specs from earlier versions

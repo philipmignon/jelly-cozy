@@ -1,4 +1,5 @@
-# Builds the game and deploys dist/ to GitHub Pages on every push to main (or by hand from the Actions tab).
+# Deploys dist/ to GitHub Pages once the Test workflow (test.yml) has passed on a push to main, or by hand from the
+# Actions tab (which runs the tests first, then deploys the branch it was started on).
 # Pushes only deploy once the repo variable PAGES_ENABLED is "true" (set it after turning Pages on in
 # Settings → Pages → Source: GitHub Actions), so pushes don't fail while Pages is off.
 # No Python or Rive CLI here: the built public/jellytank.riv, the sprite groups in public/sprites/ and the
@@ -6,40 +7,84 @@
 name: Pages
 
 on:
-  push:
+  # a Test run finished; only a successful one for a push to main deploys (see the build job's `if`)
+  workflow_run:
+    workflows: [Test]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
 
 jobs:
+  # a hand-started deploy tests what it deploys (an automatic one deploys what Test already passed)
+  test:
+    if: github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/test.yml
+
   build:
-    if: github.event_name == 'workflow_dispatch' || vars.PAGES_ENABLED == 'true'
+    needs: test
+    # `always()`: run although `test` was skipped (an automatic deploy), then decide here
+    if: >-
+      always() && (
+        (github.event_name == 'workflow_dispatch' && needs.test.result == 'success') ||
+        (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+         github.event.workflow_run.event == 'push' && vars.PAGES_ENABLED == 'true')
+      )
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: pages-build
+      cancel-in-progress: true
+    outputs:
+      current: ${{ steps.current.outputs.current }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # the commit Test passed (a workflow_run's own ref is just main's tip at the time it started)
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - name: Still main's newest commit?
+        id: current
+        run: |
+          # Test runs on main finish in any order: an older commit that passes late mustn't replace a newer deploy
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            tip=$(git ls-remote origin refs/heads/main | cut -f1)
+            if [ "$tip" != "${{ github.event.workflow_run.head_sha }}" ]; then
+              echo "main is at $tip now; its own Test run will deploy it"
+              echo "current=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "current=true" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
+        if: steps.current.outputs.current == 'true'
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
-      - run: npm test
-      - run: npm run build
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - if: steps.current.outputs.current == 'true'
+        run: npm ci
+      - if: steps.current.outputs.current == 'true'
+        run: npm run build
+      - if: steps.current.outputs.current == 'true'
+        uses: actions/configure-pages@v5
+      - if: steps.current.outputs.current == 'true'
+        uses: actions/upload-pages-artifact@v3
         with:
           path: dist
 
   deploy:
     needs: build
+    if: always() && needs.build.result == 'success' && needs.build.outputs.current == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    # one deploy at a time; a deploy under way is left to finish
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

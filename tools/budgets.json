@@ -1,0 +1,139 @@
+{
+  "_about": "tools/budget.mjs compares the built game with these. budget+tol: at most budget*(1+tol); target+tol: within target*(1+-tol); max: at most max. Bytes are deterministic (CI checks them); perf numbers are from one machine, so only `npm run budget` locally checks them. Reseed with `node tools/budget.mjs --seed` after a deliberate change, on a quiet machine.",
+  "seeded": {
+    "bytes": {
+      "date": "2026-10-03",
+      "runs": 1
+    },
+    "perf": {
+      "date": "2026-10-03",
+      "sessions": 3,
+      "runs": 3,
+      "method": "median of three sessions, each the median of 3 runs",
+      "load": "load average 9-19 on 12 cores (other agents running headless Chrome); quieter machines will read lower",
+      "cpu": "Apple M2 Pro x12, Chrome 154 with its GPU",
+      "sessions_read": {
+        "load.new.fast4g.firstFrame": [
+          3148,
+          3149,
+          3391
+        ],
+        "load.new.slow4g.firstFrame": [
+          12264,
+          12286,
+          12396
+        ],
+        "battery.idle.main": [
+          123,
+          142,
+          114
+        ],
+        "battery.hidden.main": [
+          2,
+          1.3,
+          3
+        ]
+      }
+    }
+  },
+  "bytes": {
+    "bytes.critical.new": {
+      "budget": 1980379,
+      "tol": 0.1,
+      "unit": "B",
+      "about": "what a new tank fetches before its first frame: page + main bundle + wasm + .riv + moon sprites"
+    },
+    "bytes.html": {
+      "budget": 1317,
+      "tol": 0.1,
+      "unit": "B"
+    },
+    "bytes.js.main": {
+      "budget": 194452,
+      "tol": 0.1,
+      "unit": "B"
+    },
+    "bytes.js.room": {
+      "budget": 3244,
+      "tol": 0.1,
+      "unit": "B"
+    },
+    "bytes.wasm": {
+      "budget": 937394,
+      "tol": 0.1,
+      "unit": "B"
+    },
+    "bytes.riv": {
+      "budget": 746704,
+      "tol": 0.1,
+      "unit": "B"
+    },
+    "bytes.sprites.moon": {
+      "budget": 100512,
+      "tol": 0.1,
+      "unit": "B"
+    },
+    "bytes.sprites.largest": {
+      "budget": 200610,
+      "tol": 0.1,
+      "unit": "B"
+    },
+    "bytes.sprites.all": {
+      "budget": 784394,
+      "tol": 0.1,
+      "unit": "B"
+    },
+    "bytes.sw": {
+      "budget": 2686,
+      "tol": 0.1,
+      "unit": "B"
+    },
+    "bytes.total": {
+      "budget": 3432086,
+      "tol": 0.1,
+      "unit": "B"
+    }
+  },
+  "perf": {
+    "load.new.fast4g.firstFrame": {
+      "budget": 3149,
+      "tol": 0.15,
+      "unit": "ms",
+      "about": "a new tank's first frame over fast 4G (9 Mbps, 85 ms)"
+    },
+    "load.new.slow4g.firstFrame": {
+      "budget": 12286,
+      "tol": 0.15,
+      "unit": "ms",
+      "about": "the same over slow 4G (1.6 Mbps, 150 ms)"
+    },
+    "load.new.fast4g.kbBeforeFirstFrame": {
+      "budget": 1947,
+      "tol": 0.15,
+      "unit": "KB",
+      "about": "KB transferred by the first frame"
+    },
+    "battery.idle.main": {
+      "budget": 123,
+      "tol": 0.25,
+      "unit": "ms/s",
+      "about": "an idle settled tank main-thread CPU, 1x. 25%: the three seeding sessions read 114, 123 and 142 on one machine"
+    },
+    "battery.idle.fps": {
+      "target": 30,
+      "tol": 0.15,
+      "unit": "fps",
+      "about": "an idle tank drops to its calm 30 fps (more is a battery regression, less a stutter)"
+    },
+    "battery.hidden.fps": {
+      "max": 0.5,
+      "unit": "fps",
+      "about": "a hidden tab draws nothing"
+    },
+    "battery.hidden.main": {
+      "max": 10,
+      "unit": "ms/s",
+      "about": "and does next to no work"
+    }
+  }
+}

@@ -4,6 +4,8 @@
  *
  * vite.config.ts writes dist/sw.js from this file, filling in CONFIG below:
  *   { version, precache: [paths relative to the scope], versioned: [sprite group "file?v=hash" paths] }.
+ * The wide-screen room (its JS chunk and sprites/room.json) is in `versioned`, not `precache`: a phone never
+ * fetches it, so the worker mustn't either; a wide screen caches it as it loads, like a sprite group.
  *
  *   the page (navigations)            network first, the cached page when offline or the network stalls
  *   assets/* (hashed), sprites ?v=     cache first (a new build has new names, so nothing goes stale)
@@ -22,7 +24,7 @@ const SCOPE = self.registration.scope;
 const abs = (p) => new URL(p, SCOPE).href;
 const PAGE = abs("./");
 const PRECACHE = CONFIG.precache.map(abs);
-/** current sprite groups (with their ?v=): carried over from an old cache on update */
+/** current sprite groups (with their ?v=) and the room's files: carried over from an old cache on update */
 const VERSIONED = new Set(CONFIG.versioned.map(abs));
 const FONT_CSS = "https://fonts.googleapis.com";
 const FONT_FILES = "https://fonts.gstatic.com";

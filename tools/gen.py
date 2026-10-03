@@ -5883,6 +5883,939 @@ def keep_contract(c):
 # ---- end keepsakes ----
 
 
+# ---- room ----
+# The room the tank stands in, shown beside it on wide screens (src/room.ts; phones never fetch any of it).
+# Room space is logical px at the tank's scale (P=3 on screen): the tank covers x ROOM_SIDE..ROOM_SIDE+LW and
+# y 0..LH, its cabinet's foot is the bottom edge, so it stands on the floor a little in front of the wall. The
+# sprites are flat-lit from the window on the left (the tank's light comes from the upper left too); the smooth
+# light (time of day, the lamp, the tank's own glow, night) is the host's, canvas gradients over them. Packed into
+# public/sprites/room.json with the layout the host lights it by; contract.room says where (room_pack).
+# Seasons: ROOM_SEASONS lists each event's room sprites (Halloween: a pumpkin on the sill, an orange moon, bats);
+# winter adds a row there (snow on the sill, a snowy skyline) and the host picks it up by the season id.
+
+ROOM_SIDE = 360                      # art beside the tank on each side; past it the host repeats room_tile
+ROOM_W = LW + 2 * ROOM_SIDE
+ROOM_TILE = 80                       # wallpaper, panelling and floorboards all repeat every 80 px
+ROOM_RAIL = 292                      # chair rail: wallpaper above, painted panelling below
+ROOM_SKIRT = 382
+ROOM_FLOOR = 392                     # the wall meets the floor
+ROOM_WIN = (186, 122, 290, 282)      # the window's glass, x0 y0 x1 y1 (exclusive): the sky shows through it
+ROOM_MULLION = 237                   # its glazing bars (3 px wide, from here)
+ROOM_TRANSOM = 199
+ROOM_LAMP = (640, 251)               # the floor lamp's bulb, just under the shade
+ROOM_SILL = (262, 282)               # a seasonal thing on the sill: its base centre
+ROOM_MOON = (266, 152)               # the moon's middle, in the window's upper right pane
+
+R_WALLPAPER = ramp("3a2026", "52303a", "6a3f44", "80504e", "98645a", "b48070")
+R_WALLPAPER_SPRIG = ramp("4e4a2e", "6e6a3c", "cfa98a", "e8c9a4")      # leaves, petals
+R_PANEL = ramp("0d1f22", "143033", "1c413f", "26554d", "35705f", "4f8e76")
+R_TRIM = ramp("3e3229", "786652", "b2a084", "d8caa8", "f0e6cc")    # painted cream woodwork
+R_FLOOR = ramp("2a180f", "432716", "62391f", "82502a", "a06a36", "c08a4a")
+R_RUG = ramp("15132c", "211f44", "2f2d5e", "423f7c", "5a58a0")
+R_RUGRED = ramp("4a1418", "7c2426", "a83c32", "d26444")
+R_RUGCREAM = ramp("8a7458", "c4ac86", "e6d6b0")
+R_CURTAIN = ramp("3a2008", "663c10", "94601a", "bc8428", "dca840", "f2cc70")
+R_LEAF = ramp("0a2218", "113824", "1a502e", "266c38", "3a8c42", "64b052")
+R_TERRA = ramp("3a1810", "682c1c", "944428", "ba6038", "d8824e", "eca672")
+R_CHAIR = ramp("2a0c10", "521a1e", "7c2a28", "a24030", "c46242", "e08e66")
+R_SHADE = ramp("4a3826", "786248", "a68e6a", "c8b48e", "e0d2ae", "f4ead0")
+R_SHADE_ON = ramp("9a541c", "d2862e", "f0b04e", "ffd884", "fff0c0", "fffcee")
+R_RAD = ramp("2a2a30", "4a4a52", "76767c", "a2a09e", "c8c4bc", "e6e2d8")
+R_DARKWOOD = ramp("1a0e0a", "2e1a12", "4a2a1a", "6a3e24", "8a5630", "a8703e")
+ROOM_INK = hx("120c10")
+
+
+def room_rect(px, x0, y0, x1, y1, c):
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            px.put(x, y, c)
+
+
+def room_dither(rmp, t, x, y, d=0.7):
+    return rmp[shade_index(t, len(rmp), x, y, d)]
+
+
+# ---- the wall and floor: pure functions of (x mod ROOM_TILE, y), so the tile and the room agree
+
+
+SPRIG = ["..p..", ".pcp.", "..p..", "..l..", ".l.l.", "l...."]
+
+
+def room_wall(x, y):
+    """Colour of the bare room at (x, y): wallpaper, chair rail, panelling, skirting or floor."""
+    tx = x % ROOM_TILE
+    if y < ROOM_RAIL:
+        # striped paper: a wide stripe with a sprig every 20 px (offset every other stripe), a narrow plain one,
+        # a fine line between; darker toward the top (the ceiling's shadow), dithered
+        sx, k = tx % 16, tx // 16
+        top = max(0.0, 1 - y / 150) * 0.32
+        if sx in (0, 11):
+            c = room_dither(R_WALLPAPER[2:4], 0.4 - top * 1.6, x, y)
+        elif sx < 11:
+            c = room_dither(R_WALLPAPER[2:5], 0.62 - top, x, y, 0.5)
+            fy = (y + (10 if k % 2 else 0)) % 20
+            if fy < len(SPRIG):
+                ch = SPRIG[fy][(sx - 3)] if 3 <= sx < 8 else "."
+                if ch == "p":
+                    c = mix(R_WALLPAPER_SPRIG[2], c, 0.35)
+                elif ch == "c":
+                    c = R_WALLPAPER[5]
+                elif ch == "l":
+                    c = mix(R_WALLPAPER_SPRIG[1], c, 0.4)
+        else:
+            c = room_dither(R_WALLPAPER[1:4], 0.55 - top, x, y, 0.5)
+        if y >= ROOM_RAIL - 2:
+            c = mix(c, R_WALLPAPER[0], 0.45)  # the rail's shadow on the paper
+        return c
+    if y < ROOM_RAIL + 7:  # chair rail: a rounded moulding, lit on top
+        return [R_TRIM[4], R_TRIM[3], R_TRIM[3], R_TRIM[2], R_TRIM[2], R_TRIM[1], R_TRIM[0]][y - ROOM_RAIL]
+    if y < ROOM_SKIRT:
+        # painted panelling: a raised panel every 40 px in a flat frame, bevels lit from the upper left
+        py0, py1 = ROOM_RAIL + 13, ROOM_SKIRT - 7
+        px_ = tx % 40
+        if y < ROOM_RAIL + 9:
+            return R_PANEL[0] if y == ROOM_RAIL + 7 else R_PANEL[1]  # under the rail, in its shadow
+        if 6 <= px_ < 35 and py0 <= y < py1:
+            if px_ == 6 or y == py0:
+                return R_PANEL[1]                                     # the frame's shadowed lip
+            if px_ == 7 or y == py0 + 1:
+                return R_PANEL[5] if px_ == 7 and y == py0 + 1 else R_PANEL[4]  # the panel's lit bevel
+            if px_ == 34 or y == py1 - 1:
+                return R_PANEL[4] if px_ == 34 and y == py0 + 1 else R_PANEL[2]
+            if px_ == 33 or y == py1 - 2:
+                return R_PANEL[2]
+            return room_dither(R_PANEL[2:5], 0.62 - (y - py0) / (py1 - py0) * 0.3, x, y, 0.5)
+        if px_ in (6, 35) or y in (py0 - 1, py1):
+            return R_PANEL[3] if (px_ == 35 or y == py1) else R_PANEL[2]
+        return room_dither(R_PANEL[2:4], 0.45, x, y, 0.4)
+    if y < ROOM_FLOOR:  # skirting board
+        return [R_TRIM[0], R_TRIM[4], R_TRIM[3], R_TRIM[3], R_TRIM[2], R_TRIM[3], R_TRIM[2], R_TRIM[2], R_TRIM[1], R_TRIM[0]][y - ROOM_SKIRT]
+    # floorboards seen from the front: rows widen toward the viewer, butt joints staggered
+    rows = [ROOM_FLOOR, ROOM_FLOOR + 4, ROOM_FLOOR + 9, ROOM_FLOOR + 15, ROOM_FLOOR + 22, ROOM_FLOOR + 30, ROOM_FLOOR + 39]
+    r = max(i for i, ry in enumerate(rows) if y >= ry)
+    yy = y - rows[r]
+    if yy == 0:
+        return R_FLOOR[0] if r == 0 else R_FLOOR[1]
+    joint = (r * 33 + 17) % 40
+    if tx % 40 == joint:
+        return R_FLOOR[1]
+    plank = (tx // 40 + r * 3) % 4
+    grain = math.sin(tx / ROOM_TILE * 2 * math.pi * 3 + r * 1.7) * 0.12 + math.sin(tx / ROOM_TILE * 2 * math.pi * 7 + r) * 0.06
+    t = 0.42 + [0.0, 0.12, -0.08, 0.06][plank] + grain + (0.12 if yy == 1 else 0) - (0.22 if r == 0 else 0)
+    return room_dither(R_FLOOR[1:6], t, x, y, 0.55)
+
+
+def room_tile():
+    px = Px()
+    for y in range(LH):
+        for x in range(ROOM_TILE):
+            px.put(x, y, room_wall(x, y))
+    return px
+
+
+# ---- shading helpers for the furniture
+
+
+def room_shade(px, mask, rmp, light=0.5, edge=True, d=0.55, tfn=None):
+    """Fill a mask with a ramp, lit from the upper left: a selective outline (dark on the bottom/right edges,
+    a lit rim top/left), the inside by tfn(x, y) (0 dark .. 1 light) or by position in the bounding box."""
+    xs = [p[0] for p in mask]
+    ys = [p[1] for p in mask]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    n = len(rmp)
+    for x, y in mask:
+        e = lambda a, b: (x + a, y + b) not in mask
+        if edge and (e(1, 0) or e(0, 1)):
+            c = rmp[0]
+        elif edge and (e(-1, 0) or e(0, -1)):
+            c = rmp[n - 1] if (e(-1, 0) and e(0, -1)) else rmp[n - 2]
+        else:
+            if tfn:
+                t = tfn(x, y)
+            else:
+                nx = (x - x0) / max(1, x1 - x0)
+                ny = (y - y0) / max(1, y1 - y0)
+                t = light + 0.25 - 0.35 * nx - 0.25 * ny
+            c = room_dither(rmp[1:n - 1], t, x, y, d)
+        px.put(x, y, c)
+
+
+def room_box(x0, y0, x1, y1, r=0):
+    m = set()
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            cx, cy = min(max(x, x0 + r), x1 - 1 - r), min(max(y, y0 + r), y1 - 1 - r)
+            if (x - cx) ** 2 + (y - cy) ** 2 <= r * r + 0.5:
+                m.add((x, y))
+    return m
+
+
+def room_ellipse(cx, cy, rx, ry):
+    return {(x, y) for y in range(math.floor(cy - ry) - 1, math.ceil(cy + ry) + 1) for x in range(math.floor(cx - rx) - 1, math.ceil(cx + rx) + 1)
+            if ((x + 0.5 - cx) / rx) ** 2 + ((y + 0.5 - cy) / ry) ** 2 <= 1}
+
+
+def room_floor_shadow(px, cx, cy, rx, ry, a=110):
+    """A soft dithered contact shadow on the floor."""
+    for y in range(math.floor(cy - ry), math.ceil(cy + ry) + 1):
+        for x in range(math.floor(cx - rx), math.ceil(cx + rx) + 1):
+            d = ((x + 0.5 - cx) / rx) ** 2 + ((y + 0.5 - cy) / ry) ** 2
+            if d < 1 and bay(x, y) + 0.5 < (1 - d) * 1.6:
+                px.over(x, y, (*R_FLOOR[0][:3], round(a * (1.15 - d))))
+
+
+# ---- the window (left): cream casing, glazing bars, sill, curtains on a brass rod, a radiator under it
+
+
+def room_window(px):
+    x0, y0, x1, y1 = ROOM_WIN
+    ring = [R_TRIM[0], R_TRIM[1], R_TRIM[2], R_TRIM[3], R_TRIM[3], R_TRIM[4], R_TRIM[3], R_TRIM[2], R_TRIM[1]]
+    for y in range(y0 - 9, y1):
+        for x in range(x0 - 9, x1 + 9):
+            d = max(x0 - x, x - (x1 - 1), y0 - y)
+            if d <= 0:
+                continue
+            c = ring[d - 1]
+            if d == 9 and (x < x0 or y < y0) and x < x1:
+                c = R_TRIM[4] if x < x0 or y < y0 - 8 else c  # the outer edge catches the light on the left/top
+            if d == 9 and x >= x1:
+                c = R_TRIM[0]
+            px.put(x, y, c)
+    for y in range(y0, y1):  # glazing bars
+        for i, c in enumerate((R_TRIM[4], R_TRIM[3], R_TRIM[1])):
+            px.put(ROOM_MULLION + i, y, c)
+    for x in range(x0, x1):
+        for i, c in enumerate((R_TRIM[4], R_TRIM[3], R_TRIM[1])):
+            if not (ROOM_MULLION <= x < ROOM_MULLION + 3) or i == 2:
+                px.put(x, ROOM_TRANSOM + i, c)
+    for (ax, ay, bx, by) in ((x0, y0, ROOM_MULLION, ROOM_TRANSOM), (ROOM_MULLION + 3, y0, x1, ROOM_TRANSOM),
+                             (x0, ROOM_TRANSOM + 3, ROOM_MULLION, y1), (ROOM_MULLION + 3, ROOM_TRANSOM + 3, x1, y1)):
+        for y in range(ay, by):  # a thin shadow under the top bar of each pane, and two soft sheen streaks
+            for x in range(ax, bx):
+                if y == ay:
+                    px.put(x, y, hx("1a1420", 120))
+                k = (x - ax) + (y - ay)
+                if 22 <= k < 25 or 30 <= k < 31:
+                    px.put(x, y, hx("ffffff", 34))
+    # sill: a lit top, a front face, its shadow on the apron below
+    sx0, sx1 = x0 - 15, x1 + 15
+    for x in range(sx0, sx1):
+        for y, c in ((y1, R_TRIM[4]), (y1 + 1, R_TRIM[3]), (y1 + 2, R_TRIM[3]), (y1 + 3, R_TRIM[2]), (y1 + 4, R_TRIM[2]), (y1 + 5, R_TRIM[1])):
+            px.put(x, y, c if x not in (sx0, sx1 - 1) else R_TRIM[1] if x == sx1 - 1 else R_TRIM[3])
+    for x in range(x0 - 9, x1 + 9):
+        for y in range(y1 + 6, ROOM_RAIL):
+            px.put(x, y, R_TRIM[1] if y == y1 + 6 else R_TRIM[2])
+
+
+def room_radiator(px):
+    """A cast iron radiator painted cream, under the window: columns, two feet, a valve on the pipe."""
+    x0, x1, top, bot = 198, 278, 322, ROOM_FLOOR + 1
+    for i, cx in enumerate(range(x0, x1, 6)):
+        m = room_box(cx, top, cx + 5, bot - 5, 2)
+        room_shade(px, m, R_RAD, tfn=lambda x, y, cx=cx: 0.75 - (x - cx) * 0.14 - (y - top) / (bot - top) * 0.15)
+    for y in (top + 8, bot - 12):  # the two rails joining the columns
+        for x in range(x0 + 4, x1 - 2):
+            if not px.has(x, y):
+                px.put(x, y, R_RAD[1])
+    for fx in (x0 + 2, x1 - 7):
+        room_rect(px, fx, bot - 5, fx + 4, bot + 4, R_RAD[1])
+        room_rect(px, fx, bot - 5, fx + 1, bot + 4, R_RAD[3])
+    for y in range(bot - 14, bot - 9):  # the valve and its pipe
+        room_rect(px, x1 - 1, y, x1 + 6, y + 1, R_RAD[2] if y > bot - 13 else R_RAD[4])
+    room_rect(px, x1 + 4, bot - 9, x1 + 7, bot + 6, R_RAD[2])
+    room_rect(px, x1 + 4, bot - 9, x1 + 5, bot + 6, R_RAD[4])
+    room_floor_shadow(px, (x0 + x1) / 2, bot + 5, 46, 4, 120)
+
+
+def room_curtain(px, outer, inner_top, inner_tie, inner_bot, top, tie, bot, side):
+    """A curtain gathered on the rod, held back by a tie at `tie`: its inner edge comes in from the window and
+    flares below the tie. `side` -1 = the left curtain (outer edge on the left)."""
+    def inner(y):
+        if y <= tie:
+            u = (y - top) / (tie - top)
+            return inner_top + (inner_tie - inner_top) * (u ** 1.6)
+        u = (y - tie) / (bot - tie)
+        return inner_tie + (inner_bot - inner_tie) * math.sin(u * math.pi / 2)
+    m = {}
+    for y in range(top, bot + 1):
+        a, b = sorted((outer, inner(y)))
+        hem = (bot - y) < 3
+        for x in range(math.floor(a), math.ceil(b)):
+            u = (x - a) / max(1.0, b - a)
+            m[(x, y)] = (u, hem)
+    for (x, y), (u, hem) in m.items():
+        folds = math.sin(u * math.pi * (6 if y < tie else 5))
+        t = 0.55 + 0.32 * folds - (0.1 if side > 0 else 0) - 0.18 * u * (1 if side > 0 else -1) * 0.5
+        if abs(y - tie) < 10:  # bunched at the tie: deeper folds
+            t += 0.1 * math.sin(u * math.pi * 11)
+        c = room_dither(R_CURTAIN[1:6], t, x, y, 0.6)
+        if (x + 1, y) not in m and side > 0 or (x - 1, y) not in m and side < 0:
+            c = R_CURTAIN[1]  # the outer edge, turned to the wall
+        elif (x - side, y) not in m:
+            c = R_CURTAIN[2] if side > 0 else R_CURTAIN[4]
+        if hem:
+            c = R_CURTAIN[1] if (bot - y) == 0 else mix(c, R_CURTAIN[1], 0.4)
+        px.put(x, y, c)
+    # the tie-back: a rose cord round the bunch, a tassel hanging off it
+    a, b = sorted((outer, inner(tie)))
+    for x in range(math.floor(a) - 1, math.ceil(b) + 1):
+        for dy, c in ((-2, R_RUGRED[3]), (-1, R_RUGRED[2]), (0, R_RUGRED[2]), (1, R_RUGRED[1])):
+            px.put(x, tie + dy, c)
+    tx = round(b if side < 0 else a) + (1 if side < 0 else -2)
+    for y in range(tie + 1, tie + 9):
+        for dx in range(-1, 2 if y > tie + 4 else 1):
+            px.put(tx + dx, y, R_RUGRED[3] if dx < 0 else R_RUGRED[1] if y > tie + 6 else R_RUGRED[2])
+
+
+def room_rod(px, x0, x1, y):
+    for x in range(x0, x1):
+        px.put(x, y, R_BRASS[4])
+        px.put(x, y + 1, R_BRASS[2])
+        px.put(x, y + 2, R_BRASS[1])
+    for cx in (x0 - 2, x1 + 1):
+        room_shade(px, room_ellipse(cx + 0.5, y + 1.5, 3, 3), R_BRASS)
+    for bx in (x0 + 8, x1 - 9):  # brackets into the wall
+        room_rect(px, bx, y + 3, bx + 2, y + 7, R_BRASS[1])
+
+
+# ---- the corner plant: a monstera in a terracotta pot, between the window and the tank
+
+
+def room_leaf(px, bx, by, ang, L, Wd, slits, seed):
+    """A monstera leaf from its base (bx, by) toward `ang` (radians, 0 = right, -pi/2 = up): heart-shaped,
+    split from the edge in; lit on the upper half, a pale midrib."""
+    ca, sa = math.cos(ang), math.sin(ang)
+    r2 = random.Random(seed)
+    cuts = sorted(r2.uniform(0.25, 0.85) for _ in range(slits))
+    m = {}
+    R = L + Wd + 2
+    for y in range(math.floor(by - R), math.ceil(by + R)):
+        for x in range(math.floor(bx - R), math.ceil(bx + R)):
+            dx, dy = x + 0.5 - bx, y + 0.5 - by
+            u, v = dx * ca + dy * sa, -dx * sa + dy * ca
+            if u < -2 or u > L:
+                continue
+            un = max(0.0, u) / L
+            half = Wd * math.sin(math.pi * min(1.0, un * 0.92 + 0.08)) ** 0.7
+            if u < 3:
+                half *= 0.6 + 0.4 * (u + 2) / 5  # the heart's notch at the stem
+            if abs(v) > half:
+                continue
+            cut = any(abs(un - c - abs(v) / L * 0.35) < 0.022 and abs(v) > half * 0.25 for c in cuts)
+            if cut:
+                continue
+            m[(x, y)] = (un, v / max(1.0, half))
+    for (x, y), (un, vn) in m.items():
+        e = lambda a, b: (x + a, y + b) not in m
+        up = -vn * (1 if ca >= 0 else -1)  # which half faces up
+        t = 0.5 + 0.28 * up + 0.1 * (1 - un) + (0.0 if abs(vn) < 0.12 else 0)
+        c = room_dither(R_LEAF[1:5], t, x, y, 0.5)
+        if abs(vn) < 0.1 and un < 0.9:
+            c = R_LEAF[4]
+        if e(1, 0) or e(0, 1):
+            c = R_LEAF[0] if t < 0.6 else R_LEAF[1]
+        elif e(-1, 0) or e(0, -1):
+            c = R_LEAF[4] if t > 0.4 else R_LEAF[2]
+        px.put(x, y, c)
+
+
+def room_plant(px):
+    cx, rim, bot = 334, 362, ROOM_FLOOR + 8
+    stems = [(-2.15, 44, 15, 3, 1), (-1.75, 50, 16, 4, 2), (-1.35, 46, 15, 3, 3), (-2.55, 34, 12, 2, 4),
+             (-0.95, 36, 12, 2, 5), (-1.55, 30, 11, 2, 6), (-2.85, 26, 10, 1, 7)]
+    pts = []
+    for ang, L, Wd, slits, seed in stems:
+        sl = {1: 46, 2: 64, 3: 50, 4: 36, 5: 30, 6: 70, 7: 24}[seed]
+        ex, ey = cx + math.cos(ang) * sl * 0.9, rim + math.sin(ang) * sl
+        pts.append((ex, ey, ang, L, Wd, slits, seed))
+        line_px(px, bez((cx + (seed % 3 - 1) * 3, rim + 2), (cx + math.cos(ang) * sl * 0.3, rim - sl * 0.6), (ex, ey), 30),
+                lambda t: R_LEAF[2] if t < 0.7 else R_LEAF[3])
+    for ex, ey, ang, L, Wd, slits, seed in sorted(pts, key=lambda p: -p[6]):
+        room_leaf(px, ex, ey, ang + (0.25 if ang > -1.57 else -0.25), L, Wd, slits, seed)
+    # pot: a tapered terracotta pot with a rolled rim
+    room_floor_shadow(px, cx + 2, bot, 22, 3, 140)
+    body = set()
+    for y in range(rim + 5, bot):
+        hw = 15 - (y - rim - 5) * 4 / (bot - rim - 5)
+        for x in range(math.floor(cx - hw), math.ceil(cx + hw)):
+            body.add((x, y))
+    room_shade(px, body, R_TERRA, tfn=lambda x, y: 0.8 - (x - cx + 15) / 30 * 0.6)
+    room_shade(px, room_box(cx - 17, rim, cx + 17, rim + 6, 2), R_TERRA, tfn=lambda x, y: 0.85 - (x - cx + 17) / 34 * 0.5)
+    for x in range(cx - 15, cx + 15):  # soil at the mouth
+        px.put(x, rim, R_DARKWOOD[1] if x % 3 else R_DARKWOOD[2])
+
+
+# ---- the far left: a framed jelly print over a little side table with books and a mug
+
+
+def room_frame(px, x0, y0, x1, y1, mat=4):
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            d = min(x - x0, x1 - 1 - x, y - y0, y1 - 1 - y)
+            if d < 4:
+                c = R_DARKWOOD[[1, 4, 3, 2][d]] if (x - x0 < 4 or y - y0 < 4) else R_DARKWOOD[[0, 2, 2, 1][d]]
+                px.put(x, y, c)
+            elif d < 4 + mat:
+                px.put(x, y, R_TRIM[1] if d == 4 and (x - x0 == 4 or y - y0 == 4) else R_TRIM[3])
+    for x in range(x0 + 2, x1 + 2):  # its shadow on the wall
+        px.over(x, y1, hx("1a0c10", 90))
+    for y in range(y0 + 2, y1 + 1):
+        px.over(x1, y, hx("1a0c10", 90))
+    return x0 + 4 + mat, y0 + 4 + mat, x1 - 4 - mat, y1 - 4 - mat
+
+
+def room_jelly_print(px):
+    ax, ay, bx, by = room_frame(px, 56, 132, 128, 226)
+    for y in range(ay, by):
+        for x in range(ax, bx):
+            px.put(x, y, room_dither(ramp("0e1a3a", "14275a", "1d3a78", "2a5694"), 0.15 + (y - ay) / (by - ay) * 0.7, x, y, 0.9))
+    cx, cy = (ax + bx) / 2, ay + 22
+    bell = {(x, y) for x, y in room_ellipse(cx, cy, 16, 13) if y <= cy + 2}
+    for x, y in bell:
+        t = 0.75 - (x - cx + 16) / 32 * 0.3 - (y - cy + 13) / 15 * 0.2
+        px.put(x, y, room_dither(ramp("8a3a8c", "c860b4", "f29ad6", "ffc8ec"), t, x, y, 0.5))
+    for x, y in room_ellipse(cx, cy - 2, 6, 4):  # the four-leaf gonads
+        if (x, y) in bell:
+            px.put(x, y, hx("b8418e"))
+    for k in range(7):  # tentacles
+        tx0 = cx - 13 + k * 4.3
+        line_px(px, [(tx0 + 2 * math.sin((s + k) * 0.6), cy + 3 + s * 2.6) for s in range(14)], hx("f29ad6") if k % 2 else hx("ffc8ec"))
+    r2 = random.Random(5)
+    for _ in range(14):  # bubbles
+        x, y = r2.randrange(ax + 2, bx - 2), r2.randrange(ay + 2, by - 6)
+        if not px.get(x, y) or px.get(x, y)[0] < 60:
+            px.put(x, y, hx("8ab8e8"))
+    for x in range(ax, bx):  # a label strip
+        for y in range(by - 6, by):
+            px.put(x, y, R_TRIM[3] if y > by - 6 else R_TRIM[2])
+    for i in range(ax + 6, bx - 6, 3):
+        px.put(i, by - 3, R_TRIM[1])
+
+
+def room_side_table(px):
+    x0, x1, top = 66, 128, 336
+    room_floor_shadow(px, (x0 + x1) / 2, ROOM_FLOOR + 10, 34, 3, 120)
+    room_shade(px, room_box(x0, top, x1, top + 6, 1), R_DARKWOOD, tfn=lambda x, y: 0.8 - (y - top) * 0.15)
+    room_rect(px, x0 + 2, top + 6, x1 - 2, top + 9, R_DARKWOOD[1])
+    for lx in (x0 + 5, x1 - 9):
+        for y in range(top + 6, ROOM_FLOOR + 10):
+            for dx in range(4):
+                px.put(lx + dx + (1 if y > ROOM_FLOOR and dx == 3 else 0), y, R_DARKWOOD[[4, 3, 2, 1][dx]])
+    room_rect(px, x0 + 6, top + 28, x1 - 6, top + 31, R_DARKWOOD[2])  # a stretcher
+    # books, flat in a stack, and a mug of tea
+    y = top
+    for w, c in ((40, ramp("1c2a4a", "2c4474", "4a6aa0")), (36, ramp("5a1a1a", "8e2e26", "c2503a")), (38, ramp("2a3a1c", "46602a", "6e8c3c"))):
+        y -= 5
+        bx = x0 + 6 + (40 - w) // 2 + (2 if c[1][0] > 0x80 else 0)
+        for yy in range(y, y + 5):
+            for xx in range(bx, bx + w):
+                px.put(xx, yy, c[0] if xx == bx + w - 1 or yy == y + 4 else c[2] if yy == y else c[1])
+            px.put(bx + w - 2, yy, R_TRIM[3] if y < yy < y + 4 else px.get(bx + w - 2, yy))  # the pages
+    mx, my = x1 - 16, top - 10
+    room_shade(px, room_box(mx, my, mx + 8, top, 1), ramp("4a2c22", "a87a5c", "dcbc94", "f2e2c4", "fff8ea"))
+    for y in range(my + 2, my + 7):
+        px.put(mx + 8 + (1 if my + 3 <= y <= my + 5 else 0), y, R_TRIM[2])
+    room_rect(px, mx + 1, my, mx + 7, my + 1, hx("6a3a1c"))  # tea
+    for i, (sx, sy) in enumerate(((mx + 3, my - 3), (mx + 4, my - 5), (mx + 3, my - 7))):
+        px.put(sx, sy, hx("ffffff", 60 - i * 15))
+
+
+# ---- the right: a floor lamp by the tank, an armchair, a shelf with books, a pothos and a jelly in a jar
+
+
+def room_lamp_shade(on):
+    """The lamp's shade (and, lit, the bulb glowing under it). The host draws the lit one over the room."""
+    px = Px()
+    cx, top, bot = ROOM_LAMP[0], ROOM_LAMP[1] - 40, ROOM_LAMP[1] - 1
+    m = set()
+    for y in range(top, bot + 1):
+        hw = 15 + (y - top) / (bot - top) * 10
+        for x in range(math.floor(cx - hw), math.ceil(cx + hw)):
+            m.add((x, y))
+    rmp = R_SHADE_ON if on else R_SHADE
+    for x, y in m:
+        u = (x - cx) / (15 + (y - top) / (bot - top) * 10)
+        if on:  # lit from inside: brightest low and in the middle, the fabric's weave showing
+            t = 0.35 + 0.5 * (y - top) / (bot - top) + 0.25 * (1 - abs(u)) - 0.08 * ((x // 2) % 2)
+        else:
+            t = 0.62 - 0.45 * u - 0.12 * (y - top) / (bot - top) - 0.06 * ((x // 2) % 2)
+        c = room_dither(rmp[1:6], t, x, y, 0.5)
+        if y in (top, bot):
+            c = rmp[1] if not on else rmp[3]
+        elif y in (top + 1, bot - 1):
+            c = rmp[4] if not on else rmp[5]
+        px.put(x, y, c)
+    if on:
+        for x, y in room_ellipse(cx, bot + 1.5, 7, 2.2):
+            px.put(x, y, R_SHADE_ON[5] if abs(x + 0.5 - cx) < 4 else R_SHADE_ON[4])
+    return px
+
+
+def room_lamp(px):
+    cx, by = ROOM_LAMP[0], ROOM_FLOOR + 12
+    room_floor_shadow(px, cx + 2, by + 1, 18, 3, 140)
+    room_shade(px, {(x, y) for x, y in room_ellipse(cx, by - 1, 13, 3.2) if y <= by}, R_BRASS)
+    for y in range(ROOM_LAMP[1], by - 3):  # the pole, lit on its left
+        px.put(cx - 1, y, R_BRASS[4])
+        px.put(cx, y, R_BRASS[2])
+        px.put(cx + 1, y, R_BRASS[1])
+    for y in range(ROOM_LAMP[1] + 52, ROOM_LAMP[1] + 55):  # a knurled switch on the pole
+        room_rect(px, cx - 2, y, cx + 3, y + 1, R_BRASS[3] if y % 2 else R_BRASS[1])
+    for (x, y), c in room_lamp_shade(False).d.items():
+        px.put(x, y, c)
+
+
+def room_armchair(px):
+    """A rust velvet armchair side on, facing the tank: the arm's scroll toward us, a plaid throw over it."""
+    x0, x1, seat = 700, 828, 312
+    room_floor_shadow(px, (x0 + x1) / 2 + 4, ROOM_FLOOR + 13, 70, 4, 150)
+    for lx in (x0 + 8, x1 - 14):  # tapered wooden legs
+        for y in range(ROOM_FLOOR - 2, ROOM_FLOOR + 13):
+            w = 5 if y < ROOM_FLOOR + 6 else 4
+            for dx in range(w):
+                px.put(lx + dx, y, R_DARKWOOD[[5, 4, 3, 2, 1][dx]])
+    back = room_box(x1 - 34, 252, x1, ROOM_FLOOR + 1, 10)
+    room_shade(px, back, R_CHAIR, tfn=lambda x, y: 0.7 - (x - x1 + 34) / 34 * 0.5 - (y - 252) / 140 * 0.15)
+    for y in range(262, ROOM_FLOOR - 6, 9):  # buttoned tufting on the back
+        for x in range(x1 - 26, x1 - 8, 9):
+            px.put(x + (y // 9) % 2 * 4, y, R_CHAIR[1])
+            px.put(x + (y // 9) % 2 * 4 + 1, y + 1, R_CHAIR[4])
+    pillow = room_box(x1 - 50, seat - 24, x1 - 26, seat + 2, 5)
+    room_shade(px, pillow, ramp("12142c", "1e2448", "2c3a6c", "40548e", "5a74ae", "84a0cc"),
+               tfn=lambda x, y: 0.75 - (x - x1 + 50) / 24 * 0.4 - (y - seat + 24) / 26 * 0.3)
+    base = room_box(x0 + 2, seat + 40, x1 - 4, ROOM_FLOOR + 1, 3)
+    room_shade(px, base, R_CHAIR, tfn=lambda x, y: 0.42 - (x - x0) / (x1 - x0) * 0.2)
+    for x in range(x0 + 4, x1 - 6):  # piping along the skirt
+        px.put(x, seat + 41, R_CHAIR[4])
+    arm = room_box(x0, seat, x1 - 30, seat + 44, 9) | room_ellipse(x0 + 12, seat + 12, 13, 13)
+    room_shade(px, arm, R_CHAIR, tfn=lambda x, y: 0.82 - (y - seat) / 44 * 0.45 - (x - x0) / (x1 - x0) * 0.15)
+    for a in range(0, 330, 12):  # the scroll's spiral seam
+        r = 2 + a / 330 * 8
+        px.put(round(x0 + 12 + math.cos(math.radians(a)) * r), round(seat + 12 + math.sin(math.radians(a)) * r), R_CHAIR[1])
+    # the throw: cream and indigo plaid over the arm, a fringe at the hem
+    tx0, tx1 = x0 + 34, x0 + 74
+    for x in range(tx0, tx1):
+        sag = round(2 * math.sin((x - tx0) / (tx1 - tx0) * math.pi))
+        for y in range(seat - 2 + (0 if x < tx1 - 3 else 1), seat + 62 + sag):
+            check = ((x - tx0) // 6 + (y - seat) // 6) % 2
+            line = (x - tx0) % 12 == 3 or (y - seat) % 12 == 3
+            c = R_RUG[2] if line else R_RUGCREAM[1 + check]
+            if x == tx1 - 1 or x == tx0:
+                c = R_RUGCREAM[0]
+            if y < seat + 1:
+                c = R_RUGCREAM[2]
+            px.put(x, y, c)
+        if x % 2 == 0:
+            for y in range(seat + 62 + sag, seat + 66 + sag):
+                px.put(x, y, R_RUGCREAM[1])
+    for y in range(seat + 1, seat + 62):  # the fold's shadow
+        px.over(tx0 + 1, y, hx("2a1a30", 80))
+
+
+def room_shelf(px):
+    x0, x1, sy = 688, 834, 192
+    for x in range(x0, x1):
+        for y, c in ((sy, R_DARKWOOD[5]), (sy + 1, R_DARKWOOD[4]), (sy + 2, R_DARKWOOD[3]), (sy + 3, R_DARKWOOD[3]),
+                     (sy + 4, R_DARKWOOD[2]), (sy + 5, R_DARKWOOD[1])):
+            px.put(x, y, c if x < x1 - 1 else R_DARKWOOD[1])
+        px.over(x + 2, sy + 6, hx("1a0c10", 100))
+        px.over(x + 2, sy + 7, hx("1a0c10", 50))
+    for bx in (x0 + 12, x1 - 18):  # brackets
+        for i in range(12):
+            for dx in range(max(1, 12 - i)):
+                px.put(bx + dx, sy + 6 + i, R_DARKWOOD[3] if dx == 0 else R_DARKWOOD[2] if dx < 12 - i - 1 else R_DARKWOOD[1])
+    # books, upright, one leaning on the last
+    x = x0 + 6
+    cols = [ramp("1c2a4a", "2c4474", "4a6aa0"), ramp("5a1a1a", "8e2e26", "c2503a"), ramp("2a3a1c", "46602a", "6e8c3c"),
+            ramp("5a3a10", "9a6a1c", "d0a038"), ramp("3a1a3a", "62305e", "8e4e86"), ramp("1c2a4a", "2c4474", "4a6aa0")]
+    for i, (w, h) in enumerate(((6, 24), (5, 21), (7, 26), (5, 19), (6, 23))):
+        c = cols[i]
+        for yy in range(sy - h, sy):
+            for xx in range(x, x + w):
+                px.put(xx, yy, c[2] if xx == x else c[0] if xx == x + w - 1 else c[1])
+        for yy in (sy - h + 3, sy - 4):
+            for xx in range(x + 1, x + w - 1):
+                px.put(xx, yy, R_GOLD[2])
+        x += w
+    lean = 0.42
+    for yy in range(0, 22):
+        for xx in range(6):
+            px.put(round(x + 2 + xx + yy * lean), sy - 1 - yy + round(xx * 0.0), cols[5][2 if xx == 0 else 0 if xx == 5 else 1])
+    # a pothos in a little pot, its vines spilling over the shelf's edge
+    pcx = 762
+    room_shade(px, room_box(pcx - 9, sy - 14, pcx + 9, sy, 2), R_TERRA)
+    room_rect(px, pcx - 10, sy - 15, pcx + 10, sy - 12, R_TERRA[4])
+    room_rect(px, pcx - 10, sy - 13, pcx + 10, sy - 12, R_TERRA[2])
+    r2 = random.Random(9)
+    for vine, (vx, ln, sw) in enumerate(((pcx - 8, 46, -1), (pcx + 6, 34, 1), (pcx - 2, 58, 1), (pcx - 12, 24, -1))):
+        pts = [(vx + sw * 3 * math.sin(i * 0.25) - (2 if i < 4 else 0) * sw, sy - 14 + i * 1.0 + (6 if i > 8 else i * 0.7)) for i in range(ln)]
+        pts = [(x_, min(y_, sy - 14 + i * 1.0 + 6) if i < 9 else sy - 6 + (i - 8)) for i, (x_, y_) in enumerate(pts)]
+        line_px(px, pts, R_LEAF[2])
+        for i in range(2, ln, 4):
+            lx, ly = pts[i]
+            side = 1 if (i // 4) % 2 else -1
+            for dx, dy, c in ((side, 0, R_LEAF[3]), (side * 2, 0, R_LEAF[4]), (side, 1, R_LEAF[2]), (side * 2, -1, R_LEAF[3]), (side * 3, 0, R_LEAF[2])):
+                px.put(round(lx) + dx, round(ly) + dy, c)
+    for i in range(10):  # leaves on top of the pot
+        a = -math.pi / 2 + r2.uniform(-1.2, 1.2)
+        L = r2.uniform(6, 11)
+        line_px(px, [(pcx, sy - 14), (pcx + math.cos(a) * L, sy - 14 + math.sin(a) * L)], R_LEAF[2])
+        ex, ey = pcx + math.cos(a) * L, sy - 14 + math.sin(a) * L
+        for x_, y_ in room_ellipse(ex, ey, 2.6, 2):
+            px.put(x_, y_, R_LEAF[4] if y_ < ey else R_LEAF[3])
+    # a jelly in a jar: glass, a little water, a tiny pink jelly, a cork
+    jx0, jx1, jy0 = 796, 816, sy - 22
+    for y in range(jy0, sy):
+        for x in range(jx0, jx1):
+            edge = x in (jx0, jx1 - 1) or y == sy - 1
+            water = y > jy0 + 5
+            c = hx("d8f0f4", 220) if edge else hx("5ab8d8", 150) if water else hx("cfe8f0", 70)
+            if water and x == jx0 + 2:
+                c = hx("e8fbff", 200)
+            px.put(x, y, c)
+    for x in range(jx0 + 1, jx1 - 1):
+        px.put(x, jy0 + 6, hx("a8e4f4", 220))
+    room_rect(px, jx0 + 2, jy0 - 4, jx1 - 2, jy0 + 1, R_CORK[2])
+    room_rect(px, jx0 + 2, jy0 - 4, jx1 - 2, jy0 - 3, R_CORK[4])
+    jcx, jcy = (jx0 + jx1) / 2, jy0 + 11
+    for x, y in room_ellipse(jcx, jcy, 4.5, 3.5):
+        if y <= jcy:
+            px.put(x, y, hx("ffc8ec") if y < jcy - 1 else hx("f29ad6"))
+    for k in range(3):
+        for i in range(5):
+            px.put(round(jcx - 3 + k * 3 + math.sin(i + k)), round(jcy + 1 + i), hx("f29ad6", 200))
+
+
+def room_seascape(px):
+    """A small framed print over the shelf: a lighthouse on a rock at sea."""
+    ax, ay, bx, by = room_frame(px, 720, 98, 792, 164, mat=3)
+    sea = ay + (by - ay) * 0.62
+    for y in range(ay, by):
+        for x in range(ax, bx):
+            if y < sea:
+                c = room_dither(ramp("8ab8d8", "b0d0e0", "e6e2c8", "f2dca8"), (y - ay) / (sea - ay), x, y, 0.9)
+            else:
+                c = room_dither(ramp("1a3a6a", "2a5a8e", "3a78a8"), 0.8 - (y - sea) / (by - sea) * 0.8, x, y, 0.8)
+                if (x * 3 + y * 7) % 23 == 0:
+                    c = hx("e8f4f8")
+            px.put(x, y, c)
+    lx = ax + (bx - ax) * 0.68
+    for x, y in room_ellipse(lx, sea + 1, 11, 4):
+        if y >= sea - 2:
+            px.put(x, y, R_STONE[2] if x < lx else R_STONE[1])
+    for y in range(round(sea - 22), round(sea - 1)):
+        hw = 3 - (y - sea + 22) / 22 * -1
+        for x in range(math.floor(lx - hw), math.ceil(lx + hw)):
+            band = ((y - round(sea - 22)) // 4) % 2
+            px.put(x, y, (R_ROOF[2] if band else hx("f4eee0")) if x < lx + 1 else (R_ROOF[1] if band else hx("c8c0b0")))
+    room_rect(px, round(lx) - 2, round(sea - 26), round(lx) + 2, round(sea - 22), R_GOLD[3])
+    room_rect(px, round(lx) - 3, round(sea - 28), round(lx) + 3, round(sea - 26), R_ROOF[1])
+
+
+def room_snake_plant(px):
+    cx, bot = 902, ROOM_FLOOR + 9
+    room_floor_shadow(px, cx + 2, bot, 18, 3, 130)
+    r2 = random.Random(21)
+    for i in range(9):
+        bx = cx - 9 + i * 2.2
+        h = r2.uniform(40, 78)
+        lean = r2.uniform(-0.18, 0.18) + (i - 4) * 0.03
+        w = r2.uniform(3.0, 4.2)
+        for s in range(round(h)):
+            y = bot - 18 - s
+            half = w * math.sin(math.pi * min(1, (s / h) * 0.9 + 0.1)) ** 0.5
+            xc = bx + lean * s
+            for x in range(math.floor(xc - half), math.ceil(xc + half)):
+                u = (x + 0.5 - xc) / max(0.5, half)
+                band = (s // 5 + i) % 3 == 0
+                c = R_LEAF[3] if u < -0.3 else R_LEAF[2] if u < 0.4 else R_LEAF[1]
+                if band:
+                    c = mix(c, hx("a8c86a"), 0.35)
+                if abs(u) > 0.85:
+                    c = hx("c8c070") if s > 4 else c  # the yellow edge
+                px.put(x, y, c)
+    body = set()
+    for y in range(bot - 20, bot):
+        hw = 13 - (y - bot + 20) * 0.15
+        for x in range(math.floor(cx - hw), math.ceil(cx + hw)):
+            body.add((x, y))
+    room_shade(px, body, ramp("1a1a24", "2e3040", "4a4e64", "6e748c", "9aa0b8", "c8ccdc"))
+
+
+# ---- the rug, and where the furniture meets the floor
+
+
+def room_rug(px):
+    """An indigo rug with a red and cream border, in front of the tank: its near edge is off the bottom of
+    the screen, its ends slant out toward us."""
+    y0 = ROOM_FLOOR + 10
+    xl, xr = 206, ROOM_W - 70
+    for y in range(y0, LH):
+        dy = y - y0
+        a, b = xl - dy * 1.6, xr + dy * 1.6
+        for x in range(math.floor(a), math.ceil(b)):
+            inl = min(x - a, b - x)
+            depth = dy
+            if inl < 3 or depth < 1:
+                c = R_RUGCREAM[0] if depth == 0 or inl < 1 else R_RUGCREAM[1]
+                if inl < 3 and inl >= 1 and x % 2:
+                    c = R_RUGCREAM[2]  # fringe on the ends
+            elif inl < 6 or depth < 3:
+                c = R_RUGRED[2] if (x + depth) % 4 else R_RUGRED[3]
+            elif inl < 8 or depth < 5:
+                c = R_RUGCREAM[1]
+            else:
+                # the field: rows of little diamonds that spread out toward us (perspective)
+                pitch = 10 + depth * 0.5
+                u = ((x - ROOM_SIDE - LW / 2) / pitch) % 1
+                v = ((depth - 5) / (3 + depth * 0.15)) % 2
+                dia = abs(u - 0.5) * 2 + abs((v % 1) - 0.5) * 2
+                c = R_RUG[3] if dia < 0.6 else R_RUG[1] if dia < 0.8 else R_RUG[2]
+                if dia < 0.25:
+                    c = R_RUGRED[3] if int(v) else R_RUGCREAM[2]
+            if depth < 2:
+                c = mix(c, R_RUG[0], 0.3)
+            px.put(x, y, c)
+
+
+def room_cabinet_floor(px):
+    """The cabinet's own shadow where it meets the floor, both sides (the cabinet covers x TANK..TANK+LW)."""
+    for side, x_edge in ((-1, ROOM_SIDE - 1), (1, ROOM_SIDE + LW)):
+        for y in range(ROOM_FLOOR, LH):
+            for d in range(12):
+                x = x_edge + side * d
+                a = (1 - d / 12) * (0.5 + 0.5 * (y - ROOM_FLOOR) / (LH - ROOM_FLOOR))
+                if bay(x, y) + 0.5 < a * 1.3:
+                    px.over(x, y, (*R_FLOOR[0][:3], round(150 * a)))
+    for side, x_edge in ((-1, ROOM_SIDE - 1), (1, ROOM_SIDE + LW)):  # and up the wall: the tank stands a little in front
+        for y in range(0, ROOM_FLOOR):
+            for d in range(3):
+                px.over(x_edge + side * d, y, hx("120a10", [70, 40, 18][d]))
+
+
+def room_art():
+    """The whole room, the tank's place left empty (the host draws the tank over it anyway)."""
+    px = Px()
+    for y in range(LH):
+        for x in range(ROOM_W):
+            if ROOM_SIDE <= x < ROOM_SIDE + LW:
+                continue
+            px.put(x, y, room_wall(x, y))
+    room_rug(px)
+    room_cabinet_floor(px)
+    room_jelly_print(px)
+    room_side_table(px)
+    room_radiator(px)
+    room_window(px)
+    room_rod(px, ROOM_WIN[0] - 34, ROOM_WIN[2] + 34, ROOM_WIN[1] - 18)
+    room_curtain(px, ROOM_WIN[0] - 32, ROOM_WIN[0] + 4, ROOM_WIN[0] - 14, ROOM_WIN[0] - 4, ROOM_WIN[1] - 16, 236, ROOM_RAIL + 6, -1)
+    room_curtain(px, ROOM_WIN[2] + 32, ROOM_WIN[2] - 4, ROOM_WIN[2] + 14, ROOM_WIN[2] + 4, ROOM_WIN[1] - 16, 236, ROOM_RAIL + 6, 1)
+    room_plant(px)
+    room_lamp(px)
+    room_seascape(px)
+    room_shelf(px)
+    room_armchair(px)
+    room_snake_plant(px)
+    # a little succulent on the sill, always there
+    for x, y in room_box(194, ROOM_WIN[3] - 8, 204, ROOM_WIN[3], 1):
+        px.put(x, y, R_TERRA[3] if x < 197 else R_TERRA[2] if x < 202 else R_TERRA[1])
+    for dx, dy, c in ((-2, -1, 4), (2, -1, 3), (0, -3, 4), (-3, -3, 3), (3, -3, 2), (-1, -5, 5), (1, -5, 4), (0, -6, 5), (-4, -2, 2), (4, -2, 2)):
+        px.put(199 + dx, ROOM_WIN[3] - 8 + dy, R_LEAF[c])
+        px.put(199 + dx + (1 if dx >= 0 else -1) * 0, ROOM_WIN[3] - 8 + dy + 1, R_LEAF[max(1, c - 2)])
+    for y in range(LH):  # nothing of the room shows where the tank stands
+        for x in range(ROOM_SIDE, ROOM_SIDE + LW):
+            px.d.pop((x, y), None)
+    for y in range(ROOM_WIN[1], ROOM_WIN[3]):  # the glass is the host's: clear it (sheen and bars stay)
+        for x in range(ROOM_WIN[0], ROOM_WIN[2]):
+            c = px.get(x, y)
+            if c and c[3] == 255 and not (ROOM_MULLION <= x < ROOM_MULLION + 3 or ROOM_TRANSOM <= y < ROOM_TRANSOM + 3):
+                if not (194 <= x < 206 and y >= ROOM_WIN[3] - 16):
+                    px.d.pop((x, y), None)
+    return px
+
+
+# ---- the sky through the window, by time of day; the moon and the season's things are separate sprites
+
+ROOM_SKIES = {
+    "dawn": ("232250", "3a2e66", "5e3e7c", "8c5288", "c06a84", "e88c7c", "f8b48a", "ffd8a0"),
+    "day": ("2c64b8", "3672c4", "4482d0", "5694da", "6aa8e2", "82bce8", "9ecfee", "bcdff2"),
+    "dusk": ("141638", "1e1e4a", "30265c", "4c2e6a", "763a6e", "a84a62", "d8644e", "f49446"),
+    "night": ("05071a", "070b22", "0a102a", "0d1532", "111a3a", "152042", "1a2648", "1f2c50"),
+}
+# the skyline's colours: far hills, near roofs and trees, lit windows (night only)
+ROOM_SKYLINE = {
+    "dawn": ("6e4e86", "3c2c52", "2a1e3c", None),
+    "day": ("7aa6c8", "4e6a8a", "3a5a4a", None),
+    "dusk": ("4e2c5a", "26183a", "1a1028", "ffb85a"),
+    "night": ("111a36", "0a0f22", "070a18", "ffcf6a"),
+}
+
+
+def room_skyline_masks(w, h):
+    """Hills far off, then roofs with chimneys and a round tree, along the bottom of the window."""
+    hills, near, tree, windows = set(), set(), set(), set()
+    for x in range(w):
+        hy = h - 34 + round(5 * math.sin(x * 0.045 + 1) + 3 * math.sin(x * 0.11))
+        for y in range(hy, h):
+            hills.add((x, y))
+    roofs = [(-4, 30, h - 22, "gable"), (24, 58, h - 16, "flat"), (54, 86, h - 26, "gable"), (84, 108, h - 14, "flat")]
+    for x0, x1, top, kind in roofs:
+        for x in range(x0, x1):
+            u = (x - x0) / (x1 - x0)
+            ry = top + (round(abs(u - 0.5) * 2 * 8) if kind == "gable" else 0)
+            for y in range(ry, h):
+                near.add((x, y))
+        for wx in range(x0 + 5, x1 - 5, 9):
+            for wy in range(top + 11, h - 3, 7):
+                if (wx * 7 + wy) % 3:
+                    windows |= {(wx, wy), (wx + 1, wy), (wx, wy + 1), (wx + 1, wy + 1)}
+    for cx, cy in ((22, h - 26), (76, h - 34)):  # chimneys
+        for y in range(cy, cy + 8):
+            near |= {(cx, y), (cx + 1, y), (cx + 2, y)}
+    for x, y in room_ellipse(46, h - 24, 11, 10) | room_ellipse(40, h - 18, 8, 7) | room_ellipse(53, h - 17, 8, 7):
+        tree.add((x, y))
+    return hills, near, tree, windows - tree
+
+
+def room_sky(phase):
+    x0, y0, x1, y1 = ROOM_WIN
+    w, h = x1 - x0, y1 - y0
+    cols = [hx(c) for c in ROOM_SKIES[phase]]
+    px = Px()
+    for y in range(h):
+        t = min(1.0, (y / (h - 30)) ** (1.25 if phase != "night" else 1.0))
+        for x in range(w):
+            px.put(x, y, cols[shade_index(t, len(cols), x, y, 0.9)])
+    r2 = random.Random(7)
+    if phase == "night":
+        for _ in range(70):
+            x, y = r2.randrange(w), r2.randrange(h - 30)
+            b = r2.random()
+            px.put(x, y, hx("fff6dc") if b > 0.85 else hx("c8d0f0") if b > 0.5 else hx("6a74a8"))
+        for x, y in ((14, 22), (70, 96), (40, 60), (92, 12)):
+            for dx, dy in N4:
+                px.put(x + dx, y + dy, hx("8890c0"))
+            px.put(x, y, hx("ffffff"))
+    else:
+        # clouds: soft heaps, lit from the sun's side
+        lit, mid, dark = {"day": ("ffffff", "e2eef8", "b4c8e0"), "dawn": ("ffd8b4", "e49a9a", "8a5a86"),
+                          "dusk": ("ffb070", "b05a6a", "4a2a5a")}[phase]
+        for cx, cy, s in ((26, 34, 1.0), (78, 70, 0.8), (40, 104, 0.6)):
+            puffs = [(cx + dx * s, cy + dy * s, r * s) for dx, dy, r in ((-10, 2, 6), (-3, -2, 8), (6, 0, 7), (13, 3, 5))]
+            m = set()
+            for px_, py_, r in puffs:
+                m |= {(x, y) for x, y in room_ellipse(px_, py_, r * 1.2, r * 0.8) if y <= cy + 3 * s}
+            for x, y in m:
+                if not (0 <= x < w and 0 <= y < h):
+                    continue
+                under = (x, y + 2) not in m
+                over = (x, y - 2) not in m
+                c = dark if under else lit if over else mid
+                if phase == "dusk":
+                    c = lit if under else dark if over else mid  # lit from below by the low sun
+                px.put(x, y, hx(c))
+        if phase in ("dawn", "dusk"):
+            sx, sy = (24, h - 40) if phase == "dawn" else (78, h - 42)
+            for x, y in room_ellipse(sx, sy, 9, 9):
+                d = math.hypot(x + 0.5 - sx, y + 0.5 - sy)
+                if 0 <= x < w and 0 <= y < h:
+                    px.put(x, y, hx("fffbe0") if d < 6 else hx("ffd884") if d < 8 else hx("ffae5a"))
+    hills, near, tree, windows = room_skyline_masks(w, h)
+    far, roof, leaf, lamp = ROOM_SKYLINE[phase]
+    for x, y in hills:
+        if 0 <= x < w:
+            px.put(x, y, mix(hx(far), cols[-1], 0.25 if (x + y) % 2 else 0.1))
+    for x, y in near:
+        if 0 <= x < w:
+            px.put(x, y, hx(roof))
+    for x, y in tree:
+        if 0 <= x < w:
+            px.put(x, y, hx(leaf) if (x + y) % 5 else mix(hx(leaf), hx(roof), 0.5))
+    if lamp:
+        for x, y in windows:
+            if 0 <= x < w and (x, y) in near:
+                px.put(x, y, hx(lamp))
+    if phase == "day":
+        for x, y in near:  # sunlit roof tops
+            if 0 <= x < w and (x, y - 1) not in near:
+                px.put(x, y, hx("8aa4c0"))
+    return px
+
+
+def room_moon(r, rmp, face=False):
+    """A round moon, origin = its middle: craters, lit from the upper left."""
+    px = Px()
+    m = room_ellipse(0, 0, r, r)
+    room_shade(px, m, rmp, edge=False, tfn=lambda x, y: 0.82 - (x + r) / (2 * r) * 0.45 - (y + r) / (2 * r) * 0.3)
+    for cx, cy, cr in ((-0.3, -0.25, 0.22), (0.3, 0.25, 0.18), (0.15, -0.4, 0.12), (-0.25, 0.4, 0.14)):
+        for x, y in room_ellipse(cx * r, cy * r, cr * r, cr * r):
+            if (x, y) in m:
+                px.put(x, y, rmp[1])
+    return px
+
+
+def room_bats():
+    px = Px()
+    for bx, by, s in ((0, 0, 1), (16, 9, 0), (7, 18, 0)):
+        rows = ["#.......#", "##.###.##", ".#######.", "...#.#..."] if s else ["#...#", ".###.", "..#.."]
+        for j, row in enumerate(rows):
+            for i, ch in enumerate(row):
+                if ch == "#":
+                    px.put(bx + i, by + j, hx("140a1e"))
+    return px
+
+
+# what each season adds to the room: sprite name -> (art, its origin's room position, when it shows). The host
+# draws `when` = "always", "night" (dusk and night) or "sky" (in the window, dusk and night). Winter: a row here.
+ROOM_SEASONS = {
+    "halloween": {
+        "hw_moon": (lambda: room_moon(11, ramp("6a2408", "b4480c", "e2701a", "f89a38", "ffc46a", "ffe2a0")), ROOM_MOON, "sky"),
+        "hw_bats": (room_bats, (ROOM_MOON[0] - 17, ROOM_MOON[1] - 5), "sky"),  # one crossing the moon
+        "hw_pumpkin": (lambda: hw_pumpkin(9, 7, "mid"), ROOM_SILL, "always"),
+    },
+}
+
+
+def room_sprites():
+    """name -> (Px in room space, top-left), plus each season's sprites as name -> (Px, top-left, season, when)."""
+    out = {"room": (room_art(), None), "tile": (room_tile(), None), "lamp_on": (room_lamp_shade(True), None),
+           "moon": (room_moon(7, ramp("4a5274", "8a92b0", "c8cee0", "e8ecf4", "fbfcff", "ffffff")), ROOM_MOON)}
+    for phase in ROOM_SKIES:
+        out[f"sky_{phase}"] = (room_sky(phase), (ROOM_WIN[0], ROOM_WIN[1]))
+    return out
+
+
+def room_pack(contract):
+    """public/sprites/room.json: every room sprite as a PNG (base64) placed in room space, the layout the host
+    lights it by, and contract.room (the file, a content hash for the URL, its size)."""
+    sprites = {}
+
+    def add(name, px, at, extra=None):
+        x0, y0, x1, y1 = px.bbox()
+        ox, oy = at if at else (0, 0)
+        png = png_bytes(x1 - x0 + 1, y1 - y0 + 1, {(x - x0, y - y0): c for (x, y), c in px.d.items()})
+        sprites[name] = {"x": ox + x0, "y": oy + y0, "png": base64.b64encode(png).decode(), **(extra or {})}
+
+    for name, (px, at) in room_sprites().items():
+        add(name, px, at)
+    for season, items in ROOM_SEASONS.items():
+        for name, (art, at, when) in items.items():
+            add(name, art(), at, {"season": season, "when": when})
+    layout = {
+        "side": ROOM_SIDE, "w": ROOM_W, "h": LH, "tile": ROOM_TILE, "floor": ROOM_FLOOR,
+        "window": {"x0": ROOM_WIN[0], "y0": ROOM_WIN[1], "x1": ROOM_WIN[2], "y1": ROOM_WIN[3]},
+        "lamp": {"x": ROOM_LAMP[0], "y": ROOM_LAMP[1]}, "sill": {"x": ROOM_SILL[0], "y": ROOM_SILL[1] - 8},
+        "tank": {"x0": ROOM_SIDE, "x1": ROOM_SIDE + LW, "y0": 0, "y1": LH},
+    }
+    data = json.dumps({"layout": layout, "sprites": sprites}, separators=(",", ":")).encode()
+    (ROOT / "public" / "sprites" / "room.json").write_bytes(data)
+    contract["room"] = {"file": "sprites/room.json", "v": hashlib.sha1(data).hexdigest()[:10], "bytes": len(data)}
+    return sprites
+
+
+# ---- end room ----
+
+
 # ---------------------------------------------------------------- build the scene (back to front)
 
 btf = []    # screen space, back to front
@@ -7618,6 +8551,7 @@ for group, members in sorted(packs.items()):
     contract["assetGroups"][group] = {"file": f"sprites/{group}.json", "v": hashlib.sha1(data).hexdigest()[:10],
                                       "sprites": len(members), "bytes": len(data)}
 print("groups: " + ", ".join(f"{g} {a['sprites']} ({a['bytes'] // 1024} KB)" for g, a in contract["assetGroups"].items()))
+room_pack(contract)  # ---- room ---- public/sprites/room.json, for wide screens
 (ROOT / "src" / "contract.json").write_text(json.dumps(contract, indent=1))
 
 

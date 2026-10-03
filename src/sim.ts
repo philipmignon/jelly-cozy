@@ -374,6 +374,8 @@ export interface Save {
   requests?: DailyRequests;
   /** v13 (optional): keepsakes earned and the facts the journal can't tell (./keepsakes.ts); absent until first evaluated */
   keep?: KeepSave;
+  /** v15 (optional): decorations put away in the drawer (owned, not in the tank), DECOR_N long; absent = every owned one is placed */
+  stored?: boolean[];
 }
 
 // ---------------------------------------------------------------- state
@@ -518,6 +520,10 @@ export interface State {
   decorX: number[];
   /** decoration being arranged, -1 none */
   lifted: number;
+  /** v15: decorations put away (owned, kept in the drawer, not in the tank), DECOR_N long */
+  stored: boolean[];
+  /** v15: the put-away drawer that shows while a decoration is carried: eased in 0..1, and the finger over it */
+  drawer: { e: number; hot: boolean };
   helpers: boolean[];
   snail: Snail;
   shrimp: Walker;
@@ -861,6 +867,7 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
     });
   }
   const ownedIn = Array.isArray(raw.owned) ? raw.owned : [];
+  const owned = Array.from({ length: DECOR_N }, (_, i) => ownedIn[i] === true);
   const helpersIn = Array.isArray(raw.helpers) ? raw.helpers : [];
   const decorIn = Array.isArray(raw.decorX) ? raw.decorX : [];
   const foods = ownedList(raw.foods, FOOD_KINDS);
@@ -875,7 +882,7 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
     spots: toSaveSpots(spots),
     night: raw.night === true,
     lamp: lampOf(raw.lamp),
-    owned: Array.from({ length: DECOR_N }, (_, i) => ownedIn[i] === true),
+    owned,
     helpers: Array.from({ length: HELPER_N }, (_, i) => helpersIn[i] === true),
     decorX: DECOR.map((d, n) => decorClampX(n, finite(decorIn[n], d.x), tier)),
     pearlDay: typeof raw.pearlDay === "string" && DAY_RE.test(raw.pearlDay) ? raw.pearlDay : "",
@@ -888,6 +895,7 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
     theme: themeOf(raw.theme, themes),
     ...requestsField(requestsOf(raw.requests)),
     ...keepField(keepOf(raw.keep)),
+    ...storedField(storedOf(raw.stored, owned)),
   };
 }
 
@@ -895,6 +903,10 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
 const requestsField = (r: DailyRequests | null): { requests?: DailyRequests } => (r ? { requests: copyRequests(r) } : {});
 /** v13: the optional `keep` save field: only there once keepsakes have been evaluated. */
 const keepField = (k: KeepSave | null): { keep?: KeepSave } => (k ? { keep: copyKeep(k) } : {});
+/** v15: which owned decorations a save has put away (missing or damaged: none; only owned ones can be). */
+const storedOf = (raw: unknown, owned: readonly boolean[]) => Array.from({ length: DECOR_N }, (_, i) => owned[i] === true && Array.isArray(raw) && raw[i] === true);
+/** v15: the optional `stored` save field: only there while something is put away. */
+const storedField = (st: readonly boolean[]): { stored?: boolean[] } => (st.some(Boolean) ? { stored: [...st] } : {});
 
 // ---------------------------------------------------------------- day and night
 
@@ -1033,7 +1045,7 @@ export function awaySummary(before: Save, after: Save): AwaySummary | null {
   if (before.murk < 0.5 && after.murk >= 0.5) picks.push([3, "The water got cloudy."]);
   else if (before.helpers[SNAIL] && before.murk > SNAIL_FLOOR && after.murk <= before.murk - 0.1) picks.push([4, "The snail cleaned the glass."]);
   const today = dayKey(after.lastSeen);
-  if (after.owned[CLAM] && after.pearlDay !== today && dayKey(before.lastSeen) !== today) picks.push([2, "A pearl is waiting in the clam."]);
+  if (after.owned[CLAM] && after.stored?.[CLAM] !== true && after.pearlDay !== today && dayKey(before.lastSeen) !== today) picks.push([2, "A pearl is waiting in the clam."]);
   if (!picks.length) {
     const names = after.slots.filter((j): j is SaveJelly => j !== null).map((j) => j.name);
     picks.push([5, names.length === 1 ? `${names[0]} drifted about.` : "The jellies drifted about."]);
@@ -1236,6 +1248,8 @@ export function createState(save: Save, rand: () => number = Math.random, opts: 
     tab: 0,
     decorX: DECOR.map((d, n) => decorClampX(n, save.decorX?.[n] ?? d.x, tier)),
     lifted: -1,
+    stored: storedOf(save.stored, save.owned),
+    drawer: { e: 0, hot: false },
     helpers,
     snail: newSnail(rand, 0, world),
     shrimp: newShrimp(),
@@ -1301,6 +1315,7 @@ export function toSave(s: State, now: number): Save {
     theme: s.theme,
     ...requestsField(s.requests),
     ...keepField(s.keep),
+    ...storedField(storedOf(s.stored, s.owned)),
   };
 }
 
@@ -1592,7 +1607,7 @@ export function sprinkle(s: State, x: number, y: number, kind?: FoodKind): numbe
   if (n > 0) pour.last = s.t;
   // v12: pellets sprinkled by a decoration count towards a "sprinkle by the castle" request
   if (n > 0 && s.requestsOn)
-    s.owned.forEach((o, d) => o && Math.abs(x - (s.decorX[d] ?? DECOR[d]!.x)) <= SPRINKLE_NEAR && requestDeed(s, { kind: "sprinkle", decor: d, n }, s.queued));
+    s.owned.forEach((_, d) => placed(s, d) && Math.abs(x - (s.decorX[d] ?? DECOR[d]!.x)) <= SPRINKLE_NEAR && requestDeed(s, { kind: "sprinkle", decor: d, n }, s.queued));
   return n;
 }
 
@@ -1789,10 +1804,11 @@ export function closeShop(s: State): void {
 
 /**
  * "bought": paid for (a theme is applied straight away); "selected" (v11): an owned theme was picked again
- * (no charge; the host should persist and play its "ui" sound); "owned": nothing to do (owned decor, helper,
- * food, a tank already that big, or the theme already in use).
+ * (no charge; the host should persist and play its "ui" sound); "owned": nothing to do (a helper, food, a tank
+ * already that big, or the theme already in use). v15: an owned decoration's card puts it away ("putAway") or, if
+ * it's in the drawer, places it again ("placed"): no charge, the host persists. The shop stays open for both.
  */
-export type BuyResult = "bought" | "cantAfford" | "tankFull" | "owned" | "needsMedium" | "needsLarge" | "selected" | "keepsake";
+export type BuyResult = "bought" | "cantAfford" | "tankFull" | "owned" | "needsMedium" | "needsLarge" | "selected" | "keepsake" | "putAway" | "placed";
 
 /** A unique name for a new jelly. */
 const newName = (s: State) => pickName(jellies(s).map((j) => j.name), s.rand());
@@ -1887,7 +1903,7 @@ export function buy(s: State, i: number): BuyResult {
     upgradeTank(s, item.tier);
     return "bought";
   }
-  if (item.kind === "decor" && s.owned[item.d]) return "owned";
+  if (item.kind === "decor" && s.owned[item.d]) return putAway(s, item.d) ? "putAway" : placeDecor(s, item.d) ? "placed" : "owned";
   if (item.kind === "helper" && s.helpers[item.h]) return "owned";
   if (item.kind === "food" && s.foods[item.f]) return "owned";
   if (item.kind === "polyp" && item.needTier !== undefined && s.tier < item.needTier) return item.needTier >= 2 ? "needsLarge" : "needsMedium";
@@ -1897,9 +1913,11 @@ export function buy(s: State, i: number): BuyResult {
     addPolyp(s, item.k);
   } else {
     if (item.kind === "decor") {
-      // v14: the bubbler is wide and the small tank is crowded: it lands on the open sand with the most room
-      if (item.d === BUBBLER) s.decorX[BUBBLER] = clearSpotFor(s, BUBBLER);
+      // v14: the bubbler is wide and the small tank is crowded: it lands on the open sand with the most room.
+      // v15: every decoration does (its own spot when that's free)
+      s.decorX[item.d] = clearSpotFor(s, item.d);
       s.owned[item.d] = true;
+      s.stored[item.d] = false;
     }
     else if (item.kind === "food") s.foods[item.f] = true;
     else {
@@ -1969,12 +1987,15 @@ export function renameJelly(s: State, slot: number, name: string): boolean {
 /** Base y of decoration n where it stands now. */
 export const decorBaseY = (s: State, n: number) => decorY(n, s.decorX[n] ?? DECOR[n]!.x);
 
-/** The owned decoration under (x, y), front-most (lowest base) first; -1 if none. */
+/** v15: is decoration n in the tank (owned and not put away)? Everything that sees the sand asks this, not `owned`. */
+export const placed = (s: State, n: number) => s.owned[n] === true && s.stored[n] !== true;
+
+/** The placed decoration under (x, y), front-most (lowest base) first; -1 if none. */
 export function decorAt(s: State, x: number, y: number): number {
   let best = -1;
   let bestKey = -Infinity;
   for (let n = 0; n < DECOR_N; n++) {
-    if (!s.owned[n]) continue;
+    if (!placed(s, n)) continue;
     const d = DECOR[n]!;
     const bx = s.decorX[n]!;
     const by = decorBaseY(s, n);
@@ -1989,35 +2010,114 @@ export function decorAt(s: State, x: number, y: number): number {
   return best;
 }
 
-/** Pick up an owned decoration to arrange it. Returns false (and does nothing) if it isn't owned. */
+/** Pick up a placed decoration to arrange it. Returns false (and does nothing) if it isn't in the tank. */
 export function liftDecor(s: State, n: number): boolean {
-  if (!s.owned[n]) return false;
+  if (!placed(s, n)) return false;
   s.lifted = n;
   s.dragX = null;
+  s.drawer.hot = false;
   return true;
 }
 
 /** Slide decoration n to world x (clamped inside the tank's glass); its y follows the sand. */
 export function moveDecor(s: State, n: number, x: number): void {
-  if (!s.owned[n] || !Number.isFinite(x)) return;
+  if (!placed(s, n) || !Number.isFinite(x)) return;
   s.decorX[n] = decorClampX(n, x, s.tier);
 }
 
 /**
  * Drag the lifted decoration with the finger at artboard (screen) x. Near either edge of the
  * water the camera scrolls that way (up to 420 px/s) and the decoration rides along under the
- * finger, so it can be carried across the whole tank.
+ * finger, so it can be carried across the whole tank. v15: with the finger's y too, over the
+ * put-away drawer (overDrawer) the decoration stays where it was and dropDecor() puts it away.
  */
-export function moveDecorScreen(s: State, n: number, screenX: number): void {
-  if (!s.owned[n] || !Number.isFinite(screenX)) return;
-  if (s.lifted === n) s.dragX = screenX;
+export function moveDecorScreen(s: State, n: number, screenX: number, screenY?: number): void {
+  if (!placed(s, n) || !Number.isFinite(screenX)) return;
+  const lifted = s.lifted === n;
+  s.drawer.hot = lifted && screenY !== undefined && overDrawer(screenX, screenY);
+  if (s.drawer.hot) {
+    s.dragX = null; // no edge scrolling while it hangs over the drawer
+    return;
+  }
+  if (lifted) s.dragX = screenX;
   moveDecor(s, n, screenToWorld(s, screenX));
 }
 
-export function dropDecor(s: State): void {
+/**
+ * Let go of the lifted decoration: "stored" if it was over the drawer (it's put away), "placed" if it was
+ * set down on the sand, null if nothing was lifted.
+ */
+export function dropDecor(s: State): "stored" | "placed" | null {
+  const n = s.lifted;
+  const into = s.drawer.hot;
   s.lifted = -1;
   s.dragX = null;
+  s.drawer.hot = false;
+  if (n < 0) return null;
+  return into && putAway(s, n) ? "stored" : "placed";
 }
+
+// ---- put away (v15) ----
+
+/** The drawer's drop box while a decoration is carried (SCREEN, artboard units) and how far it slides up (contract `store`). */
+export const DRAWER = (() => {
+  const o = (K as unknown as { store?: { x?: number; y?: number; w?: number; h?: number; slide?: number } }).store ?? {};
+  return { x: o.x ?? 216, y: o.y ?? 1050, w: o.w ?? 288, h: o.h ?? 234, slide: o.slide ?? 24 };
+})();
+/** Is a SCREEN point over the put-away drawer? */
+export const overDrawer = (x: number, y: number) => x >= DRAWER.x && x <= DRAWER.x + DRAWER.w && y >= DRAWER.y && y <= DRAWER.y + DRAWER.h;
+/** the drawer slides in and out over this long, s */
+const DRAWER_TIME = 0.18;
+/** decorations overlapping by less than this (artboard px) don't count as in each other's way */
+const OVERLAP_MIN = 2 * P;
+
+/**
+ * Put decoration n away in the drawer: still owned (a keepsake too), just not in the tank. Returns false if it
+ * isn't in the tank. Anything about it in the water stops: the pearl hides with the clam, the bubbler's column stops.
+ */
+export function putAway(s: State, n: number): boolean {
+  if (!placed(s, n)) return false;
+  if (s.lifted === n) {
+    s.lifted = -1;
+    s.dragX = null;
+    s.drawer.hot = false;
+  }
+  s.stored[n] = true;
+  return true;
+}
+
+/**
+ * Take decoration n out of the drawer: it goes where there's room (clearSpotFor: its own spot if that's free) with a
+ * sparkle. Returns false if it isn't owned or isn't put away.
+ */
+export function placeDecor(s: State, n: number): boolean {
+  if (!s.owned[n] || !s.stored[n]) return false;
+  s.stored[n] = false;
+  s.decorX[n] = clearSpotFor(s, n);
+  const d = DECOR[n]!;
+  s.fx = { x: s.decorX[n]!, y: decorBaseY(s, n) - d.h / 2, t0: s.t };
+  return true;
+}
+
+/** Decorations owned and put away, by index. */
+export const storedDecor = (s: State): number[] => s.stored.flatMap((st, n) => (st && s.owned[n] ? [n] : []));
+
+/** v15: the placed decorations the lifted one overlaps now (their outlines light up), [] when nothing is lifted. */
+export function decorOverlaps(s: State): number[] {
+  const n = s.lifted;
+  if (n < 0 || !placed(s, n) || s.drawer.hot) return [];
+  const x = s.decorX[n]!;
+  const w = DECOR[n]!.w;
+  const out: number[] = [];
+  for (let m = 0; m < DECOR_N; m++) {
+    if (m === n || !placed(s, m)) continue;
+    const gap = Math.abs(x - s.decorX[m]!) - (w + DECOR[m]!.w) / 2;
+    if (gap < -OVERLAP_MIN) out.push(m);
+  }
+  return out;
+}
+
+// ---- end put away ----
 
 // ---------------------------------------------------------------- daily pearl
 
@@ -2029,7 +2129,7 @@ export function dayKey(ms: number): string {
 }
 
 /** Today's pearl is in the clam: the clam is owned and today's isn't collected. */
-export const pearlShowing = (s: State) => s.owned[CLAM] === true && s.pearlDay !== dayKey(s.clock);
+export const pearlShowing = (s: State) => placed(s, CLAM) && s.pearlDay !== dayKey(s.clock);
 
 // ---------------------------------------------------------------- daily requests (v12)
 
@@ -2037,9 +2137,9 @@ export const pearlShowing = (s: State) => s.owned[CLAM] === true && s.pearlDay !
 const requestTank = (s: State) => ({
   species: jellies(s).map((j) => j.k),
   foods: s.foods,
-  decor: s.owned,
+  decor: s.owned.map((_, n) => placed(s, n)),
   pearl: pearlShowing(s),
-  bubbler: s.owned[BUBBLER] === true,
+  bubbler: placed(s, BUBBLER),
 });
 
 /** Plan today's requests if the day has turned (or none were planned yet). Unfinished ones from another day just go. */
@@ -2083,10 +2183,12 @@ export function requests(s: State): { day: string; items: (Request & { text: str
 
 // ---------------------------------------------------------------- keepsakes (v13)
 
-/** Milestone m's reward: its decoration goes in where it was last arranged (its spot), or its theme is owned. Returns the decoration (-1: a theme). */
+/** Milestone m's reward: its decoration goes in where there's room (v15: clearSpotFor), or its theme is owned. Returns the decoration (-1: a theme). */
 function grantKeepsake(s: State, m: number): number {
   const item = SHOP_ITEMS[MILESTONES[m]?.item ?? -1];
   if (item?.kind === "decor") {
+    // v15: a new one goes where there's room; one already owned (re-granted at every load) stays put, or put away
+    if (!s.owned[item.d]) s.decorX[item.d] = clearSpotFor(s, item.d);
     s.owned[item.d] = true;
     return item.d;
   }
@@ -2351,7 +2453,7 @@ export function exportTank(s: State): string {
     tier: s.tier,
     theme: s.theme,
     helpers: [...s.helpers],
-    decor: s.owned.map((o, n) => (o ? snap(s.decorX[n] ?? DECOR[n]!.x) : null)),
+    decor: s.owned.map((_, n) => (placed(s, n) ? snap(s.decorX[n] ?? DECOR[n]!.x) : null)),
     jellies: s.slots.flatMap((j, slot) =>
       j ? [{ slot, k: j.k, g: j.g, morph: j.morph, trait: j.trait, place: j.g === POLYP ? j.anchor : hasPlace(j.k, j.g) ? j.spot : -1, name: j.name }] : [],
     ),
@@ -2621,7 +2723,7 @@ function calmFor(s: State, j: Jelly): number {
 
 /** The bubbler's column (world): its middle x, the crater it rises from and the surface; null when it isn't owned. */
 export function bubbleColumn(s: State): { x: number; top: number; bottom: number } | null {
-  if (!s.owned[BUBBLER]) return null;
+  if (!placed(s, BUBBLER)) return null;
   const d = DECOR[BUBBLER]!;
   return { x: s.decorX[BUBBLER] ?? d.x, top: K.waterTop, bottom: decorBaseY(s, BUBBLER) - d.h * 0.8 };
 }
@@ -2654,15 +2756,16 @@ const ROOM_ENOUGH = 12;
 type SandRun = { x: number; w: number; tier?: number; cost?: number };
 
 /**
- * v14: where decoration n goes when it arrives (the bubbler, bought): its default spot if nothing's there, else the
- * spot in this tank's width with the most room from the owned decorations, the chest and the season's decor on the
+ * v14: where decoration n goes when it arrives (v15: any decoration bought, a keepsake earned, or one taken out of
+ * the drawer): its default spot if nothing's there, else the spot in this tank's width with the most room from the
+ * placed decorations, the chest and the season's decor on the
  * sand (contract `chest`, seasons.*.sand), the nearest to the default among those with room enough. Where nothing
  * has room (a small tank fills up), an overlap costs more the bigger the thing: the chest most, pumpkins and the
  * rocks in front of the sand outside OPEN_SANDS least.
  */
 export function clearSpotFor(s: State, n: number): number {
   const d = DECOR[n]!;
-  const taken: SandRun[] = s.owned.flatMap((o, m) => (o && m !== n ? [{ x: s.decorX[m] ?? DECOR[m]!.x, w: DECOR[m]!.w }] : []));
+  const taken: SandRun[] = s.owned.flatMap((_, m) => (placed(s, m) && m !== n ? [{ x: s.decorX[m] ?? DECOR[m]!.x, w: DECOR[m]!.w }] : []));
   const k = K as unknown as { chest?: SandRun; seasons?: Record<string, { sand?: SandRun[] }> };
   if (k.chest) taken.push({ ...k.chest, cost: 4 });
   if (s.event) for (const r of k.seasons?.[s.event]?.sand ?? []) if ((r.tier ?? 0) <= s.tier) taken.push({ ...r, cost: 0.5 });
@@ -2711,7 +2814,7 @@ export function clearSpotFor(s: State, n: number): number {
 function hide(s: State, j: Jelly, fx: number, fy: number): void {
   const b = geomIn(s, j.k, j.g).bounds;
   const spots: { x: number; y: number }[] = [];
-  s.owned.forEach((o, n) => o && spots.push({ x: s.decorX[n] ?? DECOR[n]!.x, y: decorBaseY(s, n) }));
+  s.owned.forEach((_, n) => placed(s, n) && spots.push({ x: s.decorX[n] ?? DECOR[n]!.x, y: decorBaseY(s, n) }));
   POLYP_ANCHORS.forEach((a) => a.tier <= s.tier && spots.push(a));
   let best: { x: number; y: number } | null = null;
   let bestD = Infinity;
@@ -3152,6 +3255,9 @@ function stepView(s: State, dt: number, events: SimEvent[]): void {
     }
   }
   stepCam(s.cam, s.t, dt, lo);
+  // v15: the put-away drawer slides up while a decoration is carried (no slide with reduce motion)
+  const want = s.lifted >= 0 ? 1 : 0;
+  s.drawer.e = s.reducedMotion ? want : clamp(s.drawer.e + Math.sign(want - s.drawer.e) * (dt / DRAWER_TIME), Math.min(want, s.drawer.e), Math.max(want, s.drawer.e));
   const k = dt / HINT_TIME;
   s.hints.l += clamp(hintTarget(s, -1) - s.hints.l, -k, k);
   s.hints.r += clamp(hintTarget(s, 1) - s.hints.r, -k, k);
@@ -3472,22 +3578,23 @@ export function view(s: State): View {
       v[`lock${i}`] = !has && (keep || s.dollars < item.price) ? 1 : 0;
       return;
     }
-    if (keep && item.kind === "decor") {
-      // an earned keepsake stays bright (no "can't afford" wash): it was never for sale
-      v[`own${i}`] = s.owned[item.d] ? 1 : 0;
-      v[`lock${i}`] = s.owned[item.d] ? 0 : 1;
+    if (item.kind === "decor") {
+      // v15: an owned decoration's card stays bright (tap it to put it away or place it again): "IN TANK" or
+      // "STORED". An earned keepsake too (no "can't afford" wash): it was never for sale
+      const has = s.owned[item.d] === true;
+      v[`own${i}`] = has && !s.stored[item.d] ? 1 : 0;
+      v[`away${i}`] = has && s.stored[item.d] ? 1 : 0;
+      v[`lock${i}`] = has ? 0 : keep || s.dollars < item.price ? 1 : 0;
       return;
     }
     const owned =
-      item.kind === "decor"
-        ? s.owned[item.d] === true
-        : item.kind === "helper"
-          ? s.helpers[item.h] === true
-          : item.kind === "tank"
-            ? s.tier >= item.tier
-            : item.kind === "food"
-              ? s.foods[item.f] === true
-              : false;
+      item.kind === "helper"
+        ? s.helpers[item.h] === true
+        : item.kind === "tank"
+          ? s.tier >= item.tier
+          : item.kind === "food"
+            ? s.foods[item.f] === true
+            : false;
     const tooSmall = item.kind === "polyp" && item.needTier !== undefined && s.tier < item.needTier;
     const blocked = (item.kind === "polyp" && (tankFull || tooSmall)) || (item.kind === "tank" && s.tier < item.tier - 1);
     v[`own${i}`] = owned ? 1 : 0;
@@ -3501,14 +3608,25 @@ export function view(s: State): View {
     v[`tab${t}Y`] = t === s.tab ? 0 : TAB_HIDDEN_Y;
   }
 
-  // decorations: shown when owned, where they've been arranged
+  // decorations: shown when placed (v15: not put away), where they've been arranged; one carried over the
+  // drawer shows faint, and the ones it overlaps light their outlines
+  const over = decorOverlaps(s);
   for (let d = 0; d < DECOR_N; d++) {
-    v[`dec${d}`] = s.owned[d] ? 1 : 0;
+    const lifted = s.lifted === d && placed(s, d);
+    v[`dec${d}`] = placed(s, d) ? (lifted && s.drawer.hot ? 0.45 : 1) : 0;
     v[`dec${d}x`] = snap(s.decorX[d] ?? DECOR[d]!.x);
     v[`dec${d}y`] = snap(decorBaseY(s, d));
-    v[`dec${d}lift`] = s.lifted === d && s.owned[d] ? 1 : 0;
+    v[`dec${d}lift`] = lifted ? 1 : 0;
+    v[`dec${d}ov`] = over.includes(d) ? 1 : 0;
   }
-  v.dec4glow = night * (s.owned[4] ? 1 : 0);
+  v.dec4glow = night * (placed(s, 4) ? 1 : 0);
+  // v15: the put-away drawer, sliding up from the cabinet's top edge while a decoration is carried
+  v.storeO = Math.round(s.drawer.e * 100) / 100;
+  v.storeY = snap((1 - s.drawer.e) * DRAWER.slide);
+  v.storeHot = s.drawer.hot && s.lifted >= 0 ? 1 : 0;
+  // v15: reduce motion reaches into the .riv: the water's own loops (caustics, shafts, sheen, bubbles) still or
+  // slow, and the parallax layers move with the camera
+  v.calm = s.reducedMotion ? 1 : 0;
   v.pearl = pearlShowing(s) ? 1 : 0;
 
   // helpers

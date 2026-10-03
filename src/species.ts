@@ -803,9 +803,14 @@ export function specProps(foodN = K.foodN): string[] {
   SHOP_ITEMS.forEach((_, i) => out.push(`own${i}`, `lock${i}`));
   // v11: the "IN USE" badge on the active theme's card
   SHOP_ITEMS.forEach((it, i) => it.kind === "theme" && out.push(`use${i}`));
+  // v15: the "STORED" badge on a decoration's card while it's put away
+  SHOP_ITEMS.forEach((it, i) => it.kind === "decor" && out.push(`away${i}`));
   for (let t = 0; t < TAB_N; t++) out.push(`shopTab${t}`, `tab${t}Y`);
   for (let d = 0; d < DECOR_N; d++) out.push(`dec${d}`, `dec${d}x`, `dec${d}y`, `dec${d}lift`);
   out.push("dec4glow", "pearl");
+  // v15: put away: the overlap outlines while carrying one, the drawer; reduce motion's `calm` for the .riv's own loops
+  for (let d = 0; d < DECOR_N; d++) out.push(`dec${d}ov`);
+  out.push("storeO", "storeY", "storeHot", "calm");
   out.push("snailOn", "snailX", "snailY", "snailSX", "snailF0", "snailF1");
   for (const h of ["shrimp", "crab"]) out.push(`${h}On`, `${h}X`, `${h}Y`, `${h}SX`, `${h}F0`, `${h}F1`, `${h}F2`, `${h}F3`);
   out.push("camX", "camY", "camZ", "wallX", "panL", "panR");

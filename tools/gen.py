@@ -14,6 +14,7 @@ import hashlib
 import json
 import math
 import random
+import re
 import struct
 import zlib
 from pathlib import Path
@@ -5883,6 +5884,151 @@ def keep_contract(c):
 # ---- end keepsakes ----
 
 
+# ---- put away ---- (v15) a decoration can go back in a drawer without being sold. While one is carried, a small
+# wooden drawer slides up from the cabinet's top edge (storeO fades it, storeY slides it; storeHot: the finger is
+# over it, and it opens); a drop there puts the decoration away. The decorations the carried one overlaps light a
+# soft outline (dec{n}ov). In the shop a decoration's card says IN TANK (own{i}) or STORED (away{i}); a tap swaps.
+STORE_W, STORE_H = 52, 22  # the drawer (logical)
+STORE_X, STORE_Y = (LW - STORE_W) // 2, CAB_TOP - 9  # its top-left once it's up
+STORE_SLIDE = 8  # how far below that it starts (the host's storeY, logical)
+# where a drop puts it away (logical): below the water's bottom edge, a good way either side of the drawer
+STORE_DROP = (LW // 2 - 48, WATER_BOT + 1, 96, LH - WATER_BOT - 1)
+DECOR_ITEMS = (3, 4, 5, 6, 7, 24) + KEEP_ITEM_IDS[:-1]  # the shop cards that sell (or award) a decoration
+R_RING = "ffb07a"  # the overlap outline: a warm coral that reads against water, sand and rock
+
+
+def drawer_front(px, x0, y0, w, h):
+    """The drawer's front panel: grained wood lit from above, a brass label holder (PUT AWAY) and a pull."""
+    m = round_rect_mask(w, h, 2)
+    for x, y in m:
+        X, Y = x0 + x, y0 + y
+        if edge4(m, x, y):
+            c = R_WOOD[0]
+        elif y == 1:
+            c = R_WOOD[5]
+        else:
+            t = 0.62 - 0.3 * y / h + 0.07 * math.sin(X * 0.8 + math.sin(Y * 0.6) * 2)
+            c = R_WOOD[1 + shade_index(t, 4, X, Y, 0.5)]
+        px.put(X, Y, c)
+    label = "PUT AWAY"
+    tw = text_width(label)
+    lx0, ly0, lw, lh = x0 + (w - tw) // 2 - 3, y0 + 3, tw + 6, 9
+    for x in range(lw):
+        for y in range(lh):
+            edge = x in (0, lw - 1) or y in (0, lh - 1)
+            px.put(lx0 + x, ly0 + y, R_BRASS[1] if edge else R_CREAM[4] if y == 1 else R_CREAM[3])
+    px.put(lx0, ly0, R_BRASS[3])
+    px.put(lx0 + lw - 1, ly0, R_BRASS[3])
+    draw_text(px, label, lx0 + 3, ly0 + 2, INK)
+    hy = y0 + h - 6  # the pull: a brass bar on two posts
+    for x in range(-6, 6):
+        px.put(x0 + w // 2 + x, hy, R_BRASS[4] if x < 2 else R_BRASS[3])
+        px.put(x0 + w // 2 + x, hy + 1, R_BRASS[2])
+        px.put(x0 + w // 2 + x, hy + 2, R_WOOD[0])
+    for x in (-6, 5):
+        px.put(x0 + w // 2 + x, hy - 1, R_BRASS[1])
+
+
+def drawer_art(open_):
+    """Shut: the drawer's front in its frame. Open: pulled toward you, its dark inside showing above the front."""
+    px = Px()
+    w, h = STORE_W, STORE_H
+    m = round_rect_mask(w, h, 3)
+    for x, y in m:  # the frame it slides in, and (open) the inside of the box
+        px.put(x, y, R_WOOD[0] if edge4(m, x, y) else hx("1a0d08") if open_ and y < 8 else R_WOOD[1])
+    if open_:
+        for x in range(3, w - 3):  # the box's back edge catching the light, and its sides going down into the dark
+            px.put(x, 2, R_WOOD[2])
+        for y in range(2, 8):
+            px.put(2, y, R_WOOD[2])
+            px.put(w - 3, y, R_WOOD[2])
+        drawer_front(px, -1, 6, w + 2, h - 5)
+    else:
+        drawer_front(px, 2, 2, w - 4, h - 4)
+    for x in range(2, w - 2):  # a soft shadow on the cabinet under it
+        px.put(x, h, hx("000000", 90))
+        px.put(x, h + 1, hx("000000", 45))
+    return px
+
+
+def store_node():
+    """The put-away drawer (screen space, over the cabinet): faded by storeO, slid by storeY, opening on storeHot."""
+    glow = ellipse_shape("StoreGlow", (STORE_X + STORE_W // 2) * P, (STORE_Y + STORE_H // 2) * P, (STORE_W + 30) * P, (STORE_H + 26) * P,
+                         rad_grad(0, 0, (STORE_W // 2 + 15) * P, [(0, hx("ffd860", 150)), (0.6, hx("ffb030", 70)), (1, hx("ffb030", 0))]),
+                         blend="screen", opacity=0, binds=[bind(prop("storeHot"), 18)])
+    shut = image("StoreShut", drawer_art(False), lx=STORE_X, ly=STORE_Y, binds=[bind(prop("storeHot"), 18, INVERT_CONV)])
+    open_ = image("StoreOpen", drawer_art(True), lx=STORE_X, ly=STORE_Y, opacity=0, binds=[bind(prop("storeHot"), 18)])
+    return node("PutAway", [open_, shut, glow], y=STORE_SLIDE * P, opacity=0,
+                binds=[bind(prop("storeO"), 18), bind(prop("storeY", default=STORE_SLIDE * P), 14)])
+
+
+def decor_ring(n, art):
+    """Decoration n's overlap outline: a soft two-pixel ring round its art and a faint wash over it (dec{n}ov)."""
+    px = art() if callable(art) else art
+    out = Px()
+    for (x, y), c in px.d.items():
+        if c[3] > 40:
+            out.put(x, y, hx(R_RING, 50))
+    near = {}
+    for (x, y), c in px.d.items():
+        if c[3] <= 40:
+            continue
+        for a in range(-2, 3):
+            for b in range(-2, 3):
+                q = (x + a, y + b)
+                if q in px.d and px.d[q][3] > 40:
+                    continue
+                near[q] = min(near.get(q, 9), max(abs(a), abs(b)))
+    for (x, y), d in near.items():
+        out.put(x, y, hx(R_RING, 235 if d == 1 else 90))
+    return image(f"{DECOR[n][0]}Ring", out, opacity=0, binds=[bind(prop(f"dec{n}ov"), 18)])
+
+
+def card_badge(text, cols, icon):
+    """A decoration card's status plate (46x14, where the price sits): IN TANK or STORED."""
+    edge, top, low, mid, ink, shadow = cols
+    px = Px()
+    m = round_rect_mask(46, 14, 3)
+    for x, y in m:
+        px.put(x, y, edge if edge4(m, x, y) else top if y <= 1 else low if y >= 11 else mid)
+    icon(px)
+    tw = text_width(text)
+    draw_text(px, text, 14 + (30 - tw) // 2, 5, ink, shadow=shadow)
+    return px
+
+
+def badge_tick(px):
+    for (x, y) in ((4, 7), (5, 8), (6, 9), (7, 8), (8, 7), (9, 6), (10, 5)):
+        px.put(x, y, hx("ffffff"))
+        px.put(x, y + 1, hx("1e5a34"))
+
+
+def badge_drawer(px):
+    for x in range(4, 12):
+        for y in range(4, 11):
+            edge = x in (4, 11) or y in (4, 10)
+            px.put(x, y, R_WOOD[0] if edge else R_WOOD[4] if y == 5 else R_WOOD[3])
+    px.put(7, 7, R_BRASS[4])
+    px.put(8, 7, R_BRASS[4])
+
+
+def in_tank_badge():
+    return card_badge("IN TANK", (hx("14402a"), hx("7ee08a"), hx("2a8a4a"), hx("3cae5a"), hx("ffffff"), hx("1e5a34")), badge_tick)
+
+
+def stored_badge():
+    return card_badge("STORED", (R_WOOD[0], R_CREAM[4], R_CREAM[1], R_CREAM[2], INK, R_CREAM[4]), badge_drawer)
+
+
+def store_contract(c):
+    """Put-away entries in contract.json: the drop box (screen, artboard units) and how far the drawer slides."""
+    x, y, w, h = STORE_DROP
+    c["store"] = {"x": x * P, "y": y * P, "w": w * P, "h": h * P, "slide": STORE_SLIDE * P}
+
+
+# ---- end put away ----
+
+
 # ---------------------------------------------------------------- build the scene (back to front)
 
 btf = []    # screen space, back to front
@@ -5904,9 +6050,61 @@ CAM_MIN = -(WLW - LW) * P  # -720: the camera's furthest pan (large tank)
 PARALLAX = {"Far": 0.35, "Mid": 0.6, "Shafts": 0.8, "Fore": 1.15}
 parallax_conv = {k: nid() for k in PARALLAX}
 
+# ---- calm ---- reduce motion inside the .riv. The host writes calm = 1 while the player (or the OS) asks for less
+# motion. The parallax collapses: each depth group holds a Calm node that adds camX * (1 - f) * calm back, so with
+# calm = 1 the layer moves with the camera (f = 1); with calm = 0 it adds nothing and the render is unchanged. Those
+# are DataConverterFormulas appended at the END of the converter list (it's positional). The water's own loops get
+# a still or slow state in the state machine (CALM_SPEED), and the bells' nested Sheen its speed (calm: 0).
+calm_conv = {k: nid() for k in PARALLAX}
+
+
+def calm_x(name):
+    return bind(prop("camX"), 13, calm_conv[name])
+
+
+def calm_speed(anim):
+    """The speed anim plays at while calm (0: held still on its first frame), or None to leave it alone."""
+    if re.fullmatch(r"Caustics|Shafts\w*|Dapple\d+|BubblerShimmer|ChestGlow|CoralGlow|PearlGlow|CaveBreath|CaveTwinkle", anim):
+        return 0  # flicker, drifting light and pulsing glows: still
+    if re.fullmatch(r"Bubble\d+|BubblerBub\d+|School\d+(Tail)?|Kelp\w+|Seagrass|Anemones|Snow|Snowfall|LighthouseBeam", anim):
+        return 0.3  # things that live in the water (and the lighthouse beam): slower
+    return None
+
+
+CALM_MIX = 400  # ms: a loop eases into (and out of) its calm state
+
+
+def calm_layer(name, aid):
+    """A layer that plays anim `aid`, and switches to the same anim at calm_speed() while calm > 0.5."""
+    play, still = nid(), nid()
+
+    def when(op):
+        return (f'<TransitionViewModelCondition opValue="{op}"><TransitionPropertyViewModelComparator><BindablePropertyNumber>'
+                f'<DataBindContext sourcePathIds="{prop("calm")}" propertyKey="636"/></BindablePropertyNumber>'
+                f'</TransitionPropertyViewModelComparator><TransitionValueNumberComparator value="0.5"/></TransitionViewModelCondition>')
+    return (f'<StateMachineLayer name="{name}" id="{nid()}"><AnyState x="0" y="-100"/><ExitState x="200" y="-100"/>'
+            f'<EntryState><StateTransition stateToId="{play}"/></EntryState>'
+            f'<AnimationState x="100" y="100" animationId="{aid}" id="{play}">'
+            f'<StateTransition stateToId="{still}" duration="{CALM_MIX}">{when("greaterThan")}</StateTransition></AnimationState>'
+            f'<AnimationState x="300" y="100" animationId="{aid}" speed="{calm_speed(name)}" id="{still}">'
+            f'<StateTransition stateToId="{play}" duration="{CALM_MIX}">{when("lessThanOrEqual")}</StateTransition></AnimationState>'
+            f'</StateMachineLayer>')
+
+
+def calm_converters():
+    """Calm{k}: camX * (1 - f) * calm, one per depth (appended last in the converter list)."""
+    return "\n".join(f'<DataConverterFormula name="Calm{k}" id="{calm_conv[k]}"><FormulaTokenInput/><FormulaTokenOperation operationType="2"/>'
+                     f'<FormulaTokenValue operationValue="{round(1 - f, 4)}"/><FormulaTokenOperation operationType="2"/>'
+                     f'<FormulaTokenValue>{bind(prop("calm"), 777)}</FormulaTokenValue></DataConverterFormula>'
+                     for k, f in PARALLAX.items())
+
+
+# ---- end calm ----
+
 
 def depth(name, kids):
-    return node(f"{name}Depth", list(reversed(kids)), binds=[bind(prop("camX"), 13, parallax_conv[name])])
+    calm = node(f"{name}Calm", list(reversed(kids)), binds=[calm_x(name)])  # ---- calm ----
+    return node(f"{name}Depth", [calm], binds=[bind(prop("camX"), 13, parallax_conv[name])])
 
 
 def themed(t):
@@ -6101,6 +6299,8 @@ def decor_node(n):
     else:
         inner = [image(name, art)]
         boxes = [sprites[name]]
+    # ---- put away ---- the outline it lights while a carried decoration overlaps it (the clam: its widest frame)
+    inner = [decor_ring(n, lambda: clam_art(3) if name == "Clam" else bubbler_art() if name == "Bubbler" else art())] + inner
     x0, y0 = min(b[1] for b in boxes), min(b[2] for b in boxes)
     x1 = max(b[3] for b in boxes)
     hw = max(-x0, x1 + 1)
@@ -6668,7 +6868,8 @@ def jelly_slot(s_):
     return (f'<NestedArtboard artboardId="{JAB}" dataBindPathIds="{VM}-{jslot_pid[s_]}" x="{x}" y="{y}"'
             f' opacity="{1 if s_ == 0 else 0}" name="Jelly{s_}">'
             f'{bind(via("on"), 18)}{bind(via("x"), 13)}{bind(via("y"), 14)}'
-            f'<NestedSimpleAnimation animationId="{JSHEEN}" isPlaying="true" name="Sheen"/></NestedArtboard>')
+            f'<NestedSimpleAnimation animationId="{JSHEEN}" isPlaying="true" name="Sheen">'
+            f'{bind(prop("calm"), 199, INVERT_CONV)}</NestedSimpleAnimation></NestedArtboard>')  # ---- calm ---- speed 1 -> 0
 
 
 for s_ in range(SLOTS):
@@ -6706,7 +6907,7 @@ THEME_ITEMS = tuple(range(THEME_ITEM0, THEME_ITEM0 + 4)) + (KEEP_THEME_ITEM,)  #
 # a card locked because of the tank size: (item, prop, note lines)
 NEEDS = [(12, "needs12", ["NEEDS", "MEDIUM"]), (15, "needs15", ["NEEDS", "MEDIUM"]), (17, "needs17", ["NEEDS", "LARGE"])]
 TABS = [("JELLIES", [0, 13, 1, 14, 2, 15, 16, 17], "DRAG TO SEE MORE JELLIES"),
-        ("DECOR", [3, 4, 5, 6, 7, 24] + list(KEEP_ITEM_IDS[:-1]), "HOLD A DECORATION TO MOVE IT"),
+        ("DECOR", [3, 4, 5, 6, 7, 24] + list(KEEP_ITEM_IDS[:-1]), "TAP YOURS TO PUT AWAY. HOLD ONE TO MOVE"),  # ---- put away ----
         ("SUPPLIES", [8, 9, 10, 18, 19], "NEW FOOD WAITS ON THE SHELF"),
         ("TANK", [11, 12, 20, 21, 22, 23, KEEP_THEME_ITEM], "TAP AN OWNED THEME TO USE IT")]
 TAB_W, TAB_H, TAB_GAP, TAB_Y, TAB_LIFT = 50, 15, 4, 55, 3
@@ -6716,9 +6917,7 @@ CARD_Y0, CARD_PITCH = RULE_Y + 9, 73
 CARD_POS = {}
 for _t, (_, _items, _) in enumerate(TABS):
     for _k, _i in enumerate(_items):
-        _x = 15 + (_k % 2) * 107
-        if _k == len(_items) - 1 and _k % 2 == 0:
-            _x = 15 + (107 + CARD_W - CARD_W) // 2  # a lone last card sits centred
+        _x = 15 + (_k % 2) * 107  # ---- put away ---- (v15) a lone last card stays in the left column: the rows read as a grid
         CARD_POS[_i] = (_t, _x, CARD_Y0 + (_k // 2) * CARD_PITCH)
 HINT_Y = PANEL[1] + PANEL[3] - 18
 # the JELLIES tab scrolls: its cards live in a group clipped to this window (logical px) and moved by shopScroll
@@ -7053,7 +7252,11 @@ def shop_node():
                     if i in KEEP_ITEM_IDS else  # ---- keepsakes ---- a lighter lock: the card says how to earn it
                     image("CardLock", lock_overlay(), lx=x0, ly=y0, node_name=f"Lock{i}", opacity=0, binds=[bind(prop(f"lock{i}"), 18)]))
             g.append(lock)
-            g.append(image("OwnBadge", own_badge(), lx=x0 + 50, ly=y0 + 48, node_name=f"Own{i}", opacity=0, binds=[bind(prop(f"own{i}"), 18)]))
+            if i in DECOR_ITEMS:  # ---- put away ---- IN TANK (own{i}) or STORED (away{i}); a tap swaps them
+                g.append(image("InTankBadge", in_tank_badge(), lx=x0 + 50, ly=y0 + 48, node_name=f"Own{i}", opacity=0, binds=[bind(prop(f"own{i}"), 18)]))
+                g.append(image("StoredBadge", stored_badge(), lx=x0 + 50, ly=y0 + 48, node_name=f"Away{i}", opacity=0, binds=[bind(prop(f"away{i}"), 18)]))
+            else:
+                g.append(image("OwnBadge", own_badge(), lx=x0 + 50, ly=y0 + 48, node_name=f"Own{i}", opacity=0, binds=[bind(prop(f"own{i}"), 18)]))
             if i in THEME_ITEMS:  # v11: the theme in use
                 g.append(image("InUseBadge", in_use_badge(), lx=x0 + 50, ly=y0 + 48, node_name=f"Use{i}", opacity=0,
                                binds=[bind(prop(f"use{i}", default=1 if i == THEME_ITEM0 else 0), 18)]))
@@ -7110,7 +7313,8 @@ fore = []
 for i, (fx, fw, fh) in enumerate([(26, 96, 40), (178, 70, 30), (318, 104, 44), (470, 80, 34)]):
     fore.append(ellipse_shape(f"ForeRock{i}", fx * P, (WATER_BOT + 9) * P, fw * P, fh * P,
                               rad_grad(0, 0, fw * P // 2, [(0, hx("06122a", 205)), (0.55, hx("081830", 150)), (1, hx("0a1c38", 0))])))
-btf.append(node("WorldFore", [node("ForeDepth", fore, binds=[bind(prop("camX"), 13, parallax_conv["Fore"])])], binds=cam_bind()))
+btf.append(node("WorldFore", [node("ForeDepth", [node("ForeCalm", fore, binds=[calm_x("Fore")])],  # ---- calm ----
+                                  binds=[bind(prop("camX"), 13, parallax_conv["Fore"])])], binds=cam_bind()))
 
 btf.append(rect_shape("Murk", water_x, water_y, water_w, water_h, lin_grad(0, 0, 0, water_h, [
     (0, hx("7d9a52", 160)), (1, hx("4e6a32", 220))]), opacity=0, binds=[bind(prop("murkShade"), 18)]))
@@ -7450,6 +7654,7 @@ hit_ids.append((hid, "shop"))
 hit = rect_shape("ShopHit", 0, 0, BTN_W * P, (BTN_H + 2) * P, solid(hx("ffffff", 1)), sid=hid)
 btf.append(node("ShopButton", [hit, press, image("BtnShadow", button_shadow(), node_name="ShopShadow")], x=BTN_X[SHOP_BTN] * P, y=BTN_Y * P))
 add_anim("HeldGlow", 120, [keys(g, 18, [(0, 0.6), (60, 1), (120, 0.6)], "cubic") for g in shelf_glow_ids])
+btf.append(store_node())  # ---- put away ---- the drawer, over the cabinet while a decoration is carried
 btf.append(node("Cursor", [sponge_node, can_node, jar_node, bottle_node]))  # topmost: the held can / jar / bottle / sponge
 
 # ---------------------------------------------------------------- assemble
@@ -7457,6 +7662,9 @@ btf.append(node("Cursor", [sponge_node, can_node, jar_node, bottle_node]))  # to
 SM, AB, STYLE = nid(), nid(), nid()
 layers = []
 for _, aid, name in anims:
+    if calm_speed(name) is not None:  # ---- calm ----
+        layers.append(calm_layer(name, aid))
+        continue
     sid = nid()
     layers.append(f'<StateMachineLayer name="{name}" id="{nid()}"><AnyState x="0" y="-100"/><ExitState x="200" y="-100"/>'
                   f'<EntryState><StateTransition stateToId="{sid}"/></EntryState><AnimationState x="100" y="100" animationId="{aid}" id="{sid}"/></StateMachineLayer>')
@@ -7525,6 +7733,7 @@ doc = f'''<Rive version="1" kind="fragment">
 <DataConverterRangeMapper minInput="0" maxInput="1" minOutput="1" maxOutput="0" clampLower="true" clampUpper="true" name="Invert" id="{INVERT_CONV}"/>
 <DataConverterRangeMapper minInput="0" maxInput="1" minOutput="3000" maxOutput="0" clampLower="true" clampUpper="true" name="Away" id="{AWAY_CONV}"/>
 <DataConverterRangeMapper minInput="0" maxInput="1" minOutput="1" maxOutput="{HW_GHOST_FADE}" clampLower="true" clampUpper="true" name="hw_GhostFade" id="{HW_FADE_CONV}"/>
+{calm_converters()}
 {jvm}
 {vm}
 {nl.join(assets)}
@@ -7601,6 +7810,7 @@ contract = {
 }
 hw_contract(contract)  # ---- Halloween event ----
 keep_contract(contract)  # ---- keepsakes ----
+store_contract(contract)  # ---- put away ----
 # ---- asset groups: each group's PNGs packed into one file (base64 in JSON, a type every host serves and
 # compresses); the contract lists them with a content hash the host adds to the URL so a new build busts caches
 SPRITE_DIR = ROOT / "public" / "sprites"

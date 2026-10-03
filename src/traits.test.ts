@@ -344,7 +344,9 @@ describe("the bubbler", () => {
     expect(buy(s, 24)).toBe("bought");
     expect(s.dollars).toBe(100 - item.price);
     expect(view(s)[`dec${BUBBLER}`]).toBe(1);
-    expect(buy(s, 24)).toBe("owned");
+    expect(buy(s, 24)).toBe("putAway"); // v15: its card puts it away (no refund, no charge)
+    expect(bubbleColumn(s)).toBeNull();
+    expect(s.dollars).toBe(100 - item.price);
     expect(toSave(s, NOON).owned[BUBBLER]).toBe(true);
   });
 

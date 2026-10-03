@@ -2479,5 +2479,10 @@
    "sprites": 144,
    "bytes": 45725
   }
+ },
+ "room": {
+  "file": "sprites/room.json",
+  "v": "13c9091cee",
+  "bytes": 54903
  }
 }

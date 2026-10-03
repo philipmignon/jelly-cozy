@@ -1,5 +1,6 @@
 // Screenshots of the built page at common device sizes (pub/jellytank.html + dist/assets).
 //   node tools/phones.mjs  -> shots/phone-<name>-{tank,menu,card}.png
+// Also checks that none of them shows or downloads the wide-screen room (src/roomfit.ts): exits 1 if one does.
 import { createServer } from "node:http";
 import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { extname, join } from "node:path";
@@ -28,8 +29,13 @@ const devices = {
 mkdirSync("shots", { recursive: true });
 const browser = await puppeteer.launch({ channel: "chrome", headless: true, args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
 const report = [];
+// the room's chunk and art (src/room.ts -> assets/room-*.js, sprites/room.json)
+const isRoom = (url) => /\/assets\/room-[^/]*\.js|\/sprites\/room\.json/.test(url);
+let roomFetched = 0;
 for (const [name, vp] of Object.entries(devices)) {
   const p = await browser.newPage();
+  const roomUrls = [];
+  p.on("request", (r) => isRoom(r.url()) && roomUrls.push(r.url()));
   await p.setViewport(vp);
   await p.goto(`http://127.0.0.1:${PORT}/`);
   await p.evaluate(() => localStorage.setItem("jellytank:tips", "1"));
@@ -46,6 +52,9 @@ for (const [name, vp] of Object.entries(devices)) {
   });
   // the smallest Rive tap target on screen: the shelf items/buttons are ~48-52 art px wide at P=3
   report.push(`${name}: artboard scale ${m.scale} (a 52 px button is ${Math.round(52 * 3 * m.scale)} px), gear ${m.gear?.join("x")} px, side/top bars ${m.bars.join("/")} px, horizontal scroll ${m.hScroll}`);
+  const roomShown = await p.evaluate(() => !!document.querySelector(".jt-room"));
+  report.push(`  room: ${roomShown || roomUrls.length ? `SHOWN/FETCHED ${roomUrls.join(" ")}` : "none (nothing fetched)"}`);
+  roomFetched += roomUrls.length + (roomShown ? 1 : 0);
   await p.tap(".jt-gear");
   await new Promise((r) => setTimeout(r, 300));
   await p.screenshot({ path: `shots/phone-${name}-menu.png` });
@@ -63,3 +72,7 @@ for (const [name, vp] of Object.entries(devices)) {
 console.log(report.join("\n"));
 await browser.close();
 server.close();
+if (roomFetched) {
+  console.log("FAIL: a phone-sized screen fetched or showed the room");
+  process.exitCode = 1;
+}

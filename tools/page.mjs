@@ -8,6 +8,8 @@
 // The species' sprites are not in the .riv: each group is its own file (dist/sprites/<group>.json, see
 // src/spritegroups.ts) fetched when the tank needs it, so they are published beside the page at the same
 // relative paths. Republishing: pass the whole map; group paths are stable (the URL's ?v= busts caches).
+// The room beside the tank on wide screens is the same: its code chunk (assets/room-*.js, imported only on a
+// wide screen) and its art (sprites/room.json) are published beside the page.
 import { readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 
 const assets = readdirSync("dist/assets");
@@ -41,8 +43,11 @@ mkdirSync("pub", { recursive: true });
 const main = page("Jelly Tank");
 writeFileSync("pub/jellytank.html", main);
 writeFileSync("pub/jellytank-sync.html", page("Jelly Tank Sync", "<script>window.__JELLYTANK_SYNC = true;</script>\n"));
-const groups = Object.values(JSON.parse(readFileSync("src/contract.json", "utf8")).assetGroups ?? {}).map((g) => g.file);
+const contract = JSON.parse(readFileSync("src/contract.json", "utf8"));
+const groups = Object.values(contract.assetGroups ?? {}).map((g) => g.file);
 const files = { [`assets/${js}`]: `dist/assets/${js}`, [`assets/${wasm}`]: `dist/assets/${wasm}` };
+for (const f of assets.filter((f) => f.endsWith(".js") && f !== js)) files[`assets/${f}`] = `dist/assets/${f}`; // lazy chunks (the room)
 for (const f of groups) files[f] = `dist/${f}`;
+if (contract.room) files[contract.room.file] = `dist/${contract.room.file}`;
 console.log(JSON.stringify(files));
-console.log(`page ${Math.round(main.length / 1024)} KB, tank script ${Math.round(tankJs.length / 1024)} KB, ${groups.length} sprite groups`);
+console.log(`page ${Math.round(main.length / 1024)} KB, tank script ${Math.round(tankJs.length / 1024)} KB, ${groups.length} sprite groups${contract.room ? `, room ${Math.round(contract.room.bytes / 1024)} KB` : ""}`);

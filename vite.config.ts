@@ -6,16 +6,24 @@ import { defineConfig } from "vitest/config";
  * dist/sw.js for the GitHub Pages build: src/sw.js with this build's file list filled in. Precached: the page,
  * the hashed bundle (JS, wasm, .riv), the manifest and icons. Sprite groups are cached as the tank fetches them
  * (keyed by their ?v= hash); the list here only tells an update which cached groups are still current.
+ * The room (src/room.ts, its chunk and sprites/room.json) is only for wide screens: cached like a sprite group when
+ * it is fetched, never precached, so a phone never downloads it.
  */
 function serviceWorker() {
   return {
     name: "jellytank-sw",
     apply: "build" as const,
     generateBundle(this: { emitFile(f: { type: "asset"; fileName: string; source: string }): string }, _: unknown, bundle: Record<string, unknown>) {
-      const contract = JSON.parse(readFileSync("src/contract.json", "utf8")) as { assetGroups?: Record<string, { file: string; v: string }> };
+      const contract = JSON.parse(readFileSync("src/contract.json", "utf8")) as {
+        assetGroups?: Record<string, { file: string; v: string }>;
+        room?: { file: string; v: string };
+      };
       const icons = readdirSync("public/icons").filter((f) => f.endsWith(".png")).map((f) => `icons/${f}`);
-      const precache = ["./", ...Object.keys(bundle).filter((f) => f.startsWith("assets/")).sort(), "manifest.webmanifest", ...icons];
-      const versioned = Object.values(contract.assetGroups ?? {}).map((g) => `${g.file}?v=${g.v}`).sort();
+      const wideOnly = (f: string) => /^assets\/room-[^/]*\.js$/.test(f);
+      const assets = Object.keys(bundle).filter((f) => f.startsWith("assets/"));
+      const precache = ["./", ...assets.filter((f) => !wideOnly(f)).sort(), "manifest.webmanifest", ...icons];
+      const groups = [...Object.values(contract.assetGroups ?? {}), ...(contract.room ? [contract.room] : [])];
+      const versioned = [...groups.map((g) => `${g.file}?v=${g.v}`), ...assets.filter(wideOnly)].sort();
       const template = readFileSync("src/sw.js", "utf8");
       const h = createHash("sha256").update(JSON.stringify({ precache, versioned }));
       for (const f of ["src/sw.js", "index.html", "src/loader.html", "public/manifest.webmanifest", ...icons.map((i) => `public/${i}`)]) h.update(readFileSync(f));

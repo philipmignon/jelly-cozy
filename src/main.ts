@@ -17,6 +17,7 @@ import { createPacer, readBatterySaver, wakes, writeBatterySaver, type Pacer } f
 import { registerOffline, updateChip } from "./offline";
 import { activeSeason, readSeasonDecor, seasonalMorph, writeSeasonDecor } from "./season";
 import { createRequestNote, type RequestNote } from "./requestnote";
+import { attachRoom, type Room } from "./roomfit";
 import { SPECIES_NAMES, TAB_N, keepsakeOf } from "./species";
 import { createSpriteGroups, eventGroup, groupsFor, jellyGroups, speciesGroup, useSpriteGroups } from "./spritegroups";
 import {
@@ -848,6 +849,7 @@ async function main() {
 
   let last = performance.now();
   let loadedFrame = false;
+  let room: Room | null = null; // v15: the room beside the tank on wide screens
   let cardTick = 0;
   let reqTick = 0;
   rive.on(EventType.Advance, () => {
@@ -859,6 +861,17 @@ async function main() {
       setTimeout(() => el?.remove(), 600);
       void intro();
       registerOffline(() => client(K.W / 2, K.waterTop + 14)); // GitHub Pages only: offline play, instant repeat visits
+      // v15: on a wide screen the tank stands in a room; its code and art load now, and only if the screen is wide
+      room = attachRoom({
+        box: () => {
+          const a = client(0, 0);
+          const b = client(K.W, K.H);
+          return { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y };
+        },
+        lit: () => !state.nightTarget,
+        season: () => state.event,
+        toggle: press.lamp,
+      });
     }
     overlay.placeTip();
     kb.frame();
@@ -983,6 +996,7 @@ async function main() {
     if (photoHide) Object.assign(v, PHOTO_HIDE);
     write(v);
     audio.setNight(v.nightShade ?? 0);
+    room?.sync();
     audio.setMurk(state.murk);
     if (overlay.cardSlot !== null && (cardTick = (cardTick + 1) % 15) === 0) overlay.updateCard(cardInfo(overlay.cardSlot));
     // v12: the note follows the requests' progress (and a new day's list after midnight)

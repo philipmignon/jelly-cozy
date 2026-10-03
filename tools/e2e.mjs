@@ -316,6 +316,71 @@ async function friendsFlow(browser) {
   await ctx.close();
 }
 
+/** the room's code and art (src/room.ts, sprites/room.json): what a narrow screen must never fetch */
+const roomFetched = (page) =>
+  page.evaluate(() => performance.getEntriesByType("resource").map((e) => e.name).filter((u) => /\/src\/room\.ts|\/assets\/room-[^/]*\.js|\/sprites\/room\.json/.test(u)));
+
+/**
+ * v15 the room: on a 1440x900 screen the tank stands in a room (Halloween dusk forced, so the pumpkin and the moon
+ * are in); its lamp follows the tank's light switch both ways (the switch on the cabinet, and a click on the lamp);
+ * narrowing the window to a phone's hides it.
+ */
+async function roomFlow(browser) {
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  page.setDefaultNavigationTimeout(90_000);
+  const wide = { width: 1440, height: 900 };
+  await page.setViewport({ ...wide, deviceScaleFactor: 1 });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto(`http://localhost:${PORT}/?sky=dusk&season=halloween`, DCL);
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem("jellytank:tips", "1");
+  });
+  await page.reload(DCL);
+  await page.waitForFunction(() => window.__tank && window.__tank.t > 0.5, { timeout: 15000 });
+  const shown = await until(page, () => {
+    const r = document.querySelector(".jt-room.jt-room-on");
+    return !!r && r.querySelectorAll(".jt-room-scene canvas").length === 3;
+  }, null, 15000);
+  const room = () =>
+    page.evaluate(() => {
+      const r = document.querySelector(".jt-room");
+      const art = r?.querySelector(".jt-room-art")?.getBoundingClientRect();
+      return { ...(r ? { ...r.dataset } : {}), on: !!r?.classList.contains("jt-room-on"), night: window.__tank.nightTarget, art: art && [Math.round(art.left), Math.round(art.right)], vw: innerWidth };
+    });
+  let r = await room();
+  check("room: a wide screen shows the room around the tank", shown && r.art[0] <= 0 && r.art[1] >= r.vw, JSON.stringify(r));
+  check("room: the window shows the forced time of day and the season's things", r.sky === "dusk" && r.season === "halloween", JSON.stringify(r));
+  check("room: its lamp matches the tank's light", r.lamp === (r.night ? "off" : "on"), JSON.stringify(r));
+  await page.screenshot({ path: "shots/e2e-room-dusk.png" });
+  // the switch on the cabinet flips the tank's light, and the room's lamp with it
+  const S1 = Math.min(wide.width / K.W, wide.height / K.H);
+  const ox = (wide.width - K.W * S1) / 2;
+  const oy = (wide.height - K.H * S1) / 2;
+  const lamp = K.buttons.find((b) => b.name === "lamp");
+  const night0 = r.night;
+  await page.mouse.click(ox + (lamp.x + lamp.w / 2) * S1, oy + (lamp.y + lamp.h / 2) * S1);
+  const flipped = await until(page, (n) => window.__tank.nightTarget === !n && document.querySelector(".jt-room").dataset.lamp === (n ? "on" : "off"), night0, 8000);
+  check("room: the tank's light switch turns the room's lamp", flipped, JSON.stringify(await room()));
+  await framesOn(page, 15); // the fade
+  await page.screenshot({ path: "shots/e2e-room-switched.png" });
+  // and the room's lamp is a light switch too
+  await page.click(".jt-room-lamp");
+  const back = await until(page, (n) => window.__tank.nightTarget === n && document.querySelector(".jt-room").dataset.lamp === (n ? "off" : "on"), night0, 8000);
+  check("room: clicking the room's lamp flips the tank's light back", back, JSON.stringify(await room()));
+  check("room: it is decoration: the pointer goes through to the tank", await page.evaluate(() => getComputedStyle(document.querySelector(".jt-room")).pointerEvents === "none"));
+  // narrowed to a phone's width: the room goes; widened again, it's back
+  await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });
+  const hidden = await until(page, () => !document.querySelector(".jt-room").classList.contains("jt-room-shown") && document.querySelector(".jt-room-lamp").offsetParent === null, null, 5000);
+  check("room: a phone-sized window hides it", hidden);
+  await page.setViewport({ ...wide, deviceScaleFactor: 1 });
+  check("room: widening again brings it back", await until(page, () => document.querySelector(".jt-room").classList.contains("jt-room-on"), null, 5000));
+  check("room: no page errors", errors.length === 0, errors.join(" | "));
+  await ctx.close();
+}
+
 /** Keyboard only: Tab onto the tank, pet, feed with F, the journal with J/Escape, buy with B + arrows + Enter; the live region; reduce motion. */
 async function keyboardFlow(browser) {
   const ctx = await browser.createBrowserContext();
@@ -533,6 +598,8 @@ async function main() {
       if (++tipsSeen > 6) break;
     }
     check("first-run tips show once and dismiss", tipsSeen === 4, `tips=${tipsSeen}`);
+    const narrowRoom = await roomFetched(page);
+    check("a narrow screen fetches nothing of the room", narrowRoom.length === 0, narrowRoom.join(" "));
 
     let s = await st();
     check("new game: one moon polyp, 0 dollars", s.slots[0]?.k === 0 && s.slots[0]?.g === 0 && !s.slots[1] && s.dollars === 0, JSON.stringify(s.slots[0]));
@@ -967,6 +1034,7 @@ async function main() {
 
     await page.close(); // one swiftshader tank at a time
     await keyboardFlow(browser);
+    await roomFlow(browser);
     await keepsakeFlow(browser);
     await friendsFlow(browser);
     await batteryFlow(browser);

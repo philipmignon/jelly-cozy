@@ -35,7 +35,7 @@ const run = (s: State, seconds: number) => {
 };
 const at = (h: number, m = 0, day = 1, s = 0) => new Date(2026, 9, day, h, m, s).getTime();
 const jelly = (k: Species, g: Stage, extra: Partial<SaveJelly> = {}): SaveJelly => ({
-  k, g, gp: [0, 4, 12, 30][g]!, care: 0, fullness: 0.7, affection: 0.4, anchor: -1, spot: -1, name: "Mochi", born: 0, content: 0, morph: 0, ...extra,
+  k, g, gp: [0, 4, 12, 30][g]!, care: 0, fullness: 0.7, affection: 0.4, anchor: -1, spot: -1, name: "Mochi", born: 0, content: 0, morph: 0, trait: 1, ...extra,
 });
 const tank = (slots: (SaveJelly | null)[], extra: Partial<Save> = {}): Save => ({
   v: 10, foods: [true, false, false], themes: [true, false, false, false], theme: 0,

@@ -10,13 +10,14 @@
  *   "pearl"    -1; today's pearl collected (only with the clam, pearl still waiting)   (5)
  *   "sprinkle" decoration d; n pellets sprinkled near it (only owned decorations)      (6)
  *   "visitor"  -1; a visitor tapped                                                    (10)
+ *   "ride"     -1; a jelly rode the bubbler to the top while it was on screen (only with the bubbler) (8)
  * Unfinished requests don't carry over: a new day (or a day away) replaces them.
  */
 import { FOOD_KINDS, FOOD_NAMES, SPECIES_N, SPECIES_NAMES, favouriteFood, type FoodKind, type Species } from "./species";
 import { rng } from "./dirt";
 
-export type RequestKind = "feed" | "scrub" | "pet" | "pearl" | "sprinkle" | "visitor";
-export const REQUEST_KINDS: readonly RequestKind[] = ["feed", "scrub", "pet", "pearl", "sprinkle", "visitor"];
+export type RequestKind = "feed" | "scrub" | "pet" | "pearl" | "sprinkle" | "visitor" | "ride";
+export const REQUEST_KINDS: readonly RequestKind[] = ["feed", "scrub", "pet", "pearl", "sprinkle", "visitor", "ride"];
 
 export interface Request {
   kind: RequestKind;
@@ -47,6 +48,8 @@ export interface RequestTank {
   decor: readonly boolean[];
   /** the clam's pearl is waiting today */
   pearl: boolean;
+  /** v13: the bubbler is in the tank (jellies can ride it) */
+  bubbler?: boolean;
 }
 
 /** Something the player did that a request may count. */
@@ -56,7 +59,8 @@ export type Deed =
   | { kind: "pet" }
   | { kind: "pearl" }
   | { kind: "sprinkle"; decor: number; n: number }
-  | { kind: "visitor" };
+  | { kind: "visitor" }
+  | { kind: "ride" };
 
 /** At most this many a day. */
 export const REQUESTS_PER_DAY = 2;
@@ -67,7 +71,7 @@ export const PET_N = 5;
 export const SPRINKLE_N = 8;
 /** A pellet counts as "by" a decoration within this many px (world x) of its base. */
 export const SPRINKLE_NEAR = 100;
-const DECOR_NAMES = ["castle", "anchor", "dive helmet", "giant clam", "glow coral"];
+const DECOR_NAMES = ["castle", "anchor", "dive helmet", "giant clam", "glow coral", "bubbler"];
 
 /** Sand dollars a request pays: 5..15, more for the fussier ones. */
 export function rewardOf(r: Pick<Request, "kind" | "target" | "n">): number {
@@ -83,6 +87,8 @@ export function rewardOf(r: Pick<Request, "kind" | "target" | "n">): number {
       return 6;
     case "visitor":
       return 10;
+    case "ride":
+      return 8;
   }
 }
 
@@ -105,6 +111,8 @@ export function requestText(r: Request): string {
       return `Sprinkle food by the ${DECOR_NAMES[r.target] ?? "rocks"}`;
     case "visitor":
       return "Say hello to a visitor";
+    case "ride":
+      return "Watch a jelly ride the bubbler";
   }
 }
 
@@ -145,6 +153,7 @@ export function planRequests(day: string, t: RequestTank): DailyRequests {
   const decor = t.decor.flatMap((o, d) => (o ? [d] : []));
   if (decor.length) pool.push([2, () => req("sprinkle", SPRINKLE_N, pick(decor))]);
   pool.push([1, () => req("visitor", 1)]);
+  if (t.bubbler) pool.push([2, () => req("ride", 1)]);
   const items: Request[] = [];
   while (items.length < REQUESTS_PER_DAY && pool.length) {
     const total = pool.reduce((a, p) => a + p[0], 0);

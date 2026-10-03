@@ -16,9 +16,16 @@
  * a Reef tank still writes version 1, so its code is exactly what it was before themes.
  * v12: a tank with a ghost morph (morph id 2) writes version 3 (Reef) or 4 (themed): each jelly's morph is
  * 2 bits (its id) instead of 1. Tanks without one keep versions 1 and 2, so their codes don't change.
+ * v13: a tank with a decoration past the first five (the bubbler) or a jelly whose trait isn't the one its name
+ * gives (traitFromName) writes version 5, a superset:
+ *   4 version (5) | 2 tier | 2 theme | 3 helpers | 4 decoration count D | D owned bits, then 9 bits x/3 per owned one |
+ *   3 jelly count, then per jelly: 3 slot, 4 species, 2 stage, 2 morph, 2 trait, [3 place], name (as above).
+ * Every other tank keeps versions 1-4, so its code doesn't change; reading those, each jelly's trait comes from its
+ * name (the same rule that gives jellies from before traits theirs) and the later decorations aren't owned.
  */
 import { DECOR_N, HELPER_N, MAX_SLOTS, P, POLYP_ANCHORS, SETTLE_SPOTS, SPECIES_N, THEME_N, TIER_N, UPSIDE, decorClampX, maxJelliesOf } from "./species";
 import { NAMES, cleanName } from "./names";
+import { TRAIT_N, traitFromName } from "./traits";
 
 export const CODE_VERSION = 1;
 /** v11: codes for themed tanks */
@@ -26,6 +33,10 @@ export const CODE_VERSION_THEMED = 2;
 /** v12: codes with 2-bit morph ids (a ghost in the tank), Reef and themed */
 export const CODE_VERSION_MORPHS = 3;
 export const CODE_VERSION_MORPHS_THEMED = 4;
+/** v13: the superset: any decoration count, 2-bit morphs, traits */
+export const CODE_VERSION_TRAITS = 5;
+/** versions 1-4 carry this many decorations */
+const OLD_DECOR_N = 5;
 /** v12: morph ids a code carries (0 none, 1 classic, 2 ghost) */
 const MORPH_IDS = 3;
 /** Characters a custom name packs in 6 bits; anything else costs 27. */
@@ -41,6 +52,8 @@ export interface CodeJelly {
   /** polyp: its rock anchor; settled upside-down (juvenile/adult): its sand spot; otherwise -1 */
   place: number;
   name: string;
+  /** v13: its personality (0..3); missing: traitFromName(name, k) */
+  trait?: number;
 }
 
 export interface TankCode {
@@ -195,6 +208,7 @@ export function validTank(t: TankCode): boolean {
     if (!Number.isInteger(j.k) || j.k < 0 || j.k >= SPECIES_N || !Number.isInteger(j.g) || j.g < 0 || j.g > 3) return false;
     if (cleanName(j.name) !== j.name) return false;
     if (!Number.isInteger(j.morph) || j.morph < 0 || j.morph >= MORPH_IDS) return false;
+    if (j.trait !== undefined && (!Number.isInteger(j.trait) || j.trait < 0 || j.trait >= TRAIT_N)) return false;
     if (j.g === 0) {
       const a = POLYP_ANCHORS[j.place];
       if (!a || a.tier > t.tier || anchors.has(j.place)) return false;
@@ -213,13 +227,14 @@ export function encodeTank(t: TankCode): string {
   if (!validTank(t)) throw new Error("not a valid tank");
   const w = new Bits();
   const theme = t.theme ?? 0;
+  if (needsTraits(t)) return encodeV5(t, w, theme);
   const wide = t.jellies.some((j) => j.morph > 1);
   w.put(wide ? (theme ? CODE_VERSION_MORPHS_THEMED : CODE_VERSION_MORPHS) : theme ? CODE_VERSION_THEMED : CODE_VERSION, 4);
   w.put(t.tier, 2);
   if (theme) w.put(theme, 2);
   for (let i = 0; i < HELPER_N; i++) w.put(t.helpers[i] ? 1 : 0, 1);
-  for (let n = 0; n < DECOR_N; n++) w.put(t.decor[n] === null ? 0 : 1, 1);
-  for (let n = 0; n < DECOR_N; n++) if (t.decor[n] !== null) w.put(t.decor[n]! / P, 9);
+  for (let n = 0; n < OLD_DECOR_N; n++) w.put(t.decor[n] === null ? 0 : 1, 1);
+  for (let n = 0; n < OLD_DECOR_N; n++) if (t.decor[n] !== null) w.put(t.decor[n]! / P, 9);
   const js = [...t.jellies].sort((a, b) => a.slot - b.slot);
   w.put(js.length, 3);
   for (const j of js) {
@@ -231,9 +246,41 @@ export function encodeTank(t: TankCode): string {
     if (hasPlace(j.k, j.g)) w.put(j.place, 3);
     putName(w, j.name);
   }
+  return finish(w);
+}
+
+const finish = (w: Bits): string => {
   const bytes = w.flush();
   const sum = fletcher(bytes);
   return toB64([...bytes, sum >> 8, sum & 255]);
+};
+
+/** v13: the trait a jelly in a code has (its own, else the one its name gives). */
+const traitIn = (j: CodeJelly): number => j.trait ?? traitFromName(j.name, j.k);
+/** v13: does this layout need version 5 (a later decoration owned, or a trait its name doesn't give)? */
+const needsTraits = (t: TankCode): boolean =>
+  t.decor.some((x, n) => n >= OLD_DECOR_N && x !== null) || t.jellies.some((j) => traitIn(j) !== traitFromName(j.name, j.k));
+
+function encodeV5(t: TankCode, w: Bits, theme: number): string {
+  w.put(CODE_VERSION_TRAITS, 4);
+  w.put(t.tier, 2);
+  w.put(theme, 2);
+  for (let i = 0; i < HELPER_N; i++) w.put(t.helpers[i] ? 1 : 0, 1);
+  w.put(DECOR_N, 4);
+  for (let n = 0; n < DECOR_N; n++) w.put(t.decor[n] === null ? 0 : 1, 1);
+  for (let n = 0; n < DECOR_N; n++) if (t.decor[n] !== null) w.put(t.decor[n]! / P, 9);
+  const js = [...t.jellies].sort((a, b) => a.slot - b.slot);
+  w.put(js.length, 3);
+  for (const j of js) {
+    w.put(j.slot, 3);
+    w.put(j.k, 4);
+    w.put(j.g, 2);
+    w.put(j.morph, 2);
+    w.put(traitIn(j), 2);
+    if (hasPlace(j.k, j.g)) w.put(j.place, 3);
+    putName(w, j.name);
+  }
+  return finish(w);
 }
 
 /** The layout in a code, or null for anything that isn't exactly a code encodeTank would write. */
@@ -246,6 +293,7 @@ export function decodeTank(code: unknown): TankCode | null {
   try {
     const r = new Reader(bytes);
     const version = r.get(4);
+    if (version === CODE_VERSION_TRAITS) return decodeV5(r);
     if (version < CODE_VERSION || version > CODE_VERSION_MORPHS_THEMED) return null;
     const themed = version === CODE_VERSION_THEMED || version === CODE_VERSION_MORPHS_THEMED;
     const wide = version >= CODE_VERSION_MORPHS;
@@ -254,7 +302,7 @@ export function decodeTank(code: unknown): TankCode | null {
     // one spelling per code: a Reef tank is always written as version 1 (or 3)
     if (themed && theme === 0) return null;
     const helpers = Array.from({ length: HELPER_N }, () => r.get(1) === 1);
-    const owned = Array.from({ length: DECOR_N }, () => r.get(1) === 1);
+    const owned = Array.from({ length: DECOR_N }, (_, n) => n < OLD_DECOR_N && r.get(1) === 1);
     const decor = owned.map((o) => (o ? r.get(9) * P : null));
     const n = r.get(3);
     const jellies: CodeJelly[] = [];
@@ -278,4 +326,35 @@ export function decodeTank(code: unknown): TankCode | null {
   } catch {
     return null;
   }
+}
+
+/** v13: the rest of a version 5 code (throws on a short read, like the rest of decodeTank). */
+function decodeV5(r: Reader): TankCode | null {
+  const tier = r.get(2);
+  const theme = r.get(2);
+  const helpers = Array.from({ length: HELPER_N }, () => r.get(1) === 1);
+  // a code from a game with more decorations than this one can't be shown
+  const nd = r.get(4);
+  if (nd > DECOR_N) return null;
+  const owned = Array.from({ length: DECOR_N }, (_, n) => n < nd && r.get(1) === 1);
+  const decor = owned.map((o) => (o ? r.get(9) * P : null));
+  const n = r.get(3);
+  const jellies: CodeJelly[] = [];
+  for (let i = 0; i < n; i++) {
+    const slot = r.get(3);
+    const k = r.get(4);
+    const g = r.get(2);
+    const morph = r.get(2);
+    const trait = r.get(2);
+    if (morph >= MORPH_IDS) return null;
+    const place = hasPlace(k, g) ? r.get(3) : -1;
+    const name = getName(r);
+    if (name === null) return null;
+    jellies.push({ slot, k, g, morph, place, name, trait });
+  }
+  if (!r.done()) return null;
+  for (let i = 1; i < jellies.length; i++) if (jellies[i]!.slot <= jellies[i - 1]!.slot) return null;
+  const t: TankCode = theme ? { tier, theme, helpers, decor, jellies } : { tier, helpers, decor, jellies };
+  // one spelling per code: version 5 only for a layout the older versions can't carry
+  return validTank(t) && needsTraits(t) ? t : null;
 }

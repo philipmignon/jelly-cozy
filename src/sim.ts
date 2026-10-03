@@ -44,6 +44,15 @@
  *                       (no slot, no x/y) comes straight after it. Daily requests run only with SimOptions.requests
  *   "ate" also carries `fav: true` (v11) when the pellet was the jelly's favourite food: double growth,
  *                       a little more fullness and a bigger happy flush
+ *   "rode"    slot, x, y, seen  (v13) a jelly rode the bubbler's column to the top (x: the column, y: the jelly);
+ *                       `seen` when the bubbler was on screen (that's what the "watch a jelly ride" request counts)
+ *
+ * v13 PERSONALITIES (./traits.ts): every jelly has a trait for life (Jelly.trait; saves before v13 derive one from
+ * the name). Shy ones hide by the rocks when the glass is tapped near them or a held item is swept past fast;
+ * curious ones come to look at a held item in the water and greet visitors; sleepy ones pulse slower, keep low
+ * and settle an hour before night; social ones gather round the others by day too.
+ * v13 BUBBLER (decoration 5, shop item 24; ./currents.ts): its column lifts swimmers and fresh food; now and then a
+ * wander becomes a ride up it (targetKind "ride"), most often for curious and social jellies.
  *
  * v11 FOODS: flakes (the can, always owned), brine shrimp (a jar) and plankton (a bottle) are bought in the
  * shop and stand on the tool shelf; each is a tool ("food" | "shrimp" | "plankton"; isFoodTool()), and
@@ -62,6 +71,7 @@
 import {
   ADULT,
   BOTTOM_DWELLERS,
+  BUBBLER,
   FAV_CHASE,
   FAV_MEAL,
   FLAKES,
@@ -213,6 +223,35 @@ import {
   type VisitorKind,
 } from "./visitors";
 import { decodeTank, encodeTank, hasPlace, type TankCode } from "./tankcode";
+import {
+  CURIOUS,
+  CURIOUS_BELOW,
+  CURIOUS_SIDE,
+  CURIOUS_VISIT,
+  RIDE_CHANCE,
+  SHY,
+  SHY_FAST,
+  SHY_FOOD_DELAY,
+  SHY_FOOD_HOLD,
+  SHY_HIDE,
+  SHY_RADIUS,
+  SHY_SINK,
+  SHY_TRUST,
+  SLEEPY,
+  SLEEPY_PERIOD,
+  SOCIAL,
+  SOCIAL_PULL,
+  TRAIT_N,
+  TRAIT_NAMES,
+  TRAIT_PHRASES,
+  drowsy,
+  rollTrait,
+  traitBit,
+  traitFromName,
+  traitOf,
+  type Trait,
+} from "./traits";
+import { COLUMN_HALF, CURRENT_HALF, CURRENT_PUSH, CURRENT_TOP_GAP, GLIDE_SHARE, RIDE_AWAY, RIDE_GIVE_UP, RIDE_KICK, RIDE_PUSH, RIDE_TOP, currentAt, foodLift } from "./currents";
 import { SEASONS, type SeasonId } from "./season";
 import { SPRINKLE_NEAR, advance, copyRequests, planRequests, requestText, requestsOf, rewardOf, type DailyRequests, type Deed, type Request, type RequestKind } from "./requests";
 
@@ -223,6 +262,8 @@ export { SPOT_N, murkOf, spotsForMurk };
 export { VISITORS };
 export { MORPH_NONE, MORPH_CLASSIC, MORPH_GHOST, requestText, rewardOf };
 export type { DailyRequests, Request, RequestKind };
+export { TRAIT_NAMES, TRAIT_PHRASES, traitFromName };
+export type { Trait };
 
 // ---------------------------------------------------------------- saves
 
@@ -256,6 +297,9 @@ export interface SaveJelly {
   /** v12: its colour morph, fixed for life: 0 none, 1 classic (v7's rare colour, 1 in 10 births), 2 ghost (a season's).
    *  v7..v9 saves wrote a boolean (true = classic); loading takes either */
   morph: number;
+  /** v13 (optional): its personality, 0 shy, 1 curious, 2 sleepy, 3 social (./traits.ts). Missing: derived from
+   *  its name and species (traitFromName), so older saves load the same every time */
+  trait?: number;
 }
 
 /** v7: what the jelly journal knows about one species (journal(s)[k]). */
@@ -270,6 +314,8 @@ export interface JournalEntry {
   firstName: string | null;
   /** v12: the colour morphs ever owned, a bitmask by morph id (bit id - 1: 1 classic, 2 ghost); v7..v9 saves wrote a boolean */
   morphSeen: number;
+  /** v13: the personalities met in this species, a bitmask by trait (bit t); older saves: from the jellies in the tank */
+  traitSeen: number;
 }
 
 /** The lamp button's override of the clock: show `night` until `until` (epoch ms, the next 07:00 or 19:00). */
@@ -365,7 +411,8 @@ export interface Jelly {
   /** v10: the lean into turns (j{s}rot) */
   tilt: Tilt;
   target: { x: number; y: number } | null;
-  targetKind: "wander" | "tap" | "food" | null;
+  /** v13: "hide" a shy jelly's retreat, "visit" a curious one saying hello to a visitor, "ride" up the bubbler */
+  targetKind: "wander" | "tap" | "food" | "hide" | "visit" | "ride" | null;
   targetUntil: number;
   /** when the last happy wiggle started (eating, petting, growing) */
   wiggleT0: number;
@@ -383,9 +430,13 @@ export interface Jelly {
   content: number;
   /** v12: morph id (0 none, 1 classic, 2 ghost) */
   morph: number;
+  /** v13: its personality (./traits.ts) */
+  trait: Trait;
+  /** v13: a bubbler ride: 0 none, 1 heading for the column, 2 rising in it */
+  ride: number;
 }
 
-export type SimEventType = "ate" | "pulse" | "cleaned" | "grew" | "adult" | "earned" | "baby" | "dug" | "shrimpAte" | "pearlReady" | "pearl" | "rehomed" | "upgraded" | "revealed" | "visitorArrived" | "visitorTapped" | "visitorLeft" | "spotCleaned" | "themed" | "requestDone";
+export type SimEventType = "ate" | "pulse" | "cleaned" | "grew" | "adult" | "earned" | "baby" | "dug" | "shrimpAte" | "pearlReady" | "pearl" | "rehomed" | "upgraded" | "revealed" | "visitorArrived" | "visitorTapped" | "visitorLeft" | "spotCleaned" | "themed" | "requestDone" | "rode";
 export interface SimEvent {
   type: SimEventType;
   slot?: number;
@@ -407,6 +458,8 @@ export interface SimEvent {
   theme?: number;
   /** v12 "requestDone": which of today's requests (index into requests(s).items) */
   request?: number;
+  /** v13 "rode": the bubbler was on screen when the ride reached the top */
+  seen?: boolean;
 }
 
 export interface State {
@@ -489,6 +542,11 @@ export interface State {
   requestsOn: boolean;
   /** v12: SimOptions.seasonalMorph */
   seasonalMorph: ((now: number) => number | null) | null;
+  /** v13: newborns' traits come from their own random stream (like the dirt), so the rest stays as it was */
+  traitRand: () => number;
+  /** v13: how far the held item moved since the last step, and its eased speed (artboard px/s): a fast one startles shy jellies */
+  cursorTravel: number;
+  cursorSpeed: number;
 }
 
 /** v8: what the player has in hand. v11: "shrimp" (the brine shrimp jar) and "plankton" (the bottle) are foods too. */
@@ -555,7 +613,7 @@ const THEME_FX_Y = 480;
 /** pan hints fade in/out over this long, s */
 const HINT_TIME = 0.25;
 
-const freshJelly = (k: Species, g: Stage, name: string, born: number, morph = MORPH_NONE): SaveJelly => ({
+const freshJelly = (k: Species, g: Stage, name: string, born: number, morph = MORPH_NONE, trait: number = traitFromName(name, k)): SaveJelly => ({
   k,
   g,
   gp: GROWTH[g],
@@ -568,11 +626,14 @@ const freshJelly = (k: Species, g: Stage, name: string, born: number, morph = MO
   born,
   content: 0,
   morph,
+  trait,
 });
 
 // ---------------------------------------------------------------- the jelly journal (v7)
 
-const blankEntry = (): JournalEntry => ({ seen: false, raised: 0, firstAdultAt: null, firstName: null, morphSeen: 0 });
+const blankEntry = (): JournalEntry => ({ seen: false, raised: 0, firstAdultAt: null, firstName: null, morphSeen: 0, traitSeen: 0 });
+/** v13: a saved jelly's trait: as saved, else derived from its name and species. */
+const traitOfSave = (j: Pick<SaveJelly, "trait" | "name" | "k">): Trait => traitOf(j.trait) ?? traitFromName(j.name, j.k);
 
 /** v12: a saved morph as an id: v7..v9's true is the classic one; anything unknown is none. */
 export const morphOf = (v: unknown): number => (v === true ? MORPH_CLASSIC : typeof v === "number" && Number.isInteger(v) && v > 0 && v < MORPH_IDS ? v : MORPH_NONE);
@@ -593,6 +654,7 @@ export function journalFrom(slots: readonly (SaveJelly | null)[], now: number): 
     const e = jn[j.k]!;
     e.seen = true;
     e.morphSeen |= morphBit(morphOf(j.morph));
+    e.traitSeen |= traitBit(traitOfSave(j));
     if (j.g === ADULT) {
       e.raised++;
       if (e.firstAdultAt === null) {
@@ -617,12 +679,14 @@ function journalOf(raw: unknown, slots: readonly (SaveJelly | null)[], now: numb
       firstAdultAt: Number.isFinite(at) ? at : null,
       firstName: cleanName(o.firstName),
       morphSeen: morphSeenOf(o.morphSeen),
+      traitSeen: typeof o.traitSeen === "number" && Number.isInteger(o.traitSeen) && o.traitSeen > 0 ? o.traitSeen & ((1 << TRAIT_N) - 1) : 0,
     };
   });
   for (const j of slots) {
     if (!j) continue;
     jn[j.k]!.seen = true;
     jn[j.k]!.morphSeen |= morphBit(morphOf(j.morph));
+    jn[j.k]!.traitSeen |= traitBit(traitOfSave(j));
   }
   return jn;
 }
@@ -637,6 +701,7 @@ function noteJelly(s: State, j: Jelly): void {
   const e = s.journal[j.k]!;
   e.seen = true;
   e.morphSeen |= morphBit(j.morph);
+  e.traitSeen |= traitBit(j.trait);
 }
 
 /** A repeatable 0..1 from a timestamp, so loading the same save twice names jellies the same. */
@@ -766,6 +831,7 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
       born: finite(o.born, now),
       content: clamp(finite(o.content, 0), 0, BABY_SECONDS),
       morph: morphOf(o.morph),
+      trait: traitOf(o.trait) ?? traitFromName(name, speciesOf(o.k)),
     });
   }
   const ownedIn = Array.isArray(raw.owned) ? raw.owned : [];
@@ -985,7 +1051,7 @@ export function demoSave(now = Date.now()): Save {
     spots: [],
     night: true,
     lamp: { night: true, until },
-    owned: [true, false, false, false, false],
+    owned: noDecor().map((_, n) => n === 0),
     helpers: noHelpers(),
     decorX: defaultDecorX(),
     pearlDay: dayKey(now),
@@ -1066,6 +1132,8 @@ function makeJelly(sj: SaveJelly, slot: number, slots: (Jelly | null)[], tier: n
     born: sj.born,
     content: sj.content,
     morph: morphOf(sj.morph),
+    trait: traitOfSave(sj),
+    ride: 0,
   };
   if (j.mode === "fixed") {
     const ok =
@@ -1162,6 +1230,9 @@ export function createState(save: Save, rand: () => number = Math.random, opts: 
     requests: requestsOf(save.requests),
     requestsOn: opts.requests === true,
     seasonalMorph: opts.seasonalMorph ?? null,
+    traitRand: rng(Math.floor(clock / 1000) + 23),
+    cursorTravel: 0,
+    cursorSpeed: 0,
   };
   state.theme = themeOf(save.theme, state.themes);
   for (const j of jellies(state)) noteJelly(state, j);
@@ -1175,7 +1246,7 @@ export function toSave(s: State, now: number): Save {
     v: 10,
     slots: s.slots.map((j) =>
       j
-        ? { k: j.k, g: j.g, gp: j.gp, care: j.care, fullness: j.fullness, affection: j.affection, anchor: j.anchor, spot: j.spot, name: j.name, born: j.born, content: j.content, morph: j.morph }
+        ? { k: j.k, g: j.g, gp: j.gp, care: j.care, fullness: j.fullness, affection: j.affection, anchor: j.anchor, spot: j.spot, name: j.name, born: j.born, content: j.content, morph: j.morph, trait: j.trait }
         : null,
     ),
     dollars: s.dollars,
@@ -1424,6 +1495,8 @@ export const toggleTool = (s: State, tool: Exclude<Tool, "none">): Tool => setTo
  * middle sits on the point; pressed, the can tips and pours and the sponge squishes.
  */
 export function setCursor(s: State, x: number, y: number, down: boolean, visible: boolean): void {
+  // v13: how far a shown item travels (a fast one startles shy jellies)
+  if (s.cursor.visible && visible && Number.isFinite(x) && Number.isFinite(y)) s.cursorTravel += Math.hypot(x - s.cursor.x, y - s.cursor.y);
   if (Number.isFinite(x)) s.cursor.x = x;
   if (Number.isFinite(y)) s.cursor.y = y;
   s.cursor.down = !!down;
@@ -1676,7 +1749,9 @@ function addPolyp(s: State, k: Species, parent: Jelly | null = null): { slot: nu
   const anchor = freeAnchor(s.slots, s.tier);
   if (slot < 0 || anchor < 0 || jellyCount(s) >= maxJellies(s)) return null;
   const morph = birthMorph(s, parent);
-  const j = makeJelly({ ...freshJelly(k, POLYP, newName(s), s.clock, morph), anchor }, slot, s.slots, s.tier, rightGlass(s));
+  // v13: a personality of its own, or (sometimes) its parent's; from the traits' own random stream
+  const trait = rollTrait(s.traitRand, parent ? parent.trait : null);
+  const j = makeJelly({ ...freshJelly(k, POLYP, newName(s), s.clock, morph, trait), anchor }, slot, s.slots, s.tier, rightGlass(s));
   s.slots[slot] = j;
   noteJelly(s, j);
   const c = bodyCentre(j);
@@ -1795,12 +1870,14 @@ export interface JellyInfo {
   mood: number;
   /** v12: its morph id (0 none, 1 classic, 2 ghost) */
   morph: number;
+  /** v13: its personality (TRAIT_NAMES / TRAIT_PHRASES) */
+  trait: Trait;
 }
 
 export function jellyInfo(s: State, slot: number): JellyInfo | null {
   const j = s.slots[slot];
   if (!j) return null;
-  return { name: j.name, k: j.k, g: j.g, ageDays: Math.max(0, Math.floor((s.clock - j.born) / 86_400_000)), fullness: j.fullness, mood: moodOf(s, j), morph: j.morph };
+  return { name: j.name, k: j.k, g: j.g, ageDays: Math.max(0, Math.floor((s.clock - j.born) / 86_400_000)), fullness: j.fullness, mood: moodOf(s, j), morph: j.morph, trait: j.trait };
 }
 
 /** Trimmed, 1..12 characters; anything else is ignored. Returns whether the name changed. */
@@ -1887,6 +1964,7 @@ const requestTank = (s: State) => ({
   foods: s.foods,
   decor: s.owned,
   pearl: pearlShowing(s),
+  bubbler: s.owned[BUBBLER] === true,
 });
 
 /** Plan today's requests if the day has turned (or none were planned yet). Unfinished ones from another day just go. */
@@ -1917,6 +1995,7 @@ function stepRequests(s: State, events: SimEvent[]): void {
     else if (e.type === "spotCleaned") requestDeed(s, { kind: "scrub" }, events);
     else if (e.type === "pearl") requestDeed(s, { kind: "pearl" }, events);
     else if (e.type === "visitorTapped") requestDeed(s, { kind: "visitor" }, events);
+    else if (e.type === "rode" && e.seen) requestDeed(s, { kind: "ride" }, events);
   }
 }
 
@@ -1974,6 +2053,8 @@ export function tap(s: State, x: number, y: number): "visitor" | "pearl" | "pet"
   if (x < K.glassL || x > rightGlass(s) || y < K.waterTop || y > K.waterBot) return null;
   s.ripple = { x, y, t0: s.t };
   const pet = jellyAt(s, x, y);
+  // v13: a tap on the glass startles shy jellies nearby (not the one being petted)
+  const startled = startle(s, x, y, s.slots[pet] ?? null);
   const pj = s.slots[pet];
   if (pj) {
     pj.affection = clamp(pj.affection + 0.08);
@@ -1989,7 +2070,7 @@ export function tap(s: State, x: number, y: number): "visitor" | "pearl" | "pet"
   let call: Jelly | null = null;
   let callD = Infinity;
   for (const j of jellies(s)) {
-    if (j.mode !== "swim") continue;
+    if (j.mode !== "swim" || startled.has(j)) continue;
     const c = bodyCentre(j);
     const d = Math.hypot(c.x - x, c.y - y);
     if (d < callD) {
@@ -2000,6 +2081,7 @@ export function tap(s: State, x: number, y: number): "visitor" | "pearl" | "pet"
   if (call) {
     call.affection = clamp(call.affection + 0.02);
     if (call.targetKind !== "food") {
+      call.ride = 0;
       const g = geomIn(s, call.k, call.g);
       // bring the bell to the finger: rim a little below the tap
       const off = call.k === COMB && call.g >= JUVENILE ? 0 : Math.min(40, g.body.top / 3);
@@ -2070,6 +2152,13 @@ function stepVisitors(s: State, dt: number, events: SimEvent[]): void {
       s.visit = v;
       s.lastVisitor = k;
       events.push({ type: "visitorArrived", kind: VISITORS[k]! });
+      // v13: curious jellies are the first to say hello
+      for (const j of jellies(s)) {
+        if (j.mode !== "swim" || j.trait !== CURIOUS || j.targetKind === "food" || j.targetKind === "tap") continue;
+        j.targetKind = "visit";
+        j.targetUntil = s.t + CURIOUS_VISIT;
+        j.ride = 0;
+      }
       break;
     }
     if (!s.visit) s.nextVisit = s.t + 10; // nothing fits this view: try again shortly
@@ -2100,7 +2189,8 @@ function stepVisitors(s: State, dt: number, events: SimEvent[]): void {
 /**
  * The tank as a short URL-safe code (base64url, ~60-130 characters for a full Large tank): tier,
  * helpers, decorations and where they stand, and each jelly's slot, species, stage, morph, anchor
- * or sand spot, and name; v11: the theme (a Reef tank's code is the same as before). Dollars, needs,
+ * or sand spot, and name; v11: the theme (a Reef tank's code is the same as before); v13: traits and the
+ * bubbler (only when there's something an older code can't say: see ./tankcode.ts). Dollars, needs,
  * foods and the clock are left out.
  */
 export function exportTank(s: State): string {
@@ -2110,7 +2200,7 @@ export function exportTank(s: State): string {
     helpers: [...s.helpers],
     decor: s.owned.map((o, n) => (o ? snap(s.decorX[n] ?? DECOR[n]!.x) : null)),
     jellies: s.slots.flatMap((j, slot) =>
-      j ? [{ slot, k: j.k, g: j.g, morph: j.morph, place: j.g === POLYP ? j.anchor : hasPlace(j.k, j.g) ? j.spot : -1, name: j.name }] : [],
+      j ? [{ slot, k: j.k, g: j.g, morph: j.morph, trait: j.trait, place: j.g === POLYP ? j.anchor : hasPlace(j.k, j.g) ? j.spot : -1, name: j.name }] : [],
     ),
   };
   return encodeTank(t);
@@ -2129,7 +2219,8 @@ export function importTank(code: string, now = Date.now()): Save | null {
     const k = c.k as Species;
     const g = c.g as Stage;
     slots[c.slot] = {
-      ...freshJelly(k, g, c.name, now, c.morph),
+      // v13: the trait the code carries (older codes: derived from the name, as for older saves)
+      ...freshJelly(k, g, c.name, now, c.morph, c.trait ?? traitFromName(c.name, k)),
       fullness: 0.85,
       affection: 0.7,
       anchor: g === POLYP ? c.place : -1,
@@ -2231,14 +2322,17 @@ function swim(s: State, slot: number, j: Jelly, dt: number, events: SimEvent[]):
   const { bounds, hard } = g;
   const sw = swimOf(j.k, j.g);
 
-  const busy = j.targetKind === "food" || j.targetKind === "tap";
+  // v13: hiding, saying hello and riding the bubbler are errands too
+  const busy = j.targetKind !== null && j.targetKind !== "wander";
   const target = j.target ?? { x: j.x, y: j.y };
   const tx = target.x - j.x;
   const ty = target.y - j.y;
   const dist = Math.hypot(tx, ty);
 
-  // quiet nights: idle jellies pulse less often and push more gently; gliders slow down
-  const calm = calmOf(s.night);
+  // quiet nights: idle jellies pulse less often and push more gently; gliders slow down (sleepy ones from an hour early)
+  const calm = calmFor(s, j);
+  // v13: a sleepy jelly rests longer between idle pulses
+  const lazy = !busy && j.trait === SLEEPY ? SLEEPY_PERIOD : 1;
   if (sw.glide) {
     // comb: cilia, not a bell: no thrust, just a smooth glide; the rows shimmer all the time
     j.pulse = (j.pulse + dt / sw.shimmer) % 1;
@@ -2249,7 +2343,7 @@ function swim(s: State, slot: number, j: Jelly, dt: number, events: SimEvent[]):
     j.vy += (ty * want - j.vy) * a;
   } else {
     // pulse the bell, thrust during the squeeze
-    let period = quietPeriod(busy ? sw.busy : sw.idle, calm, busy);
+    let period = quietPeriod(busy ? sw.busy : sw.idle, calm, busy) * lazy;
     if (j.fullness < 0.2) period *= 1.3;
     const prev = j.pulse;
     j.pulse = (j.pulse + dt / period) % 1;
@@ -2271,8 +2365,8 @@ function swim(s: State, slot: number, j: Jelly, dt: number, events: SimEvent[]):
       events.push({ type: "pulse", slot });
       if (sw.twitch) j.vx += (s.rand() - 0.5) * 2 * sw.twitch * quietScale(QUIET.twitch, calm);
     }
-    // sink between pulses, water drag
-    j.vy += 25 * dt;
+    // sink between pulses, water drag; v13: a frightened shy jelly folds up and drops faster toward its hiding place
+    j.vy += (j.targetKind === "hide" && ty > 20 ? 25 + SHY_SINK : 25) * dt;
     const drag = Math.exp(-1.6 * dt);
     j.vx *= drag;
     j.vy *= drag;
@@ -2297,7 +2391,7 @@ function swim(s: State, slot: number, j: Jelly, dt: number, events: SimEvent[]):
   }
   if (!sw.glide && j.g >= JUVENILE) {
     // v10: the ripple runs with the bell: TENT_WAVES_PER_PULSE waves down the tentacles per beat
-    let period = quietPeriod(busy ? sw.busy : sw.idle, calm, busy);
+    let period = quietPeriod(busy ? sw.busy : sw.idle, calm, busy) * lazy;
     if (j.fullness < 0.2) period *= 1.3;
     j.tent = (j.tent + (dt * TENT_WAVES_PER_PULSE) / period) % 1;
   } else {
@@ -2361,8 +2455,152 @@ export function nightGather(s: State): { x: number; y: number } {
   return gatherPoint(s.t, x0, x1, BOUNDS.y0, BOUNDS.y1);
 }
 
-function chooseTargets(s: State): void {
+// ---------------------------------------------------------------- v13: personalities and the bubbler
+
+/** The quiet-night calm a jelly feels: the night's, and for a sleepy one at least SLEEPY_DUSK in the hour before it. */
+function calmFor(s: State, j: Jelly): number {
+  const calm = calmOf(s.night);
+  if (j.trait !== SLEEPY) return calm;
+  return Math.max(calm, drowsy(new Date(s.clock).getHours(), s.lamp !== null && !s.lamp.night));
+}
+
+/** The bubbler's column (world): its middle x, the crater it rises from and the surface; null when it isn't owned. */
+export function bubbleColumn(s: State): { x: number; top: number; bottom: number } | null {
+  if (!s.owned[BUBBLER]) return null;
+  const d = DECOR[BUBBLER]!;
+  return { x: s.decorX[BUBBLER] ?? d.x, top: K.waterTop, bottom: decorBaseY(s, BUBBLER) - d.h * 0.8 };
+}
+
+/** Where a curious jelly wants to be: the held item while it's in the water (world), or null. */
+function heldInWater(s: State): { x: number; y: number } | null {
+  const c = s.cursor;
+  if (s.tool === "none" || !c.visible || shopBlocks(s) || c.y < K.waterTop || c.y > K.waterBot) return null;
+  return { x: screenToWorld(s, c.x), y: c.y };
+}
+
+/** The middle of the other swimmers (a social jelly's day-time gathering point), or null if it swims alone. */
+function groupPoint(s: State, me: Jelly): { x: number; y: number } | null {
+  let n = 0;
+  let x = 0;
+  let y = 0;
+  for (const o of jellies(s)) {
+    if (o === me || o.mode !== "swim") continue;
+    x += o.x;
+    y += o.y;
+    n++;
+  }
+  return n ? { x: x / n, y: y / n } : null;
+}
+
+/**
+ * A shy jelly takes fright at (fx, fy): it heads for the nearest owned decoration or rock that isn't
+ * where the fright came from, keeps low there for SHY_HIDE s and ignores food for the first SHY_FOOD_HOLD.
+ */
+function hide(s: State, j: Jelly, fx: number, fy: number): void {
+  const b = geomIn(s, j.k, j.g).bounds;
+  const spots: { x: number; y: number }[] = [];
+  s.owned.forEach((o, n) => o && spots.push({ x: s.decorX[n] ?? DECOR[n]!.x, y: decorBaseY(s, n) }));
+  POLYP_ANCHORS.forEach((a) => a.tier <= s.tier && spots.push(a));
+  let best: { x: number; y: number } | null = null;
+  let bestD = Infinity;
+  for (const p of spots) {
+    if (p.x < b.x0 - 60 || p.x > b.x1 + 60) continue;
+    // somewhere away from the fright, then the nearest
+    const d = Math.hypot(p.x - j.x, p.y - j.y) + (Math.hypot(p.x - fx, p.y - fy) < SHY_RADIUS * 0.6 ? 2000 : 0);
+    if (d < bestD) {
+      bestD = d;
+      best = p;
+    }
+  }
+  const x = best ? best.x : j.x + Math.sign(j.x - fx || 1) * SHY_RADIUS;
+  j.target = { x: clamp(x, b.x0, b.x1), y: b.y1 - 10 };
+  j.targetKind = "hide";
+  j.targetUntil = s.t + SHY_HIDE;
+  j.ride = 0;
+}
+
+/** Startle the shy swimmers near (x, y) (world) that don't trust you yet, except `spare`; returns them. */
+function startle(s: State, x: number, y: number, spare: Jelly | null, again = true): Set<Jelly> {
+  const out = new Set<Jelly>();
+  for (const j of jellies(s)) {
+    if (j === spare || j.mode !== "swim" || j.trait !== SHY || j.affection >= SHY_TRUST) continue;
+    if (!again && j.targetKind === "hide") continue;
+    const c = bodyCentre(j);
+    if (Math.hypot(c.x - x, c.y - y) > SHY_RADIUS) continue;
+    hide(s, j, x, y);
+    out.add(j);
+  }
+  return out;
+}
+
+/** Where a jelly heading for the column aims: the column, about level with itself (a pulse jelly can't swim down). */
+const rideApproach = (j: Jelly, col: { x: number; bottom: number }, b: Geom["bounds"]) => ({
+  x: clamp(col.x, b.x0, b.x1),
+  y: clamp(Math.min(j.y - 20, col.bottom - 80), b.y0 + 100, b.y1),
+});
+
+/** Head for the bubbler's column to ride it up (a wander pick that came up "ride"). */
+function startRide(s: State, j: Jelly, col: { x: number; bottom: number }, b: Geom["bounds"]): void {
+  j.target = rideApproach(j, col, b);
+  j.targetKind = "ride";
+  j.targetUntil = s.t + RIDE_GIVE_UP;
+  j.ride = 1;
+}
+
+/**
+ * A ride in progress: into the column, then straight up it; at the top it's done ("rode", `seen` when the
+ * bubbler is on screen) and it drifts back down to one side. Returns false when the ride is off (no
+ * bubbler any more, or too long without getting there): the caller picks a new wander target.
+ */
+function stepRide(s: State, slot: number, j: Jelly, b: Geom["bounds"], events: SimEvent[]): boolean {
+  const col = bubbleColumn(s);
+  if (!col || s.t > j.targetUntil) {
+    j.ride = 0;
+    return false;
+  }
+  const c = bodyCentre(j);
+  if (j.ride === 1 && Math.abs(c.x - col.x) < COLUMN_HALF) j.ride = 2;
+  if (j.ride !== 2) {
+    j.target = rideApproach(j, col, b);
+    return true;
+  }
+  if (j.y > b.y0 + RIDE_TOP) {
+    j.target = { x: clamp(col.x, b.x0, b.x1), y: b.y0 };
+    return true;
+  }
+  // over the top: drift back down beside the column, on the roomier side
+  j.ride = 0;
+  const v = viewSpan(s);
+  events.push({ type: "rode", slot, x: col.x, y: c.y, seen: col.x >= v.x0 && col.x <= v.x1 });
+  const side = col.x - b.x0 > b.x1 - col.x ? -1 : 1;
+  j.vx += side * RIDE_KICK; // it lets go and tips out of the column
+  j.vy = Math.max(0, j.vy);
+  j.target = { x: clamp(col.x + side * RIDE_AWAY, b.x0, b.x1), y: b.y0 + (b.y1 - b.y0) * 0.55 };
+  j.targetKind = "wander";
+  j.targetUntil = s.t + 6;
+  return true;
+}
+
+/** The bubbler's current lifts the swimmers in its column (riders much harder); gliders feel a share of it. */
+function stepCurrent(s: State, dt: number): void {
+  const col = bubbleColumn(s);
+  if (!col) return;
+  for (const j of jellies(s)) {
+    if (j.mode !== "swim") continue;
+    const c = bodyCentre(j);
+    const w = currentAt(c.x - col.x, c.y, col.top + CURRENT_TOP_GAP, col.bottom);
+    const riding = j.ride === 2 && Math.abs(c.x - col.x) < CURRENT_HALF;
+    if (w <= 0 && !riding) continue;
+    const share = swimOf(j.k, j.g).glide ? GLIDE_SHARE : 1;
+    j.vy -= (riding ? RIDE_PUSH * Math.max(w, 0.5) : CURRENT_PUSH * w) * share * dt;
+    // a rider is kept in the middle of the column
+    if (riding) j.vx += (col.x - c.x) * 2 * dt;
+  }
+}
+
+function chooseTargets(s: State, events: SimEvent[]): void {
   const claimed = new Set<Food>();
+  const held = heldInWater(s);
   s.slots.forEach((j, slot) => {
     if (!j || j.mode !== "swim") return;
     const g = geomIn(s, j.k, j.g);
@@ -2372,8 +2610,12 @@ function chooseTargets(s: State): void {
     let bestFree: Food | null = null;
     let bestFreeD = Infinity;
     const fav = favouriteFood(j.k);
-    for (const f of s.food) {
+    // v13: just after a fright a shy jelly stays hidden, food or not; later it lets sinking food settle a moment first
+    const fresh = j.targetKind === "hide" && s.t < j.targetUntil - SHY_HIDE + SHY_FOOD_HOLD;
+    const shy = j.trait === SHY;
+    for (const f of fresh ? [] : s.food) {
       if (f.state !== "sink" && f.state !== "rest") continue;
+      if (shy && f.state === "sink" && f.age < SHY_FOOD_DELAY) continue;
       // v11: a favourite pellet counts as much nearer, so with several foods in the water it's chased first
       const d = Math.hypot(f.x + FOOD_MID - j.x, f.y + FOOD_MID - (j.y + reach * 0.42)) * (f.kind === fav ? FAV_CHASE : 1);
       if (d < bestD) {
@@ -2391,25 +2633,56 @@ function chooseTargets(s: State): void {
       // park the rim above the pellet so it drifts into the tentacles
       j.target = { x: clamp(f.x + FOOD_MID, g.bounds.x0, g.bounds.x1), y: clamp(f.y - reach * 0.37, g.bounds.y0, g.bounds.y1) };
       j.targetKind = "food";
-    } else if (j.targetKind === "food" || !j.target || s.t > j.targetUntil) {
+      j.ride = 0;
+      return;
+    }
+    const b = g.bounds;
+    let free = j.targetKind === "food" || !j.target || s.t > j.targetUntil;
+    if (!free && j.targetKind === "ride") free = !stepRide(s, slot, j, b, events);
+    else if (!free && j.targetKind === "visit") {
+      // v13: a curious jelly hovers near the visitor (a little way off, on its own side)
+      if (!s.visit) free = true;
+      else {
+        const v = visitorCentre(s.visit);
+        const away = Math.sign(j.x - v.x) || 1;
+        j.target = { x: clamp(v.x + away * 80, b.x0, b.x1), y: clamp(v.y + 30, b.y0, b.y1) };
+      }
+    }
+    if (free) {
       const sw = swimOf(j.k, j.g);
-      const b = g.bounds;
+      const col = bubbleColumn(s);
+      // v13: now and then a wander becomes a ride up the bubbler (curious and social jellies most often)
+      if (col && j.g >= EPHYRA && s.rand() < (RIDE_CHANCE[j.trait] ?? 0)) {
+        startRide(s, j, col, b);
+        return;
+      }
       const low = BOTTOM_DWELLERS.includes(j.k) && j.g >= JUVENILE; // flower hats hop about near the sand
-      const yTop = low ? b.y0 + (b.y1 - b.y0) * 0.6 : b.y0 + 50;
-      const ySpan = low ? (b.y1 - b.y0) * 0.4 : Math.max(0, b.y1 - b.y0 - 150);
+      const sleepy = j.trait === SLEEPY && !low; // v13: sleepy jellies keep to the lower water
+      const yTop = low ? b.y0 + (b.y1 - b.y0) * 0.6 : sleepy ? b.y0 + (b.y1 - b.y0) * 0.4 : b.y0 + 50;
+      const ySpan = low ? (b.y1 - b.y0) * 0.4 : sleepy ? Math.max(0, (b.y1 - b.y0) * 0.6 - 40) : Math.max(0, b.y1 - b.y0 - 150);
       j.target = {
         x: b.x0 + 40 + s.rand() * Math.max(0, b.x1 - b.x0 - 80),
         y: yTop + s.rand() * ySpan,
       };
       j.targetKind = "wander";
       j.targetUntil = s.t + sw.wanderMin + s.rand() * sw.wanderSpread;
+      j.ride = 0;
       // quiet nights: wander less often, and loosely gather round the shared point (bottom dwellers only in x)
-      const calm = calmOf(s.night);
-      if (calm > 0) {
-        j.targetUntil = s.t + (j.targetUntil - s.t) * quietScale(QUIET.hold, calm);
-        const gt = gatherTarget(j.target, nightGather(s), slot, calm, (slot * 0.618034 + 0.3) % 1);
+      const calm = calmFor(s, j);
+      if (calm > 0) j.targetUntil = s.t + (j.targetUntil - s.t) * quietScale(QUIET.hold, calm);
+      // v13: a social jelly gathers with the others by day too (round the group), and keeps closest at night
+      const social = j.trait === SOCIAL;
+      const point = calm > 0 ? nightGather(s) : social ? groupPoint(s, j) : null;
+      if (point) {
+        const gt = gatherTarget(j.target, point, slot, social ? Math.max(calm, SOCIAL_PULL) : calm, (slot * 0.618034 + 0.3) % 1);
         j.target = { x: clamp(gt.x, b.x0, b.x1), y: low ? j.target.y : clamp(gt.y, b.y0, b.y1) };
       }
+    }
+    // v13: a curious jelly comes over to look at whatever you're holding in the water (beside it, a little below)
+    if (held && j.trait === CURIOUS && j.targetKind === "wander") {
+      const side = Math.sign(j.x - held.x) || 1;
+      j.target = { x: clamp(held.x + side * CURIOUS_SIDE, b.x0, b.x1), y: clamp(held.y + CURIOUS_BELOW, b.y0, b.y1) };
+      j.targetUntil = Math.min(j.targetUntil, s.t + 1.5);
     }
   });
 }
@@ -2496,12 +2769,21 @@ export function step(s: State, dt: number): SimEvent[] {
     }
   }
 
+  // v13: a held item swept fast through the water startles the shy jellies near it
+  if (dt > 0) s.cursorSpeed += (s.cursorTravel / dt - s.cursorSpeed) * (1 - Math.exp(-dt / 0.08));
+  s.cursorTravel = 0;
+  const held = heldInWater(s);
+  if (held && s.cursorSpeed > SHY_FAST) startle(s, held.x, held.y, null, false);
+
   // food
+  const col = bubbleColumn(s);
   for (const f of s.food) {
     if (f.state === "off") continue;
     f.age += dt;
     if (f.state === "sink") {
       f.y += f.vy * dt;
+      // v13: sprinkled into the bubbler's column, it's carried up a little before it sinks
+      if (col) f.y = Math.max(K.waterTop + 3, f.y - foodLift(currentAt(f.x + FOOD_MID - col.x, f.y, col.top, col.bottom, COLUMN_HALF), f.age) * dt);
       f.x = clamp(f.x + Math.sin(f.age * 2.2 + f.seed) * 15 * dt, K.glassL + P, rightGlass(s) - 4 * P);
       // rest with the pellet's bottom row pressed into the top row of sand
       const floor = sandAt(f.x + FOOD_MID) - 2 * P;
@@ -2558,7 +2840,7 @@ export function step(s: State, dt: number): SimEvent[] {
   }
 
   // move
-  chooseTargets(s);
+  chooseTargets(s, events);
   s.slots.forEach((j, i) => {
     if (!j) return;
     if (j.mode === "swim") {
@@ -2589,6 +2871,7 @@ export function step(s: State, dt: number): SimEvent[] {
       }
     }
   });
+  stepCurrent(s, dt);
   repel(s, dt);
   for (const j of s.slots) {
     if (!j) continue;

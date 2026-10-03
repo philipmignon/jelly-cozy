@@ -2985,6 +2985,144 @@ def mushroom_glow_art():
     return px
 
 
+# ---- bubbler ----
+# v13: the bubbler (decoration 5, shop item 24): a little stone volcano with an airstone in its crater, the kind
+# every aquarium shop sells. A column of bubbles rises from the crater to the surface, each bubble on its own
+# timeline (BubblerBub0..11, looping at different lengths), with a soft screen-blended shimmer of moving water
+# behind them on a timeline of its own (BubblerShimmer). The logic (src/currents.ts) lifts jellies and food in it.
+R_BASALT = ramp("16121e", "2a2434", "463c50", "665a6c", "908290", "c0b2b6")
+R_GLAZE = ramp("4a1006", "962a0c", "d8541a", "f8923a", "ffd27a")  # painted lava: it's an ornament
+BUB_LIP = 21         # logical px from the base point up to the crater's lip
+BUB_TOP = WATER_TOP + 8  # where the bubbles pop (world y, logical): just under the surface line
+BUB_BASE = SAND_BASE + 31  # its default base y (logical), as in DECOR
+
+
+def bubbler_art():
+    """The volcano, origin = base centre on the sand: a rough cone of dark stone lit from the upper left,
+    glazed lava runs down from the lip, moss low on the shadow side, pebbles and a little sand at its foot."""
+    px = Px()
+    r2 = random.Random(24)
+    light = (-0.55, -0.75, 0.45)
+    ln = math.sqrt(sum(v * v for v in light))
+    lx, ly, lz = (v / ln for v in light)
+    half = {}
+    m = set()
+    for y in range(-BUB_LIP, 1):
+        t = (y + BUB_LIP) / BUB_LIP  # 0 at the lip, 1 at the foot
+        hw = 5.2 + 12.8 * t ** 1.45 + 0.8 * math.sin(y * 1.3 + 1) * t + (0.6 if y % 5 == 0 and t > 0.3 else 0)
+        half[y] = hw
+        for x in range(-20, 21):
+            if abs(x + 0.5) <= hw:
+                m.add((x, y))
+    for y in range(-BUB_LIP - 1, -BUB_LIP + 1):  # the lip's rim, a touch wider than the cone's top
+        for x in range(-6, 6):
+            m.add((x, y))
+    for x, y in sorted(m):
+        hw = half.get(y, 4.6)
+        u = max(-1.0, min(1.0, (x + 0.5) / hw))
+        nz = math.sqrt(max(0.0, 1 - u * u))
+        nx, ny = u * 0.9, -0.55  # a cone: leans back, faces up a little
+        nl = math.sqrt(nx * nx + ny * ny + nz * nz)
+        t = 0.12 + 0.88 * max(0.0, (nx * lx + ny * ly + nz * lz) / nl)
+        if r2.random() < 0.1:
+            t -= 0.16  # pitted stone
+        idx = shade_index(t, len(R_BASALT) - 1, x, y) + 1
+        if any((x + a, y + b) not in m for a, b in ((1, 0), (-1, 0), (0, 1), (0, -1))):
+            idx = 1 if u < -0.2 and y > -BUB_LIP else 0  # selective outline: the lit flank stays soft
+        px.put(x, y, R_BASALT[min(idx, len(R_BASALT) - 1)])
+    for x in range(-4, 4):  # the crater: a dark mouth with the airstone's cool glow deep in it
+        px.put(x, -BUB_LIP - 1, R_BASALT[0])
+        px.put(x, -BUB_LIP, R_BASALT[0] if abs(x + 0.5) > 2 else hx("3a5a6a") if abs(x + 0.5) > 1 else hx("7ab8c8"))
+    for x in (-6, -5):
+        px.put(x, -BUB_LIP - 1, R_BASALT[5])
+    px.put(-6, -BUB_LIP, R_BASALT[4])
+    px.put(4, -BUB_LIP - 1, R_BASALT[3])
+    px.put(5, -BUB_LIP - 1, R_BASALT[2])
+    # glazed lava runs from the lip: two-pixel ribbons, a hot core near the top, darkening to their ends
+    for x0, length, lean, wob in ((-3, 15, -0.32, 0.8), (0, 9, 0.05, 1.2), (3, 18, 0.38, 0.7)):
+        for k in range(length):
+            y = -BUB_LIP + 1 + k
+            x = round(x0 + lean * k + math.sin(k * wob) * 0.7)
+            if (x, y) not in m or (x + 1, y) not in m:
+                break
+            f = k / length
+            hot, warm = (R_GLAZE[4], R_GLAZE[3]) if f < 0.25 else (R_GLAZE[3], R_GLAZE[2]) if f < 0.7 else (R_GLAZE[2], R_GLAZE[1])
+            px.put(x, y, hot if x < 0 else warm)
+            px.put(x + 1, y, warm if x < 0 else R_GLAZE[1] if f > 0.5 else warm)
+        px.put(x, y + 1, R_GLAZE[1]) if (x, y + 1) in m else None  # a drip at the end
+    for _ in range(40):  # moss on the shadow side, low down
+        x, y = r2.randint(3, 18), r2.randint(-9, 0)
+        if (x, y) in m and r2.random() < 0.8:
+            px.put(x, y, r2.choice(R_KELP[1:4]))
+    for _ in range(12):
+        x, y = r2.randint(-17, -5), r2.randint(-5, 0)
+        if (x, y) in m:
+            px.put(x, y, r2.choice(R_KELP[3:5]))
+    for _ in range(10):  # glints of mica on the lit flank
+        x, y = r2.randint(-12, -2), r2.randint(-18, -4)
+        if (x, y) in m and px.get(x, y) in (R_BASALT[3], R_BASALT[4]):
+            px.put(x, y, R_BASALT[5])
+    for cx, cy, r in ((-18.5, -1.4, 2.2), (17.5, -1.0, 1.8), (-13, 0.2, 1.4), (21, 0.2, 1.1)):  # pebbles at its foot
+        blob(px, cx, cy, r, r * 0.8, R_PEBBLE, rough=0.5, seed=round(cx))
+    sand_mound(px, -22, 22, 2, seed=24)
+    return px
+
+
+def bubbler_fizz():
+    """The column's smallest bubble: a 2x2 bead with a bright corner (bubble_art(1) reads as a letter)."""
+    px = Px()
+    for x, y, c in ((0, 0, hx("ffffff")), (1, 0, hx("dff8ff", 210)), (0, 1, hx("dff8ff", 210)), (1, 1, hx("bfefff", 120))):
+        px.put(x - 1, y - 1, c)
+    return px
+
+
+def bubbler_icon():
+    """The shop card's picture: the volcano with a few bubbles over the crater."""
+    px = bubbler_art()
+    for bx, by, r in ((-1, -BUB_LIP - 5, 2), (1, -BUB_LIP - 13, 2), (-1, -BUB_LIP - 21, 1)):
+        for (x, y), c in (bubbler_fizz() if r == 1 else bubble_art(r)).d.items():
+            px.over(bx + x, by + y, c)
+    return px
+
+
+# (rise frames, loop length, start frame, x offset, radius): bigger bubbles rise faster; the loops differ so the
+# column never repeats the same pattern
+BUB_SPECS = [(186, 214, 0, 0, 2), (172, 229, 40, 1, 2), (194, 241, 84, -1, 1), (160, 223, 120, 0, 3),
+             (184, 251, 18, 1, 2), (176, 233, 150, -1, 2), (196, 263, 60, 0, 1), (168, 247, 100, 1, 3),
+             (188, 271, 136, -1, 2), (176, 257, 196, 0, 2), (194, 239, 30, 1, 1), (164, 281, 220, 0, 3),
+             (180, 227, 170, -1, 2), (170, 245, 76, 1, 2), (190, 259, 110, 0, 1), (174, 236, 206, -1, 2)]
+
+
+def bubbler_inner():
+    """What sits in the bubbler's Lift node, front to back: the volcano, its bubbles, the shimmer."""
+    rise_to = BUB_TOP - BUB_BASE  # local logical y where they pop
+    bubs = []
+    for i, (rise, dur, start, dx, r) in enumerate(BUB_SPECS):
+        bid = nid()
+        art = bubbler_fizz() if r == 1 else bubble_art(r)
+        bubs.append(image(f"BubblerBub{r}", art, lx=dx, ly=-BUB_LIP - 1, opacity=0, node_id=bid, node_name=f"BubblerBub{i}"))
+        y0, end = -BUB_LIP - 1, start + rise
+        # a loop that runs past its end wraps round: the bubble spends `start` frames of the next loop rising
+        if end <= dur:
+            ys = [(start, y0 * P), (end, rise_to * P)]
+            op = [(0, 0), (start, 0), (start + 4, 1), (end - 3, 1), (end, 0)]
+        else:
+            frac = (dur - start) / rise
+            mid_y = round((y0 + (rise_to - y0) * frac) * P)
+            ys = [(0, mid_y), (end - dur, rise_to * P), (end - dur + 1, y0 * P), (start, y0 * P), (dur, mid_y)]
+            op = [(0, 1), (end - dur - 3, 1), (end - dur, 0), (start, 0), (start + 4, 1), (dur, 1)]
+        xs = [(f, (dx + round(math.sin(f / 23 + i * 1.7) * 1.4)) * P) for f in range(0, dur + 1, 30)]
+        add_anim(f"BubblerBub{i}", dur, [keys(bid, 14, ys, "linear"), keys(bid, 13, xs, "cubic"), keys(bid, 18, op, "linear")])
+    sid = nid()
+    h = (-BUB_LIP - rise_to) * P
+    shimmer = rect_shape("BubblerShimmer", -9 * P, rise_to * P, 18 * P, h,
+                         lin_grad(-9 * P, 0, 9 * P, 0, [(0, hx("dff8ff", 0)), (0.5, hx("dff8ff", 34)), (1, hx("dff8ff", 0))]),
+                         blend="screen", sid=sid)
+    add_anim("BubblerShimmer", 150, [keys(sid, 18, [(0, 0.55), (75, 1), (150, 0.55)], "cubic")])
+    return [image("Bubbler", bubbler_art())] + list(reversed(bubs)) + [shimmer]
+# ---- end bubbler ----
+
+
 # ---------------------------------------------------------------- pixel font
 
 FONT = {
@@ -5437,6 +5575,7 @@ DECOR = [  # name, x, base y, art
     ("Helmet", 197, 349, helmet_art),
     ("Clam", 116, 349, None),
     ("GlowCoral", 70, 349, mushroom_art),
+    ("Bubbler", 140, BUB_BASE, bubbler_art),  # ---- bubbler ---- (v13)
 ]
 
 
@@ -5471,6 +5610,9 @@ def decor_node(n):
         add_anim("PearlGlow", 180, [keys(pg, 18, [(0, 0.55), (90, 1), (180, 0.55)], "cubic")])
         inner = [pearl] + list(reversed(frames))
         boxes = [sprites[f"Clam{f}"] for f in range(4)]
+    elif name == "Bubbler":  # ---- bubbler ---- the volcano and its column (bubbles left out of the hit box)
+        inner = bubbler_inner()
+        boxes = [sprites[name]]
     else:
         inner = [image(name, art)]
         boxes = [sprites[name]]
@@ -5624,6 +5766,7 @@ world.append(kelp_clump("KelpFrontM", 324, 347, [70, 94], R_KELP, 5.2, 14))
 world.append(visitor_node("horse", "Seahorse", seahorse_art, 87 * P, 320 * P))
 for n in (1, 2, 3, 4):
     world.append(decor_node(n))
+world.append(decor_node(5))  # ---- bubbler ---- in front of the other decorations, behind the jellies
 # the sea turtle swims across at mid depth: in front of the scenery, behind the jellies (WorldMid)
 world.append(visitor_node("turtle", "Turtle", turtle_art, 120 * P, 170 * P))
 
@@ -6060,7 +6203,8 @@ ITEMS = [("BLUE BLUBBER", "POLYP", 40), ("UPSIDE-DOWN", "POLYP", 70), ("COMB JEL
          # v11: foods for the tool shelf, and tank themes
          ("BRINE SHRIMP", "FOOD|5 KINDS|LOVE IT", 40), ("PLANKTON", "FOOD|4 KINDS|LOVE IT", 70),
          ("REEF", "THEME|THE CLASSIC", 0), ("KELP FOREST", "THEME|GOLDEN|KELP", 140),
-         ("CORAL GARDEN", "THEME|TROPICAL|CORALS", 170), ("ARCTIC", "THEME|ICE AND|SNOW", 200)]
+         ("CORAL GARDEN", "THEME|TROPICAL|CORALS", 170), ("ARCTIC", "THEME|ICE AND|SNOW", 200),
+         ("BUBBLER", "BUBBLES|TO RIDE", 80)]  # ---- bubbler ---- (v13: item 24, decoration 5)
 # shop item -> the species it sells (polyps)
 JELLY_ITEM = {0: 1, 1: 2, 2: 3, 13: 4, 14: 5, 15: 6, 16: 7, 17: 8}
 TANK_ITEMS, HELPER_ITEMS = (11, 12), (8, 9, 10)
@@ -6071,7 +6215,7 @@ THEME_ITEMS = tuple(range(THEME_ITEM0, THEME_ITEM0 + len(THEMES)))
 # a card locked because of the tank size: (item, prop, note lines)
 NEEDS = [(12, "needs12", ["NEEDS", "MEDIUM"]), (15, "needs15", ["NEEDS", "MEDIUM"]), (17, "needs17", ["NEEDS", "LARGE"])]
 TABS = [("JELLIES", [0, 13, 1, 14, 2, 15, 16, 17], "DRAG TO SEE MORE JELLIES"),
-        ("DECOR", [3, 4, 5, 6, 7], "HOLD A DECORATION TO MOVE IT"),
+        ("DECOR", [3, 4, 5, 6, 7, 24], "HOLD A DECORATION TO MOVE IT"),
         ("SUPPLIES", [8, 9, 10, 18, 19], "NEW FOOD WAITS ON THE SHELF"),
         ("TANK", [11, 12, 20, 21, 22, 23], "TAP AN OWNED THEME TO USE IT")]
 TAB_W, TAB_H, TAB_GAP, TAB_Y, TAB_LIFT = 50, 15, 4, 55, 3
@@ -6153,6 +6297,8 @@ def item_icon(i):
                     m.put(x, y, c)
             art = m
         return art, 14
+    if i == 24:  # ---- bubbler ----
+        return bubbler_icon(), 14
     name, _, _, art = DECOR[i - 3]
     return (clam_art(3, pearl=True) if name == "Clam" else art()), 14
 

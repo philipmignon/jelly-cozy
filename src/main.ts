@@ -63,6 +63,7 @@ import {
   requests,
   MORPH_CLASSIC,
   MORPH_GHOST,
+  TRAIT_PHRASES,
   setTab,
   step,
   syncClock,
@@ -340,7 +341,7 @@ async function main() {
   const cardInfo = (slot: number): JellyCardInfo | null => {
     const i = jellyInfo(state, slot);
     const morph = i?.morph === MORPH_CLASSIC ? " · rare colour" : i?.morph === MORPH_GHOST ? " · ghost colour" : "";
-    return i && { name: i.name, species: `${SPECIES[i.k] ?? ""}${morph}`, stage: STAGES[i.g] ?? "", ageDays: i.ageDays, fullness: i.fullness, mood: i.mood, rehome: rehomeInfo(state, slot) };
+    return i && { name: i.name, species: `${SPECIES[i.k] ?? ""}${morph}`, stage: STAGES[i.g] ?? "", ageDays: i.ageDays, fullness: i.fullness, mood: i.mood, trait: TRAIT_PHRASES[i.trait], rehome: rehomeInfo(state, slot) };
   };
 
   // ---------------------------------------------------------------- buttons in the .riv
@@ -788,6 +789,10 @@ async function main() {
           break;
         case "shrimpAte":
           audio.play("plop");
+          break;
+        case "rode":
+          // v13: a jelly rode the bubbler to the top: a soft pop where you can see it
+          if (e.seen) audio.play("plop");
           break;
         case "themed":
           audio.play("unlock");

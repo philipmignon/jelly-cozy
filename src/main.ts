@@ -3,6 +3,8 @@ import wasmUrl from "@rive-app/webgl2/rive.wasm?url";
 import rivUrl from "../public/jellytank.riv?url";
 import { createTankAudio } from "./audio";
 import { attachGestures } from "./gestures";
+import { attachKeyboard, type ButtonName, type Keyboard } from "./keyboard";
+import { readReducedMotion, writeReducedMotion } from "./a11y";
 import { createSettings } from "./hud";
 import { createJournal } from "./journal";
 import { connectCloud, savedAt, type CloudSync } from "./cloud";
@@ -31,7 +33,6 @@ import {
   scrubAt,
   setCursor,
   setEvent,
-  setTool,
   sprinkle,
   toggleTool,
   demoSave,
@@ -63,6 +64,7 @@ import {
   requests,
   MORPH_CLASSIC,
   MORPH_GHOST,
+  setReducedMotion,
   setTab,
   step,
   syncClock,
@@ -70,6 +72,7 @@ import {
   toSave,
   toggleLamp,
   view,
+  type BuyResult,
   type State,
 } from "./sim";
 
@@ -267,6 +270,17 @@ async function main() {
     }
   })();
   let seasonDecor = readSeasonDecor(store);
+  // reduce motion: the player's choice, else the OS's. One flag for the sim (State.reducedMotion, which other
+  // features read) and one for the HTML (:root[data-jt-reduce-motion]).
+  const osCalm = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
+  let reduceMotion = false;
+  const applyMotion = (on: boolean) => {
+    reduceMotion = on;
+    setReducedMotion(state, on);
+    document.documentElement.toggleAttribute("data-jt-reduce-motion", on);
+  };
+  applyMotion(readReducedMotion(store, !!osCalm?.matches));
+  osCalm?.addEventListener?.("change", () => applyMotion(readReducedMotion(store, osCalm.matches))); // unless the player chose
   /** the event the calendar, ?season= and the decor setting ask for (its art may still be on the way) */
   const wantedEvent = () => activeSeason(Date.now(), location.search, seasonDecor)?.id ?? null;
   /** the jellies' groups (species, and a ghost's event art) plus the wanted event's; `near` = only those on screen */
@@ -345,39 +359,36 @@ async function main() {
 
   // ---------------------------------------------------------------- buttons in the .riv
 
-  // Feed and Clean pick up the food can / the sponge (and put it down again)
-  on("feed", () => {
-    audio.play(toggleTool(state, "food") === "food" ? "pickup" : "putdown");
-  });
-  on("clean", () => {
-    audio.play(toggleTool(state, "sponge") === "sponge" ? "pickup" : "putdown");
-  });
-  on("shrimp", () => {
-    if (hasTool(state, "shrimp")) audio.play(toggleTool(state, "shrimp") === "shrimp" ? "pickup" : "putdown");
-  });
-  on("plankton", () => {
-    if (hasTool(state, "plankton")) audio.play(toggleTool(state, "plankton") === "plankton" ? "pickup" : "putdown");
-  });
-  window.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && state.tool !== "none") setTool(state, "none");
-  });
-  on("lamp", () => {
-    toggleLamp(state);
-    audio.play("switch");
-    audio.play(state.nightTarget ? "lampOff" : "lampOn");
-    buzz(8);
-    persist(state);
-  });
-  on("shop", () => {
-    overlay.closeCard();
-    groups.prefetch(affordableGroups()); // downloaded now, decoded when one is bought
-    openShop(state);
-    audio.play("ui");
-  });
-  on("shopClose", () => {
-    closeShop(state);
-    audio.play("ui");
-  });
+  // what each button does (the keyboard presses them too: src/keyboard.ts). Escape puts the held item down there.
+  const press: Record<ButtonName, () => void> = {
+    // Feed and Clean pick up the food can / the sponge (and put it down again)
+    feed: () => audio.play(toggleTool(state, "food") === "food" ? "pickup" : "putdown"),
+    clean: () => audio.play(toggleTool(state, "sponge") === "sponge" ? "pickup" : "putdown"),
+    shrimp: () => {
+      if (hasTool(state, "shrimp")) audio.play(toggleTool(state, "shrimp") === "shrimp" ? "pickup" : "putdown");
+    },
+    plankton: () => {
+      if (hasTool(state, "plankton")) audio.play(toggleTool(state, "plankton") === "plankton" ? "pickup" : "putdown");
+    },
+    lamp: () => {
+      toggleLamp(state);
+      audio.play("switch");
+      audio.play(state.nightTarget ? "lampOff" : "lampOn");
+      buzz(8);
+      persist(state);
+    },
+    shop: () => {
+      overlay.closeCard();
+      groups.prefetch(affordableGroups()); // downloaded now, decoded when one is bought
+      openShop(state);
+      audio.play("ui");
+    },
+    shopClose: () => {
+      closeShop(state);
+      audio.play("ui");
+    },
+  };
+  for (const name of Object.keys(press) as ButtonName[]) on(name, press[name]);
   Array.from({ length: TAB_N }, (_, t) => t).forEach((t) =>
     on(`tab${t}`, () => {
       if (!isShopOpen(state)) return;
@@ -403,20 +414,25 @@ async function main() {
     },
     { passive: false },
   );
+  /** Buy shop item i (a card tapped, or Enter on it): the sound, and the save. */
+  const buyItem = (i: number): BuyResult | null => {
+    if (!isShopOpen(state)) return null;
+    const r = buy(state, i);
+    if (r === "bought") {
+      audio.play("buy");
+      persist(state);
+    } else if (r === "selected") {
+      audio.play("ui"); // an owned theme picked again
+      persist(state);
+    } else {
+      audio.play("ui");
+    }
+    return r;
+  };
   SHOP_ITEMS.forEach((_, i) =>
     on(`buy${i}`, () => {
-      if (!isShopOpen(state)) return;
       if (scrolled || !pressInList) return;
-      const r = buy(state, i);
-      if (r === "bought") {
-        audio.play("buy");
-        persist(state);
-      } else if (r === "selected") {
-        audio.play("ui"); // an owned theme picked again
-        persist(state);
-      } else {
-        audio.play("ui");
-      }
+      buyItem(i);
     }),
   );
 
@@ -449,6 +465,50 @@ async function main() {
       if (scrubAt(state, screenToWorld(state, x), y, d) > 0) audio.play("scrub");
     }
     toolAt = { x, y };
+  };
+  /** A jelly was petted: its sound, a buzz and its name tag. */
+  const petted = (slot: number) => {
+    audio.play("pet");
+    buzz(12);
+    const at = aboveJelly(slot);
+    const name = jellyInfo(state, slot)?.name;
+    if (at && name) overlay.nameTag(name, at.x, at.y, slot);
+  };
+  /** A tap in the water at a WORLD point (a finger, or the keyboard on the pearl or a visitor). */
+  const tapWorld = (x: number, y: number) => {
+    const slot = jellyAt(state, x, y);
+    const r = tap(state, x, y);
+    if (r === "pearl" || r === "visitor") {
+      audio.play("unlock");
+      buzz([20, 40, 20]);
+      persist(state);
+    } else if (r === "pet") {
+      if (slot >= 0) petted(slot);
+    } else if (r === "call") {
+      audio.play("tap");
+    }
+  };
+  /** Open a jelly's card, the camera closing in on it (a long-press, or N on the keyboard). */
+  const openCardFor = (slot: number) => {
+    const info = cardInfo(slot);
+    if (!info) return;
+    audio.play("ui");
+    focusJelly(state, slot);
+    overlay.openCard(slot, info, {
+      closed: () => unfocus(state),
+      rename: (name) => {
+        if (renameJelly(state, slot, name)) persist(state);
+      },
+      rehome: () => {
+        if (!canRehome(state, slot)) return;
+        const at = aboveJelly(slot);
+        const r = rehome(state, slot);
+        if (!r) return;
+        audio.play("unlock");
+        if (at) overlay.nameTag(`Bye, ${r.name}!`, at.x, at.y);
+        persist(state);
+      },
+    });
   };
   const toolWater = (y: number) => y < K.cabTop && !isShopOpen(state) && !overlay.busy && !book.isOpen && !sharePanel.isOpen && !backupOpen() && !reqNote?.isOpen && !menuWasOpen;
 
@@ -489,22 +549,7 @@ async function main() {
         return;
       }
       if (!inTank(y)) return;
-      const x = screenToWorld(state, sx);
-      const slot = jellyAt(state, x, y);
-      const r = tap(state, x, y);
-      if (r === "pearl" || r === "visitor") {
-        audio.play("unlock");
-        buzz([20, 40, 20]);
-        persist(state);
-      } else if (r === "pet") {
-        audio.play("pet");
-        buzz(12);
-        const at = slot >= 0 ? aboveJelly(slot) : null;
-        const name = slot >= 0 ? jellyInfo(state, slot)?.name : null;
-        if (at && name) overlay.nameTag(name, at.x, at.y, slot);
-      } else if (r === "call") {
-        audio.play("tap");
-      }
+      tapWorld(screenToWorld(state, sx), y);
     },
     longPress(sx, y) {
       if (!inTank(y)) return false;
@@ -516,26 +561,7 @@ async function main() {
         return true;
       }
       const slot = jellyAt(state, x, y);
-      const info = slot >= 0 ? cardInfo(slot) : null;
-      if (info) {
-        audio.play("ui");
-        focusJelly(state, slot);
-        overlay.openCard(slot, info, {
-          closed: () => unfocus(state),
-          rename: (name) => {
-            if (renameJelly(state, slot, name)) persist(state);
-          },
-          rehome: () => {
-            if (!canRehome(state, slot)) return;
-            const at = aboveJelly(slot);
-            const r = rehome(state, slot);
-            if (!r) return;
-            audio.play("unlock");
-            if (at) overlay.nameTag(`Bye, ${r.name}!`, at.x, at.y);
-            persist(state);
-          },
-        });
-      }
+      if (slot >= 0) openCardFor(slot);
       return false;
     },
     drag(x) {
@@ -570,6 +596,13 @@ async function main() {
     backup: () => backupPanel.open("backup"),
     restore: () => backupPanel.open("restore"),
     photo: () => void takePhoto(),
+    reduceMotion: {
+      get: () => reduceMotion,
+      set: (on) => {
+        writeReducedMotion(store, on);
+        applyMotion(on);
+      },
+    },
     seasonDecor: {
       get: () => seasonDecor,
       set: (on) => {
@@ -670,6 +703,23 @@ async function main() {
     reqNote.update(requests(state)?.items ?? null);
   }
 
+  // keyboard play and the screen reader's view of the tank
+  const kb: Keyboard = attachKeyboard({
+    state,
+    canvas,
+    client,
+    busy: () => overlay.busy || overlay.cardSlot !== null || book.isOpen || sharePanel.isOpen || backupPanel.isOpen || !!reqNote?.isOpen || settingsUi.isOpen,
+    audio,
+    press: (name) => press[name](),
+    tapWorld,
+    petted,
+    openCard: (slot) => {
+      if (!isShopOpen(state)) openCardFor(slot);
+    },
+    buy: buyItem,
+    journal: book,
+  });
+
   // ---------------------------------------------------------------- the frame loop
 
   // "unlock" chime the first time each shop item becomes affordable this session
@@ -742,12 +792,14 @@ async function main() {
       void intro();
     }
     overlay.placeTip();
+    kb.frame();
     const now = performance.now();
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
 
     let lastKind = "";
     for (const e of step(state, dt)) {
+      kb.event(e);
       switch (e.type) {
         case "ate":
           audio.play("eat");

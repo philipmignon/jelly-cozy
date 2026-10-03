@@ -160,6 +160,101 @@ async function friendsFlow(browser) {
   await ctx.close();
 }
 
+/** Keyboard only: Tab onto the tank, pet, feed with F, the journal with J/Escape, buy with B + arrows + Enter; the live region; reduce motion. */
+async function keyboardFlow(browser) {
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  page.setDefaultNavigationTimeout(90_000);
+  await page.setViewport({ ...VIEW, deviceScaleFactor: 1 });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto(`http://localhost:${PORT}/`, DCL);
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem("jellytank:tips", "1");
+  });
+  await page.reload(DCL);
+  await page.waitForFunction(() => window.__tank && window.__tank.t > 0.5, { timeout: 15000 });
+  const key = async (k, ms = 120) => {
+    await page.keyboard.press(k);
+    await sleep(ms);
+  };
+  const live = (id) => page.evaluate((i) => document.getElementById(i)?.textContent ?? "", id);
+
+  const label = await page.evaluate(() => ({ role: document.getElementById("tank").getAttribute("role"), label: document.getElementById("tank").getAttribute("aria-label") ?? "" }));
+  check("kb: the tank canvas is labelled for screen readers", label.role === "application" && /1 jelly/.test(label.label), JSON.stringify(label));
+  await key("Tab");
+  check("kb: Tab reaches the tank", await page.evaluate(() => document.activeElement?.id === "tank"));
+  await key("Tab", 250);
+  const ring = await page.evaluate(() => ({ shown: !document.querySelector(".jt-a11y-ring").hidden, label: document.querySelector(".jt-a11y-ring-label").textContent, name: window.__tank.slots[0].name }));
+  const said = await live("jt-a11y-focus");
+  check("kb: Tab lands on the jelly, ringed and described", ring.shown && ring.label === ring.name && said.startsWith(`${ring.name}, moon jelly polyp`), `${JSON.stringify(ring)} "${said}"`);
+  await page.screenshot({ path: "shots/e2e-13-kb-focus.png" });
+
+  const aff0 = await page.evaluate(() => window.__tank.slots[0].affection);
+  await key("Enter", 200);
+  const pet = await page.evaluate(() => ({ aff: window.__tank.slots[0].affection, tags: document.querySelectorAll(".jt-tag").length }));
+  check("kb: Enter pets it", pet.aff > aff0 && pet.tags === 1, `${aff0} -> ${JSON.stringify(pet)}`);
+
+  await key("f", 200);
+  const fed = await page.evaluate(() => ({ tool: window.__tank.tool, food: window.__tank.food.filter((f) => f.state !== "off").length }));
+  check("kb: F picks up the can and sprinkles", fed.tool === "food" && fed.food > 0, JSON.stringify(fed));
+  await key("Escape");
+  check("kb: Escape puts the can down", (await page.evaluate(() => window.__tank.tool)) === "none");
+
+  await key("j", 200);
+  const book = await page.evaluate(() => ({ open: !document.querySelector(".jt-book").hidden, inside: document.querySelector(".jt-book").contains(document.activeElement) }));
+  check("kb: J opens the journal with focus inside it", book.open && book.inside, JSON.stringify(book));
+  await key("Escape", 200);
+  const back = await page.evaluate(() => ({ open: !document.querySelector(".jt-book").hidden, focus: document.activeElement?.id }));
+  check("kb: Escape closes it and focus returns to the tank", !back.open && back.focus === "tank", JSON.stringify(back));
+
+  await page.evaluate(() => { window.__tank.dollars = 300; });
+  await key("b", 300);
+  await page.waitForFunction(() => { const t = window.__tank; return t.shop.open && t.t - t.shop.t0 > 0.45; }, { timeout: 8000 }).catch(() => {});
+  await sleep(150);
+  const shop = await page.evaluate(() => ({ open: window.__tank.shop.open, ring: !document.querySelector(".jt-a11y-ring").hidden }));
+  const card = await live("jt-a11y-focus");
+  check("kb: B opens the shop on its first card", shop.open && shop.ring && /Blue blubber, 40 sand dollars/.test(card), `${JSON.stringify(shop)} "${card}"`);
+  await key("ArrowRight");
+  const right = await live("jt-a11y-focus");
+  await key("ArrowLeft");
+  check("kb: arrows walk the cards", /Fried egg/.test(right) && /Blue blubber/.test(await live("jt-a11y-focus")), right);
+  await page.screenshot({ path: "shots/e2e-14-kb-shop.png" });
+  await key("Enter", 300);
+  const bought = await page.evaluate(() => ({ n: window.__tank.slots.filter(Boolean).length, dollars: window.__tank.dollars }));
+  check("kb: Enter buys it", bought.n === 2 && bought.dollars === 260 && /Bought Blue blubber/.test(await live("jt-a11y-focus")), JSON.stringify(bought));
+  await key("Escape", 700);
+  check("kb: Escape closes the shop", !(await page.evaluate(() => window.__tank.shop.open)));
+
+  // the moments region: the pearl showing up is announced
+  await page.evaluate(() => {
+    window.__tank.owned[3] = true;
+    window.__tank.pearlDay = "";
+  });
+  const heard = await page.waitForFunction(() => /The pearl is ready/.test(document.getElementById("jt-a11y-live")?.textContent ?? ""), { timeout: 6000 }).then(() => true, () => false);
+  const region = await page.evaluate(() => { const r = document.getElementById("jt-a11y-live"); return { live: r?.getAttribute("aria-live"), text: r?.textContent }; });
+  check("kb: the live region says the pearl is ready", heard && region.live === "polite", JSON.stringify(region));
+
+  // reduce motion, from the settings menu: one flag in the sim, one on the page, kept
+  check("reduce motion is off when the OS doesn't ask for it", !(await page.evaluate(() => window.__tank.reducedMotion)));
+  await page.click(".jt-gear");
+  await page.click(".jt-menu-motion");
+  const rm = await page.evaluate(() => ({
+    sim: window.__tank.reducedMotion,
+    root: document.documentElement.hasAttribute("data-jt-reduce-motion"),
+    stored: localStorage.getItem("jellytank:reduceMotion"),
+    checked: document.querySelector(".jt-menu-motion").getAttribute("aria-checked"),
+  }));
+  check("the reduce motion toggle sets the flag and remembers it", rm.sim && rm.root && rm.stored === "1" && rm.checked === "true", JSON.stringify(rm));
+  await key("Escape");
+  await page.reload(DCL);
+  await page.waitForFunction(() => window.__tank && window.__tank.t > 0.5, { timeout: 15000 });
+  check("reduce motion survives a reload", await page.evaluate(() => window.__tank.reducedMotion));
+  check("kb: no page errors", errors.length === 0, errors.join(" | "));
+  await ctx.close();
+}
+
 async function main() {
   const server = await startServer();
   const browser = await puppeteer.launch({
@@ -612,6 +707,7 @@ async function main() {
     check("no page errors", errors.length === 0, errors.join(" | "));
 
     await page.close(); // one swiftshader tank at a time
+    await keyboardFlow(browser);
     await friendsFlow(browser);
   } finally {
     await browser.close();

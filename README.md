@@ -32,6 +32,7 @@ Each species' jelly sprites (and each event's, e.g. `hw_` Halloween art) are lef
 - `tools/gen.py`: sprites, layout and the art/logic contract (`src/contract.json`)
 - `src/sim.ts`: game rules, pure and tested; `view()` writes exactly the contract's props
 - `src/main.ts`: host wiring for Rive, gestures, audio, saves and overlays
+- `src/keyboard.ts`, `src/a11y.ts`: keyboard play (Tab/arrows/Enter on the tank; F feed, S scrub, L light, B shop, J journal, N card, 1-4 shelf, [ ] pan), the screen reader's live regions, and the reduce-motion setting (`State.reducedMotion`)
 - `docs/`: feature specs, one per version
 - `src/spritegroups.ts`: loads each species' sprites when the tank needs them
 - `tools/e2e.mjs`: headless click-through (puppeteer-core)

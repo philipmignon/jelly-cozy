@@ -41,7 +41,7 @@ const CSS = `
   display: grid; place-items: center; font: 10px/1 ${FONT}; color: #fffaf0;
   background: #d04a46; border: 2px solid #5a1418; border-radius: 4px;
 }
-.jt-req-badge.all { background: #3fae5c; border-color: #1d5a2c; }
+.jt-req-badge.all { background: #2a7f42; border-color: #1d5a2c; }
 .jt-req-badge[hidden] { display: none; }
 .jt-req-btn.bob { animation: jt-req-bob 0.9s ease-out; }
 @keyframes jt-req-bob { 0%, 100% { transform: rotate(0); } 20% { transform: rotate(-8deg) scale(1.12); } 45% { transform: rotate(6deg); } 70% { transform: rotate(-3deg); } }
@@ -63,7 +63,7 @@ const CSS = `
   flex: none; width: 28px; height: 28px; font: 12px ${FONT}; color: #fffaf0; cursor: pointer;
   background: #d04a46; border: 2px solid #5a1418; border-radius: 6px; box-shadow: 0 2px 0 #5a1418;
 }
-.jt-req-x:focus-visible { outline: 2px solid #e09a28; outline-offset: 2px; }
+.jt-req-x:focus-visible { outline: 2px solid #b5541b; outline-offset: 2px; }
 .jt-req-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .jt-req-item {
   display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 8px;
@@ -77,11 +77,11 @@ const CSS = `
   border: solid #fffaf0; border-width: 0 2px 2px 0; transform: rotate(40deg);
 }
 .jt-req-text { text-transform: uppercase; font-size: 11px; }
-.jt-req-item.done .jt-req-text { color: #a78560; text-decoration: line-through; text-decoration-thickness: 2px; }
+.jt-req-item.done .jt-req-text { color: #8e5632; text-decoration: line-through; text-decoration-thickness: 2px; }
 .jt-req-side { display: grid; justify-items: end; gap: 2px; font-size: 10px; }
 .jt-req-count { color: #693c24; }
 .jt-req-pay { color: #8e5632; white-space: nowrap; }
-.jt-req-item.done .jt-req-pay { color: #3fae5c; }
+.jt-req-item.done .jt-req-pay { color: #2a7f42; }
 .jt-req-foot { color: #8e5632; font-size: 10px; text-align: center; text-transform: uppercase; }
 .jt-req-done {
   position: fixed; z-index: 9; pointer-events: none; transform: translate(-50%, 0);

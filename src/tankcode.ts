@@ -16,6 +16,9 @@
  * a Reef tank still writes version 1, so its code is exactly what it was before themes.
  * v12: a tank with a ghost morph (morph id 2) writes version 3 (Reef) or 4 (themed): each jelly's morph is
  * 2 bits (its id) instead of 1. Tanks without one keep versions 1 and 2, so their codes don't change.
+ * v13: a tank with a keepsake decoration (5..9) or the keepsake theme (4) writes version 5: the theme is always
+ * there, in 3 bits, then all DECOR_N decor bits, and 2-bit morphs. Versions 1..4 carry the first 5 decorations
+ * and themes 0..3 only, so every tank without a keepsake keeps the code it had.
  */
 import { DECOR_N, HELPER_N, MAX_SLOTS, P, POLYP_ANCHORS, SETTLE_SPOTS, SPECIES_N, THEME_N, TIER_N, UPSIDE, decorClampX, maxJelliesOf } from "./species";
 import { NAMES, cleanName } from "./names";
@@ -26,6 +29,11 @@ export const CODE_VERSION_THEMED = 2;
 /** v12: codes with 2-bit morph ids (a ghost in the tank), Reef and themed */
 export const CODE_VERSION_MORPHS = 3;
 export const CODE_VERSION_MORPHS_THEMED = 4;
+/** v13: codes with keepsakes (decorations from CODE_DECOR, or a theme from CODE_THEMES) */
+export const CODE_VERSION_KEEPSAKES = 5;
+/** v13: how many decorations, and themes, versions 1..4 can carry */
+export const CODE_DECOR = 5;
+export const CODE_THEMES = 4;
 /** v12: morph ids a code carries (0 none, 1 classic, 2 ghost) */
 const MORPH_IDS = 3;
 /** Characters a custom name packs in 6 bits; anything else costs 27. */
@@ -52,6 +60,9 @@ export interface TankCode {
   decor: (number | null)[];
   jellies: CodeJelly[];
 }
+
+/** v13: does this tank need a version 5 code (a keepsake decoration, or the keepsake theme)? */
+export const hasKeepsakes = (t: TankCode): boolean => (t.theme ?? 0) >= CODE_THEMES || t.decor.some((x, n) => n >= CODE_DECOR && x !== null && x !== undefined);
 
 /** Does this jelly carry a place (anchor or spot) in the code? */
 export const hasPlace = (k: number, g: number) => g === 0 || (k === UPSIDE && g >= 2);
@@ -213,13 +224,16 @@ export function encodeTank(t: TankCode): string {
   if (!validTank(t)) throw new Error("not a valid tank");
   const w = new Bits();
   const theme = t.theme ?? 0;
-  const wide = t.jellies.some((j) => j.morph > 1);
-  w.put(wide ? (theme ? CODE_VERSION_MORPHS_THEMED : CODE_VERSION_MORPHS) : theme ? CODE_VERSION_THEMED : CODE_VERSION, 4);
+  const keeps = hasKeepsakes(t);
+  const wide = keeps || t.jellies.some((j) => j.morph > 1);
+  const decorN = keeps ? DECOR_N : CODE_DECOR;
+  w.put(keeps ? CODE_VERSION_KEEPSAKES : wide ? (theme ? CODE_VERSION_MORPHS_THEMED : CODE_VERSION_MORPHS) : theme ? CODE_VERSION_THEMED : CODE_VERSION, 4);
   w.put(t.tier, 2);
-  if (theme) w.put(theme, 2);
+  if (keeps) w.put(theme, 3);
+  else if (theme) w.put(theme, 2);
   for (let i = 0; i < HELPER_N; i++) w.put(t.helpers[i] ? 1 : 0, 1);
-  for (let n = 0; n < DECOR_N; n++) w.put(t.decor[n] === null ? 0 : 1, 1);
-  for (let n = 0; n < DECOR_N; n++) if (t.decor[n] !== null) w.put(t.decor[n]! / P, 9);
+  for (let n = 0; n < decorN; n++) w.put(t.decor[n] === null ? 0 : 1, 1);
+  for (let n = 0; n < decorN; n++) if (t.decor[n] !== null) w.put(t.decor[n]! / P, 9);
   const js = [...t.jellies].sort((a, b) => a.slot - b.slot);
   w.put(js.length, 3);
   for (const j of js) {
@@ -246,16 +260,17 @@ export function decodeTank(code: unknown): TankCode | null {
   try {
     const r = new Reader(bytes);
     const version = r.get(4);
-    if (version < CODE_VERSION || version > CODE_VERSION_MORPHS_THEMED) return null;
+    if (version < CODE_VERSION || version > CODE_VERSION_KEEPSAKES) return null;
+    const keeps = version === CODE_VERSION_KEEPSAKES;
     const themed = version === CODE_VERSION_THEMED || version === CODE_VERSION_MORPHS_THEMED;
     const wide = version >= CODE_VERSION_MORPHS;
     const tier = r.get(2);
-    const theme = themed ? r.get(2) : 0;
+    const theme = keeps ? r.get(3) : themed ? r.get(2) : 0;
     // one spelling per code: a Reef tank is always written as version 1 (or 3)
     if (themed && theme === 0) return null;
     const helpers = Array.from({ length: HELPER_N }, () => r.get(1) === 1);
-    const owned = Array.from({ length: DECOR_N }, () => r.get(1) === 1);
-    const decor = owned.map((o) => (o ? r.get(9) * P : null));
+    const owned = Array.from({ length: keeps ? DECOR_N : CODE_DECOR }, () => r.get(1) === 1);
+    const decor = Array.from({ length: DECOR_N }, (_, n) => (owned[n] ? r.get(9) * P : null));
     const n = r.get(3);
     const jellies: CodeJelly[] = [];
     for (let i = 0; i < n; i++) {
@@ -270,10 +285,12 @@ export function decodeTank(code: unknown): TankCode | null {
       jellies.push({ slot, k, g, morph, place, name });
     }
     if (!r.done()) return null;
-    // ...and 2-bit morphs only when there's a ghost to carry
-    if (wide !== jellies.some((j) => j.morph > 1)) return null;
+    // ...and 2-bit morphs only when there's a ghost to carry (or keepsakes, which always have them)
+    if (!keeps && wide !== jellies.some((j) => j.morph > 1)) return null;
     for (let i = 1; i < jellies.length; i++) if (jellies[i]!.slot <= jellies[i - 1]!.slot) return null;
     const t: TankCode = theme ? { tier, theme, helpers, decor, jellies } : { tier, helpers, decor, jellies };
+    // ...and version 5 only for a tank with a keepsake
+    if (keeps !== hasKeepsakes(t)) return null;
     return validTank(t) ? t : null;
   } catch {
     return null;

@@ -968,7 +968,7 @@
    "tab": 1
   },
   {
-   "x": 204,
+   "x": 45,
    "y": 675,
    "w": 303,
    "h": 201,
@@ -1085,6 +1085,49 @@
    "w": 303,
    "h": 201,
    "tab": 3
+  },
+  null,
+  {
+   "x": 366,
+   "y": 675,
+   "w": 303,
+   "h": 201,
+   "tab": 1
+  },
+  {
+   "x": 45,
+   "y": 894,
+   "w": 303,
+   "h": 201,
+   "tab": 1
+  },
+  {
+   "x": 366,
+   "y": 894,
+   "w": 303,
+   "h": 201,
+   "tab": 1
+  },
+  {
+   "x": 45,
+   "y": 1113,
+   "w": 303,
+   "h": 201,
+   "tab": 1
+  },
+  {
+   "x": 366,
+   "y": 1113,
+   "w": 303,
+   "h": 201,
+   "tab": 1
+  },
+  {
+   "x": 204,
+   "y": 894,
+   "w": 303,
+   "h": 201,
+   "tab": 3
   }
  ],
  "shopScroll": {
@@ -1094,6 +1137,30 @@
   "trackTop": 216,
   "trackH": 759
  },
+ "shopScrollTabs": [
+  {
+   "max": 135,
+   "viewTop": 216,
+   "viewBottom": 975,
+   "trackTop": 216,
+   "trackH": 759
+  },
+  {
+   "max": 354,
+   "viewTop": 216,
+   "viewBottom": 975,
+   "trackTop": 216,
+   "trackH": 759
+  },
+  null,
+  {
+   "max": 135,
+   "viewTop": 216,
+   "viewBottom": 975,
+   "trackTop": 216,
+   "trackH": 759
+  }
+ ],
  "shopTabs": [
   {
    "name": "JELLIES",
@@ -1166,6 +1233,41 @@
    "y": 1047,
    "w": 90,
    "h": 39
+  },
+  {
+   "name": "Bottle",
+   "x": 282,
+   "y": 1047,
+   "w": 114,
+   "h": 39
+  },
+  {
+   "name": "Lighthouse",
+   "x": 666,
+   "y": 1047,
+   "w": 78,
+   "h": 162
+  },
+  {
+   "name": "Lantern",
+   "x": 420,
+   "y": 1047,
+   "w": 60,
+   "h": 96
+  },
+  {
+   "name": "Wheel",
+   "x": 138,
+   "y": 1047,
+   "w": 108,
+   "h": 78
+  },
+  {
+   "name": "Postbox",
+   "x": 564,
+   "y": 1047,
+   "w": 54,
+   "h": 81
   }
  ],
  "decorLift": 18,
@@ -1410,6 +1512,13 @@
   "buy21",
   "buy22",
   "buy23",
+  "buy24",
+  "buy25",
+  "buy26",
+  "buy27",
+  "buy28",
+  "buy29",
+  "buy30",
   "tab0",
   "tab1",
   "tab2",
@@ -1420,6 +1529,7 @@
   "theme1",
   "theme2",
   "theme3",
+  "theme4",
   "camX",
   "daylight",
   "dec0lift",
@@ -1468,6 +1578,26 @@
   "dec4",
   "dec4x",
   "dec4y",
+  "dec5lift",
+  "dec5",
+  "dec5x",
+  "dec5y",
+  "dec6lift",
+  "dec6",
+  "dec6x",
+  "dec6y",
+  "dec7lift",
+  "dec7",
+  "dec7x",
+  "dec7y",
+  "dec8lift",
+  "dec8",
+  "dec8x",
+  "dec8y",
+  "dec9lift",
+  "dec9",
+  "dec9x",
+  "dec9y",
   "turtleF0",
   "turtleF1",
   "turtleF2",
@@ -2052,6 +2182,16 @@
   "own6",
   "lock7",
   "own7",
+  "lock25",
+  "own25",
+  "lock26",
+  "own26",
+  "lock27",
+  "own27",
+  "lock28",
+  "own28",
+  "lock29",
+  "own29",
   "tab1Y",
   "lock8",
   "own8",
@@ -2081,6 +2221,9 @@
   "lock23",
   "own23",
   "use23",
+  "lock30",
+  "own30",
+  "use30",
   "tab3Y",
   "shopY",
   "barFood",
@@ -2202,6 +2345,24 @@
   }
  },
  "batHangY": 42,
+ "keepsakes": {
+  "items": [
+   25,
+   26,
+   27,
+   28,
+   29,
+   30
+  ],
+  "decor": [
+   5,
+   6,
+   7,
+   8,
+   9
+  ],
+  "theme": 4
+ },
  "assetGroups": {
   "ev-halloween": {
    "file": "sprites/ev-halloween.json",

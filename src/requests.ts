@@ -67,7 +67,8 @@ export const PET_N = 5;
 export const SPRINKLE_N = 8;
 /** A pellet counts as "by" a decoration within this many px (world x) of its base. */
 export const SPRINKLE_NEAR = 100;
-const DECOR_NAMES = ["castle", "anchor", "dive helmet", "giant clam", "glow coral"];
+// v13: then the keepsakes (decorations 5..9)
+const DECOR_NAMES = ["castle", "anchor", "dive helmet", "giant clam", "glow coral", "bottle", "lighthouse", "jelly lantern", "ship's wheel", "postbox"];
 
 /** Sand dollars a request pays: 5..15, more for the fussier ones. */
 export function rewardOf(r: Pick<Request, "kind" | "target" | "n">): number {

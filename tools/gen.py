@@ -609,10 +609,34 @@ def sand():
 
 
 def chest_art():
-    """Treasure chest, lid tipped back on a pile of gold. Origin = bottom-left."""
+    """Treasure chest, lid standing open behind a pile of gold. Origin = bottom-left."""
     px = Px()
     w, h = 34, 18
     top = -h
+    # the lid, hinged on the box's back edge and tipped open: we see its dark inside face, tapering as it
+    # leans away, with a rounded gold rim along its front edge (now on top) and brass hinges at its foot
+    lid_h = 11
+    for k in range(lid_h):
+        y = top - 1 - k
+        inset = 1 + k // 4 + (2 if k == lid_h - 1 else 1 if k == lid_h - 2 else 0)
+        x0, x1 = inset, w - 1 - inset
+        for x in range(x0, x1 + 1):
+            if x in (x0, x1) or k == lid_h - 1:
+                c = R_WOOD[0]
+            elif k == lid_h - 2:
+                c = R_GOLD[3] if x0 + 2 < x < x1 - 2 else R_GOLD[2]
+            elif k == lid_h - 3:
+                c = R_GOLD[1]
+            elif k < 2:
+                c = R_WOOD[0]
+            elif k % 3 == 1:
+                c = R_WOOD[0]
+            else:
+                c = R_WOOD[2] if (x * 3 + k) % 7 == 0 else R_WOOD[1]
+            px.put(x, y, c)
+    for hx_ in (5, 6, w - 7, w - 6):
+        px.put(hx_, top - 1, R_GOLD[1])
+        px.put(hx_, top - 2, R_GOLD[2] if hx_ in (5, w - 7) else R_GOLD[0])
     for y in range(top, 0):
         for x in range(w):
             t = 0.65 - x / w * 0.35
@@ -634,15 +658,12 @@ def chest_art():
     px.put(w // 2 - 1, top + 5, R_WOOD[0])
     px.put(w // 2 - 1, top + 6, R_WOOD[0])
     px.put(w // 2 - 2, top + 4, R_GOLD[4])
+    # the gold heaped in the open box, in front of the lid
     for x in range(2, w - 2):
         hgt = 3 + round(2 * math.sin(x * 0.7) + math.sin(x * 1.9))
         for k in range(hgt):
             c = R_GOLD[4] if k == hgt - 1 else R_GOLD[3] if (x + k) % 3 else R_GOLD[2]
             px.put(x, top - 1 - k, c)
-    for i in range(w):
-        for k in range(8):
-            c = R_WOOD[0] if k in (0, 7) else R_GOLD[2] if k == 3 else R_WOOD[3] if i < w / 2 else R_WOOD[2]
-            px.put(i - round(k * 0.6) - 1, top - 6 - k, c)
     return px
 
 

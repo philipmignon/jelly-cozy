@@ -159,7 +159,7 @@ const tank = (slots: (SaveJelly | null)[], extra: Partial<Save> = {}): Save => (
   helpers: [false, false, false],
   decorX: DECOR.map((d) => d.x),
   pearlDay: "",
-  lastSeen: 0,
+  lastSeen: NOON, // local noon: tests run in daylight whatever the machine's time zone
   tier: 0,
   cam: 0,
   journal: journalFrom(slots, 0),

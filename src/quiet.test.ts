@@ -25,7 +25,7 @@ import {
   type Stage,
   type State,
 } from "./sim";
-import { BAT, BAT_HANG_Y, VISITORS, boxFacing, planVisit, settled } from "./visitors";
+import { BAT, BAT_HANG_Y, VISITORS, boxFacing, nightVisitor, planVisit, settled } from "./visitors";
 
 function seeded(seed = 1) {
   let s = seed;
@@ -218,7 +218,7 @@ describe("seasons in the tank: Halloween", () => {
     expect(kinds(null).has("bat")).toBe(false);
     const hw = kinds("halloween");
     expect(hw.has("bat")).toBe(true);
-    expect(hw.size).toBe(VISITORS.length);
+    expect(hw.size).toBe(VISITORS.filter((_, k) => !nightVisitor(k)).length); // by day: all but the night visitors
   });
 
   it("flutters in, hangs from the hood's lip, stays in view at every tier and camera, then flutters off", () => {

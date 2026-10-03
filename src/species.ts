@@ -811,6 +811,11 @@ export function specProps(foodN = K.foodN): string[] {
   out.push("camX", "camY", "camZ", "wallX", "panL", "panR");
   // v7 visitors: turtle, seahorse ("horse"), diver; the Halloween bat
   for (const v of ["turtle", "horse", "diver", "bat"]) out.push(`${v}On`, `${v}X`, `${v}Y`, `${v}SX`, `${v}F0`, `${v}F1`, `${v}F2`, `${v}F3`);
+  // v14 night visitors: the manta and the hermit crab like the others; the octopus by spot (octoS{i}), with octoDY and its colours
+  for (const v of ["manta", "hermit"]) out.push(`${v}On`, `${v}X`, `${v}Y`, `${v}SX`, `${v}F0`, `${v}F1`, `${v}F2`, `${v}F3`);
+  const octoSpots = (K as unknown as { octoSpots?: unknown[] }).octoSpots;
+  out.push("octoOn", "octoSX", "octoF0", "octoF1", "octoF2", "octoF3", "octoDY", "octoC1", "octoC2");
+  for (let i = 0; i < (Array.isArray(octoSpots) && octoSpots.length ? octoSpots.length : 1); i++) out.push(`octoS${i}`);
   // optional: the art's "NEEDS MEDIUM" note on the large card, written only if the contract has it
   for (const n of ["needs12", "needs15", "needs17", "shopScroll", "shopScrollBar"]) if (K.props.includes(n)) out.push(n);
   return out;

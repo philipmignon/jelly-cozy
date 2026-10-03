@@ -6,6 +6,7 @@
  */
 import { SPECIES_NAMES } from "./species";
 import { MILESTONES } from "./keepsakes";
+import { VISITORS, VISITOR_NAMES, nightVisitor } from "./visitors";
 
 // ---------------------------------------------------------------- keys
 
@@ -221,7 +222,16 @@ export interface SayEvent {
   keepsake?: number;
   /** v13 "rode": the bubbler was on screen */
   seen?: boolean;
+  /** v14 "visitorArrived": the first time this kind ever came */
+  first?: boolean;
 }
+
+/** v14: how each night visitor's arrival is said (they're rare: worth a line of their own). */
+const NIGHT_ARRIVALS: Record<string, string> = {
+  octopus: "An octopus is peeking over a rock.",
+  manta: "A manta ray is gliding past overhead.",
+  hermit: "A hermit crab is out on the sand.",
+};
 
 /** v13: what a keepsake unlock says: the last sentence of its note ("A little lighthouse washed up for you."). */
 export function keepsakeWords(m: number): string | null {
@@ -256,10 +266,19 @@ export function eventWords(
       return { text: "The pearl is ready.", low: false };
     case "pearl":
       return { text: `Pearl collected: ${plus(e.amount)}.`, low: false };
-    case "visitorArrived":
-      return { text: `${e.kind ? `${article(e.kind) === "an" ? "An" : "A"} ${e.kind}` : "A visitor"} is visiting.`, low: false };
-    case "visitorTapped":
-      return e.amount ? { text: `You greeted the ${e.kind ?? "visitor"}: ${plus(e.amount)}.`, low: false } : null;
+    case "visitorArrived": {
+      const k = e.kind ? (VISITORS as readonly string[]).indexOf(e.kind) : -1;
+      const text = k >= 0 && nightVisitor(k)
+        ? NIGHT_ARRIVALS[e.kind!] ?? `${article(VISITOR_NAMES[k]!) === "an" ? "An" : "A"} ${VISITOR_NAMES[k]} is visiting.`
+        : `${e.kind ? `${article(e.kind) === "an" ? "An" : "A"} ${e.kind}` : "A visitor"} is visiting.`;
+      // v14: a first sighting is new in the journal's visitor log
+      return { text: e.first && k >= 0 ? `${text} New in your visitor log.` : text, low: false };
+    }
+    case "visitorTapped": {
+      const k = e.kind ? (VISITORS as readonly string[]).indexOf(e.kind) : -1;
+      const name = k >= 0 && nightVisitor(k) ? VISITOR_NAMES[k] : e.kind;
+      return e.amount ? { text: `You greeted the ${name ?? "visitor"}: ${plus(e.amount)}.`, low: false } : null;
+    }
     case "requestDone":
       return { text: `Request done${e.amount ? `: ${plus(e.amount)}` : ""}.`, low: false };
     case "spotCleaned":

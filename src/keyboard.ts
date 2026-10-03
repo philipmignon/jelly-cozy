@@ -285,7 +285,7 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
     if (t.kind === "pearl") return "Today's pearl, in the clam. Enter to collect it.";
     if (t.kind === "visitor") {
       const v = visitorInfo(state);
-      return v ? `A ${v.kind}, visiting. Enter to say hello.` : "";
+      return v ? `${/^[aeiou]/i.test(v.name) ? "An" : "A"} ${v.name}, visiting. Enter to say hello.` : "";
     }
     const label = BUTTON_LABEL[t.name] ?? t.name;
     if (t.name === "lamp") return `${label}, ${state.nightTarget ? "night" : "day"}.`;
@@ -294,7 +294,7 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
     return `${label}${tool && state.tool === tool ? ", in hand" : ""}.`;
   };
   const shortLabel = (t: Target): string =>
-    t.kind === "jelly" ? jellyInfo(state, t.slot)?.name ?? "" : t.kind === "pearl" ? "Pearl" : t.kind === "visitor" ? visitorInfo(state)?.kind ?? "" : BUTTON_LABEL[t.name] ?? "";
+    t.kind === "jelly" ? jellyInfo(state, t.slot)?.name ?? "" : t.kind === "pearl" ? "Pearl" : t.kind === "visitor" ? visitorInfo(state)?.name ?? "" : BUTTON_LABEL[t.name] ?? "";
 
   const cardWords = (i: number, withTab: boolean): string => {
     const it = SHOP_ITEMS[i];

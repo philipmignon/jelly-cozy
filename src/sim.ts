@@ -209,7 +209,14 @@ import {
 } from "./dirt";
 import {
   DIVER,
+  HERMIT_HOME,
+  MANTA,
+  NIGHT_VISIT_CHANCE,
+  OCTOPUS,
+  OCTO_SPOTS,
   VISITORS,
+  VISITOR_NAMES,
+  VISITOR_NIGHT,
   VISITOR_PROP,
   VISIT_GAP_MIN,
   VISIT_GAP_SPREAD,
@@ -223,9 +230,11 @@ import {
   visitorCentre,
   visitorHit,
   visitsDuring,
+  nightVisitor,
   type Visit,
   type VisitorKind,
 } from "./visitors";
+import { copySeen, noteSighting, visitLogRows, visitorsSeenOf, type VisitorRow, type VisitorsSeen } from "./visitlog";
 import { decodeTank, encodeTank, hasPlace, type TankCode } from "./tankcode";
 import {
   CURIOUS,
@@ -374,6 +383,8 @@ export interface Save {
   requests?: DailyRequests;
   /** v13 (optional): keepsakes earned and the facts the journal can't tell (./keepsakes.ts); absent until first evaluated */
   keep?: KeepSave;
+  /** v14 (optional): the visitor log, times seen and first seen per visitor kind (./visitlog.ts); absent until the first */
+  visitorsSeen?: VisitorsSeen;
 }
 
 // ---------------------------------------------------------------- state
@@ -471,6 +482,8 @@ export interface SimEvent {
   seen?: boolean;
   /** v13 "keepsake": which milestone (index into MILESTONES) */
   keepsake?: number;
+  /** v14 "visitorArrived": the first time this kind ever came (it's new in the visitor log) */
+  first?: boolean;
 }
 
 export interface State {
@@ -571,6 +584,8 @@ export interface State {
   keep: KeepSave | null;
   keepOn: boolean;
   keepAtLoad: number[];
+  /** v14: the visitor log (./visitlog.ts) */
+  visitorsSeen: VisitorsSeen;
 }
 
 /** v8: what the player has in hand. v11: "shrimp" (the brine shrimp jar) and "plankton" (the bottle) are foods too. */
@@ -888,6 +903,7 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
     theme: themeOf(raw.theme, themes),
     ...requestsField(requestsOf(raw.requests)),
     ...keepField(keepOf(raw.keep)),
+    ...seenField(visitorsSeenOf(raw.visitorsSeen)),
   };
 }
 
@@ -895,6 +911,8 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
 const requestsField = (r: DailyRequests | null): { requests?: DailyRequests } => (r ? { requests: copyRequests(r) } : {});
 /** v13: the optional `keep` save field: only there once keepsakes have been evaluated. */
 const keepField = (k: KeepSave | null): { keep?: KeepSave } => (k ? { keep: copyKeep(k) } : {});
+/** v14: the optional `visitorsSeen` save field: only there once a visitor has been seen. */
+const seenField = (v: VisitorsSeen): { visitorsSeen?: VisitorsSeen } => (Object.keys(v).length ? { visitorsSeen: copySeen(v) } : {});
 
 // ---------------------------------------------------------------- day and night
 
@@ -1266,6 +1284,7 @@ export function createState(save: Save, rand: () => number = Math.random, opts: 
     keep: keepOf(save.keep),
     keepOn: opts.keepsakes === true,
     keepAtLoad: [],
+    visitorsSeen: visitorsSeenOf(save.visitorsSeen),
   };
   state.theme = themeOf(save.theme, state.themes);
   for (const j of jellies(state)) noteJelly(state, j);
@@ -1301,6 +1320,7 @@ export function toSave(s: State, now: number): Save {
     theme: s.theme,
     ...requestsField(s.requests),
     ...keepField(s.keep),
+    ...seenField(s.visitorsSeen),
   };
 }
 
@@ -2040,6 +2060,8 @@ const requestTank = (s: State) => ({
   decor: s.owned,
   pearl: pearlShowing(s),
   bubbler: s.owned[BUBBLER] === true,
+  // v14: a night visitor can only be spotted at night: offered when it's night by the clock with hours of it left
+  night: isNightByClock(s.clock) && ![5, 6].includes(new Date(s.clock).getHours()),
 });
 
 /** Plan today's requests if the day has turned (or none were planned yet). Unfinished ones from another day just go. */
@@ -2071,6 +2093,7 @@ function stepRequests(s: State, events: SimEvent[]): void {
     else if (e.type === "pearl") requestDeed(s, { kind: "pearl" }, events);
     else if (e.type === "visitorTapped") requestDeed(s, { kind: "visitor" }, events);
     else if (e.type === "rode" && e.seen) requestDeed(s, { kind: "ride" }, events);
+    else if (e.type === "visitorArrived" && e.kind && VISITOR_NIGHT[VISITORS.indexOf(e.kind)]) requestDeed(s, { kind: "night" }, events);
   }
 }
 
@@ -2249,17 +2272,45 @@ export function tap(s: State, x: number, y: number): "visitor" | "pearl" | "pet"
 // ---------------------------------------------------------------- visitors (v7)
 
 /** The world stretch a visitor must stay in: what's on screen, inside the glass. */
-function visitStretch(s: State): { x0: number; x1: number } {
+function visitStretch(s: State): { x0: number; x1: number; cam: number } {
   const v = viewSpan(s);
-  return { x0: Math.max(v.x0, K.glassL), x1: Math.min(v.x1, rightGlass(s)) };
+  return { x0: Math.max(v.x0, K.glassL), x1: Math.min(v.x1, rightGlass(s)), cam: camX(s) };
 }
 
+/** v14: the dive helmet's base point (world), when the hermit crab could move in: owned and not being carried. */
+function hermitHome(s: State): { x: number; y: number } | null {
+  const d = HERMIT_HOME.decor;
+  return s.owned[d] && s.lifted !== d ? { x: s.decorX[d] ?? DECOR[d]!.x, y: decorBaseY(s, d) } : null;
+}
+
+/** v14: deep enough into the night for the night visitors (the lamp's night counts). */
+const nightVisitTime = (s: State) => s.nightTarget && s.night > 0.9;
+
+/** v14: what the octopus reaches for: the nearest jelly that isn't a polyp on its rock (world), or null. */
+function octoAim(s: State, v: Visit): { x: number; y: number } | null {
+  let best: { x: number; y: number } | null = null;
+  let bestD = Infinity;
+  for (const j of jellies(s)) {
+    if (j.g === POLYP) continue;
+    const d = Math.hypot(j.x - v.x, j.y - v.y);
+    if (d < bestD) {
+      bestD = d;
+      best = { x: j.x, y: j.y };
+    }
+  }
+  return best;
+}
+
+/** v14: the visitor log, every kind in order, for the journal's Visitors page. */
+export const visitorLog = (s: State): VisitorRow[] => visitLogRows(s.visitorsSeen);
+
 /** The visitor in the tank: which one, where (world), and whether it's still visible; null if none. */
-export function visitorInfo(s: State): { kind: VisitorKind; x: number; y: number; on: number; paid: boolean } | null {
+export function visitorInfo(s: State): { kind: VisitorKind; name: string; x: number; y: number; on: number; paid: boolean } | null {
   const v = s.visit;
   if (!v) return null;
   const c = visitorCentre(v);
-  return { kind: VISITORS[v.kind]!, x: c.x, y: c.y, on: v.on, paid: v.paid };
+  // v14: `on` is what's showing (the hermit crab hides inside the helmet for a moment); `name` is what to call it
+  return { kind: VISITORS[v.kind]!, name: VISITOR_NAMES[v.kind]!, x: c.x, y: c.y, on: v.on * v.vis, paid: v.paid };
 }
 
 /** Where the diver would go next (its origin, world): the dirtiest spot it can reach on screen, or null. */
@@ -2294,17 +2345,24 @@ function stepVisitors(s: State, dt: number, events: SimEvent[]): void {
   const blocked = shopBlocks(s);
   if (!s.visit) {
     if (s.t < s.nextVisit || blocked || s.focus.on || s.wall) return;
-    const kinds = VISITORS.map((_, k) => k).filter((k) => k !== s.lastVisitor && visitsDuring(k, s.event));
-    for (let i = kinds.length - 1; i > 0; i--) {
-      const r = Math.floor(s.rand() * (i + 1));
-      [kinds[i], kinds[r]] = [kinds[r]!, kinds[i]!];
-    }
+    const shuffled = (ks: number[]) => {
+      for (let i = ks.length - 1; i > 0; i--) {
+        const r = Math.floor(s.rand() * (i + 1));
+        [ks[i], ks[r]] = [ks[r]!, ks[i]!];
+      }
+      return ks;
+    };
+    let kinds = shuffled(VISITORS.map((_, k) => k).filter((k) => k !== s.lastVisitor && visitsDuring(k, s.event) && !nightVisitor(k)));
+    // v14: deep in the night, now and then a night visitor comes instead (a day one if none fits the view)
+    if (nightVisitTime(s) && s.rand() < NIGHT_VISIT_CHANCE)
+      kinds = [...shuffled(VISITORS.map((_, k) => k).filter((k) => k !== s.lastVisitor && nightVisitor(k) && visitsDuring(k, s.event))), ...kinds];
     for (const k of kinds) {
-      const v = planVisit(k, visitStretch(s), s.tier, s.rand);
+      const v = planVisit(k, visitStretch(s), s.tier, s.rand, { home: hermitHome(s) });
       if (!v) continue;
       s.visit = v;
       s.lastVisitor = k;
-      events.push({ type: "visitorArrived", kind: VISITORS[k]! });
+      const first = noteSighting(s.visitorsSeen, VISITORS[k]!, s.clock);
+      events.push(first ? { type: "visitorArrived", kind: VISITORS[k]!, first } : { type: "visitorArrived", kind: VISITORS[k]! });
       // v13: curious jellies are the first to say hello
       for (const j of jellies(s)) {
         if (j.mode !== "swim" || j.trait !== CURIOUS || j.targetKind === "food" || j.targetKind === "tap") continue;
@@ -2319,7 +2377,10 @@ function stepVisitors(s: State, dt: number, events: SimEvent[]): void {
   }
   if (blocked) return;
   const v = s.visit;
-  stepVisit(v, dt, s.rand, v.kind === DIVER ? diverAim(s, v) : null);
+  // v14: the night visitors go when the light comes on
+  if (nightVisitor(v.kind) && !s.nightTarget && v.age < v.leaveAt) v.leaveAt = v.age;
+  const aim = v.kind === DIVER ? diverAim(s, v) : v.kind === OCTOPUS ? octoAim(s, v) : null;
+  stepVisit(v, dt, s.rand, aim, { reduced: s.reducedMotion, cam: camX(s), home: hermitHome(s) });
   if (v.kind === DIVER && settled(v)) {
     // the diver wipes the spots it's working on
     const c = visitorCentre(v);
@@ -3542,11 +3603,20 @@ export function view(s: State): View {
   // visitors (world): the one in the tank, eased in and out; the others hidden
   VISITOR_PROP.forEach((name, k) => {
     const vis = s.visit && s.visit.kind === k ? s.visit : null;
-    v[`${name}On`] = vis ? clamp(vis.on) : 0;
-    v[`${name}X`] = vis ? snap(vis.x) : 0;
-    v[`${name}Y`] = vis ? snap(vis.y) : 0;
+    v[`${name}On`] = vis ? clamp(vis.on * vis.vis) : 0;
     v[`${name}SX`] = vis ? vis.sx : 1;
     for (let f = 0; f < 4; f++) v[`${name}F${f}`] = (vis ? vis.f : 0) === f ? 1 : 0;
+    if (k === OCTOPUS) {
+      // v14: the octopus is drawn at its spot (octoS{i}, clipped along that rock), octoDY below it, in its colours
+      OCTO_SPOTS.forEach((_, i) => (v[`octoS${i}`] = (vis ? vis.spot : 0) === i ? 1 : 0));
+      v.octoDY = vis ? snap(vis.dy) : OCTO_SPOTS[0]!.rise;
+      v.octoC1 = vis ? Math.round(clamp(vis.c1) * 20) / 20 : 0;
+      v.octoC2 = vis ? Math.round(clamp(vis.c2) * 20) / 20 : 0;
+      return;
+    }
+    // v14: the manta sits in the Far parallax group: its x there, not the world's
+    v[`${name}X`] = vis ? snap(k === MANTA ? vis.gx : vis.x) : 0;
+    v[`${name}Y`] = vis ? snap(vis.y) : 0;
   });
   return v;
 }

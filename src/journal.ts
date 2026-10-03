@@ -2,9 +2,13 @@
  * The jelly journal: an HTML book over the tank, one spread per species.
  * Portraits come from src/journal-art.json (written by tools/gen.py);
  * the facts live here. v13: after the species, a Keepsakes page: each milestone, how far along it is,
- * and the keepsake it leaves (art "keep{m}").
+ * and the keepsake it leaves (art "keep{m}"). v14: then a Visitors page (the visitor log: every visitor kind,
+ * times seen and first seen, "???" until met; art "v{kind}" and its silhouette "v{kind}s") and the photo Album
+ * (./albumpage.ts, which draws its own page).
  */
 import { focusReturn } from "./a11y";
+import { captionDate } from "./photo";
+import type { VisitorRow } from "./visitlog";
 import { SPECIES_NAMES } from "./species";
 import { FOOD_NAMES, MORPH_CLASSIC, MORPH_GHOST, favouriteFood, morphSeen, type Species } from "./sim";
 import { traitsIn } from "./traits";
@@ -137,17 +141,60 @@ const CSS = `
 .jt-keep-bar > i { display: block; height: 100%; background: #e09a28; }
 .jt-keep-count { color: #693c24; font-size: 11px; min-width: 28px; text-align: right; }
 .jt-keep-row.done .jt-keep-count { color: #2a8a4a; }
+/* v14: the visitor log */
+.jt-vlog-page { display: grid; gap: 6px; }
+.jt-vlog-intro { margin: 0; color: #45261a; }
+.jt-vlog-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: min(330px, 46vh); overflow-y: auto; }
+.jt-vlog-row {
+  display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center; gap: 8px;
+  padding: 4px 8px 4px 4px; border: 2px dashed #d9bf94; border-radius: 6px;
+}
+.jt-vlog-row.met { border-style: solid; border-color: #e09a28; background: #fff2c8; }
+.jt-vlog-row.night.met { border-color: #6f68b8; background: #e8e6ff; }
+.jt-vlog-art {
+  display: grid; place-items: center; width: 52px; height: 40px; border-radius: 4px; overflow: hidden;
+  background: linear-gradient(#3ab4e0, #125fa6); box-shadow: inset 0 0 0 2px #45261a;
+}
+.jt-vlog-row.night .jt-vlog-art { background: linear-gradient(#2a3f8a, #0e1638); }
+.jt-vlog-art img { image-rendering: pixelated; }
+.jt-vlog-row:not(.met) .jt-vlog-art img { opacity: 0.75; }
+.jt-vlog-text { display: grid; gap: 2px; min-width: 0; font-size: 11px; text-transform: uppercase; }
+.jt-vlog-text b { font-weight: normal; color: #2b1712; }
+.jt-vlog-text i { font-style: normal; color: #8e5632; font-size: 10px; }
+.jt-book-dots i.jt-vlog-dot { border-radius: 50%; background: #e3cfa6; box-shadow: inset 0 0 0 2px #6f68b8; }
+.jt-book-dots i.jt-vlog-dot.here { background: #6f68b8; }
 `;
 
+export type JournalPlace = "keepsakes" | "visitors" | "album";
+
 export interface Journal {
-  /** opens where it was left; v13: "keepsakes" opens on the Keepsakes page */
-  open(at?: "keepsakes"): void;
+  /** opens where it was left; v13: "keepsakes" opens on the Keepsakes page; v14: "visitors", "album" on theirs */
+  open(at?: JournalPlace): void;
   close(): void;
   readonly isOpen: boolean;
 }
 
-/** `keepsakes` (v13), when given, adds the Keepsakes page after the species. */
-export function createJournal(pages: () => JournalPage[], keepsakes?: () => KeepsakeRow[]): Journal {
+/** v14: a page drawn by someone else (the Album), after the journal's own. */
+export interface JournalExtraPage {
+  /** its markup, placed in the book's pages */
+  el: HTMLElement;
+  /** fill it in (it's being shown); `count` sets the line under the dots (now or later) */
+  render(count: (text: string) => void): void;
+  /** it was turned away from (or the book closed) */
+  hide?(): void;
+}
+
+/** v14: the pages after the species and the keepsakes. */
+export interface JournalExtras {
+  visitors?: () => VisitorRow[];
+  album?: JournalExtraPage;
+}
+
+/** "3 OCT 2026" for the visitor log. */
+const seenDate = (ms: number) => captionDate(ms);
+
+/** `keepsakes` (v13), when given, adds the Keepsakes page after the species; v14: `extras` the Visitors and Album pages. */
+export function createJournal(pages: () => JournalPage[], keepsakes?: () => KeepsakeRow[], extras: JournalExtras = {}): Journal {
   const style = document.createElement("style");
   style.textContent = CSS;
   document.head.append(style);
@@ -166,12 +213,15 @@ export function createJournal(pages: () => JournalPage[], keepsakes?: () => Keep
     <div class="jt-book-morphs">${MORPH_ROWS.map((m) => `<div class="jt-book-morph${m.id === MORPH_GHOST ? " ghost" : ""}"><img alt=""><span><b>${m.label}:</b> <i></i></span></div>`).join("")}</div>
     <div class="jt-keep-page" hidden><h3 class="jt-book-name">Keepsakes</h3>
       <p class="jt-keep-intro">Reach a milestone and a keepsake turns up in your tank.</p><ul class="jt-keep-list"></ul></div>
+    <div class="jt-vlog-page" hidden><h3 class="jt-book-name">Visitors</h3>
+      <p class="jt-vlog-intro">Everyone who has dropped by your tank. Some only come out at night.</p><ul class="jt-vlog-list"></ul></div>
     <div class="jt-book-nav"><button type="button" class="prev" aria-label="Previous page">&lt;</button>
       <div><div class="jt-book-dots"></div><div class="jt-book-count"></div></div>
       <button type="button" class="next" aria-label="Next page">&gt;</button></div>
   </div>`;
   document.body.append(book);
   const $ = <T extends Element>(sel: string) => book.querySelector(sel) as T;
+  if (extras.album) $<HTMLElement>(".jt-book-nav").before(extras.album.el);
   let page = 0;
   // portraits are tiny (logical pixels): scale by a whole number so every pixel stays square
   const fit = (img: HTMLImageElement, maxW: number, maxH: number) => {
@@ -184,9 +234,15 @@ export function createJournal(pages: () => JournalPage[], keepsakes?: () => Keep
   fit($<HTMLImageElement>(".jt-book-plate img"), 260, 156);
   book.querySelectorAll<HTMLImageElement>(".jt-book-morph img").forEach((img) => fit(img, 60, 40));
 
-  /** the species' pages, then the keepsakes page (if any) */
-  const pageCount = () => (pages().length || SPECIES_NAMES.length) + (keepsakes ? 1 : 0);
+  /** v14: the pages after the species, in order: the keepsakes, the visitor log, the album (those given) */
+  const after: JournalPlace[] = [...(keepsakes ? ["keepsakes" as const] : []), ...(extras.visitors ? ["visitors" as const] : []), ...(extras.album ? ["album" as const] : [])];
+  const speciesCount = () => pages().length || SPECIES_NAMES.length;
+  /** the species' pages, then the keepsakes page (if any), the visitor log and the album */
+  const pageCount = () => speciesCount() + after.length;
   const keepPage = book.querySelector(".jt-keep-page") as HTMLElement;
+  const vlogPage = book.querySelector(".jt-vlog-page") as HTMLElement;
+  /** which of the pages after the species is showing, if any */
+  const placeOf = (p: number): JournalPlace | null => after[p - speciesCount()] ?? null;
   const species = [".jt-book-plate", ".jt-book-name", ".jt-book-fact", ".jt-book-stats"].map((sel) => $<HTMLElement>(sel));
   /** v13: the keepsakes page: one row per milestone, its reward's portrait, a bar and n/total */
   const renderKeepsakes = (rows: KeepsakeRow[]) => {
@@ -208,11 +264,57 @@ export function createJournal(pages: () => JournalPage[], keepsakes?: () => Keep
     );
   };
 
+  /** v14: the visitor log: one row per visitor kind, its portrait (a silhouette until met), times and first seen */
+  const renderVisitors = (rows: VisitorRow[]) => {
+    $<HTMLElement>(".jt-vlog-list").replaceChildren(
+      ...rows.map((r) => {
+        const met = r.n > 0;
+        const li = document.createElement("li");
+        li.className = `jt-vlog-row${met ? " met" : ""}${r.night ? " night" : ""}`;
+        li.innerHTML = `<span class="jt-vlog-art"><img alt=""></span><span class="jt-vlog-text"><b></b><i class="jt-vlog-seen"></i><i class="jt-vlog-when"></i></span>`;
+        const img = li.querySelector("img") as HTMLImageElement;
+        fit(img, 48, 36);
+        img.src = (met ? ART[`v${r.kind}`] : ART[`v${r.kind}s`] ?? ART[`v${r.kind}`]) ?? "";
+        img.alt = met ? r.name : "Unknown visitor";
+        (li.querySelector("b") as HTMLElement).textContent = met ? r.name : "???";
+        (li.querySelector(".jt-vlog-seen") as HTMLElement).textContent = met ? `Seen ${r.n === 1 ? "once" : `${r.n} times`}` : "Not met yet";
+        (li.querySelector(".jt-vlog-when") as HTMLElement).textContent = met && r.first !== null
+          ? `First seen ${seenDate(r.first)}`
+          : r.night ? "Comes out at night" : r.season === "halloween" ? "Comes at Halloween" : "Drops by any time";
+        li.dataset.kind = r.kind;
+        return li;
+      }),
+    );
+  };
+
   const render = () => {
     const all = pages();
-    const onKeep = !!keepsakes && page === (all.length || SPECIES_NAMES.length);
+    const place = placeOf(page);
+    const onKeep = place === "keepsakes";
     keepPage.hidden = !onKeep;
-    for (const el of species) el.hidden = onKeep;
+    vlogPage.hidden = place !== "visitors";
+    if (extras.album) {
+      extras.album.el.hidden = place !== "album";
+      if (place !== "album") extras.album.hide?.();
+    }
+    for (const el of species) el.hidden = place !== null;
+    $<HTMLElement>(".jt-book-morphs").hidden ||= place !== null;
+    if (place === "visitors") {
+      const rows = extras.visitors!();
+      renderVisitors(rows);
+      renderDots(all);
+      $<HTMLElement>(".jt-book-count").textContent = `${rows.filter((r) => r.n > 0).length} of ${rows.length} visitors met`;
+      return;
+    }
+    if (place === "album") {
+      renderDots(all);
+      const count = $<HTMLElement>(".jt-book-count");
+      count.textContent = "";
+      extras.album!.render((text) => {
+        if (placeOf(page) === "album" && !book.hidden) count.textContent = text;
+      });
+      return;
+    }
     if (onKeep) {
       const rows = keepsakes!();
       renderKeepsakes(rows);
@@ -264,11 +366,11 @@ export function createJournal(pages: () => JournalPage[], keepsakes?: () => Keep
       if (i === page) d.className = "here";
       return d;
     });
-    if (keepsakes) {
+    after.forEach((place, i) => {
       const d = document.createElement("i");
-      d.className = `jt-keep-dot${page === all.length ? " here" : ""}`;
+      d.className = `${place === "keepsakes" ? "jt-keep-dot" : "jt-vlog-dot"}${page === all.length + i ? " here" : ""}`;
       dots.push(d);
-    }
+    });
     $<HTMLElement>(".jt-book-dots").replaceChildren(...dots);
   };
   const turn = (d: number) => {
@@ -282,6 +384,7 @@ export function createJournal(pages: () => JournalPage[], keepsakes?: () => Keep
   const close = () => {
     if (book.hidden) return;
     book.hidden = true;
+    extras.album?.hide?.();
     back.closed();
   };
   $<HTMLButtonElement>(".jt-book-x").addEventListener("click", close);
@@ -293,8 +396,8 @@ export function createJournal(pages: () => JournalPage[], keepsakes?: () => Keep
   });
 
   return {
-    open(at?: "keepsakes") {
-      if (at === "keepsakes" && keepsakes) page = pageCount() - 1;
+    open(at?: JournalPlace) {
+      if (at && after.includes(at)) page = speciesCount() + after.indexOf(at);
       render();
       if (book.hidden) back.opened();
       book.hidden = false;

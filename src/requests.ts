@@ -11,13 +11,14 @@
  *   "sprinkle" decoration d; n pellets sprinkled near it (only owned decorations)      (6)
  *   "visitor"  -1; a visitor tapped                                                    (10)
  *   "ride"     -1; a jelly rode the bubbler to the top while it was on screen (only with the bubbler) (8)
+ *   "night"    -1; a night visitor spotted (it came into view; only planned at night, by the clock)    (12)
  * Unfinished requests don't carry over: a new day (or a day away) replaces them.
  */
 import { FOOD_KINDS, FOOD_NAMES, SPECIES_N, SPECIES_NAMES, favouriteFood, type FoodKind, type Species } from "./species";
 import { rng } from "./dirt";
 
-export type RequestKind = "feed" | "scrub" | "pet" | "pearl" | "sprinkle" | "visitor" | "ride";
-export const REQUEST_KINDS: readonly RequestKind[] = ["feed", "scrub", "pet", "pearl", "sprinkle", "visitor", "ride"];
+export type RequestKind = "feed" | "scrub" | "pet" | "pearl" | "sprinkle" | "visitor" | "ride" | "night";
+export const REQUEST_KINDS: readonly RequestKind[] = ["feed", "scrub", "pet", "pearl", "sprinkle", "visitor", "ride", "night"];
 
 export interface Request {
   kind: RequestKind;
@@ -50,6 +51,8 @@ export interface RequestTank {
   pearl: boolean;
   /** v13: the bubbler is in the tank (jellies can ride it) */
   bubbler?: boolean;
+  /** v14: it's night by the clock with hours of it left (night visitors can turn up) */
+  night?: boolean;
 }
 
 /** Something the player did that a request may count. */
@@ -60,7 +63,8 @@ export type Deed =
   | { kind: "pearl" }
   | { kind: "sprinkle"; decor: number; n: number }
   | { kind: "visitor" }
-  | { kind: "ride" };
+  | { kind: "ride" }
+  | { kind: "night" };
 
 /** At most this many a day. */
 export const REQUESTS_PER_DAY = 2;
@@ -90,6 +94,8 @@ export function rewardOf(r: Pick<Request, "kind" | "target" | "n">): number {
       return 10;
     case "ride":
       return 8;
+    case "night":
+      return 12;
   }
 }
 
@@ -114,6 +120,8 @@ export function requestText(r: Request): string {
       return "Say hello to a visitor";
     case "ride":
       return "Watch a jelly ride the bubbler";
+    case "night":
+      return "Spot a night visitor";
   }
 }
 
@@ -155,6 +163,7 @@ export function planRequests(day: string, t: RequestTank): DailyRequests {
   if (decor.length) pool.push([2, () => req("sprinkle", SPRINKLE_N, pick(decor))]);
   pool.push([1, () => req("visitor", 1)]);
   if (t.bubbler) pool.push([2, () => req("ride", 1)]);
+  if (t.night) pool.push([1, () => req("night", 1)]);
   const items: Request[] = [];
   while (items.length < REQUESTS_PER_DAY && pool.length) {
     const total = pool.reduce((a, p) => a + p[0], 0);

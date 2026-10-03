@@ -1,6 +1,6 @@
 /**
  * The settings button in the hood strip (top right of the tank) and the menu it opens:
- * jelly journal, share your tank, take a photo, saves, music, sound, reduce motion and seasonal decor. HTML over the canvas, placed in
+ * jelly journal, share your tank, take a photo, saves, music, sound, reduce motion, seasonal decor and battery saver. HTML over the canvas, placed in
  * artboard coordinates.
  */
 import type { TankAudio } from "./audio";
@@ -71,6 +71,8 @@ const ICONS = {
     ink("5,0,2,3", "#5e5c22") + ink("2,3,8,1;1,4,10,6;2,10,8,1", "#e2701a") + ink("1,5,1,4;4,4,1,6;7,4,1,6", "#b8480c")
       + ink("3,5,2,2;7,5,2,2;3,8,6,1;4,9,4,1", "#ffe88a"),
   ),
+  // battery saver: a battery, half full
+  battery: svg(ink("1,3,9,1;1,8,9,1;1,4,1,4;9,4,1,4;10,5,1,2", "#693c24") + ink("2,4,3,4", "#2a7f42")),
 };
 
 type AudioWithMusic = TankAudio & { music?: boolean; setMusic?(on: boolean): void };
@@ -85,6 +87,8 @@ export interface SettingsHandlers {
   reduceMotion?: { get(): boolean; set(on: boolean): void };
   /** the "Seasonal decor" setting (Halloween pumpkins, the bat...): omitted = no toggle in the menu */
   seasonDecor?: { get(): boolean; set(on: boolean): void };
+  /** the "Battery saver" setting (src/pace.ts: the calmer frame rate all the time): omitted = no toggle in the menu */
+  batterySaver?: { get(): boolean; set(on: boolean): void };
 }
 
 export interface Settings {
@@ -173,6 +177,9 @@ export function createSettings(
   const decor = on.seasonDecor;
   const season = item("jt-menu-season", ICONS.season, "Seasonal decor", true, () => decor?.set(!decor.get()));
   if (!decor) (season.parentElement as HTMLElement).hidden = true;
+  const saver = on.batterySaver;
+  const battery = item("jt-menu-battery", ICONS.battery, "Battery saver", true, () => saver?.set(!saver.get()));
+  if (!saver) (battery.parentElement as HTMLElement).hidden = true;
   const status = document.createElement("li");
   status.className = "jt-menu-status";
   status.setAttribute("role", "none");
@@ -190,6 +197,9 @@ export function createSettings(
     const decorOn = decor?.get() ?? false;
     season.setAttribute("aria-checked", String(decorOn));
     (season.querySelector(".state") as HTMLElement).textContent = decorOn ? "On" : "Off";
+    const saverOn = saver?.get() ?? false;
+    battery.setAttribute("aria-checked", String(saverOn));
+    (battery.querySelector(".state") as HTMLElement).textContent = saverOn ? "On" : "Off";
   }
   sync();
 

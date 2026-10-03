@@ -2,7 +2,9 @@
 //   node tools/loadtime.mjs            (serves pub/jellytank.html + dist/ with gzip)
 //   LOAD_MODE=pages node tools/loadtime.mjs   (serves dist/index.html as GitHub Pages would: .riv uncompressed)
 //   LOAD_PORT=5211                      (the port, default 5196)
-// Two tanks: a NEW one (a moon polyp, empty storage) and a FULL one (Large tank, seven jellies of seven species).
+// Two tanks: a NEW one (a moon polyp, empty storage) and a FULL one (Large tank, seven jellies of seven species),
+// each with no seasonal event (?season=none) and on a first visit during Halloween (?season=halloween: the
+// event's art, ev-halloween, comes on top of the jellies'; `every jelly drawn` then also waits for the decor).
 import { createServer } from "node:http";
 import { readFileSync, existsSync } from "node:fs";
 import { gzipSync } from "node:zlib";
@@ -38,27 +40,34 @@ const profiles = {
 };
 const SPECIES_KEYS = JSON.parse(readFileSync("src/contract.json", "utf8")).species;
 const now = Date.now();
+const FULL = JSON.stringify({
+  v: 11, tier: 2, dollars: 500, lastSeen: now, night: false, lamp: null,
+  slots: [[0, 3], [1, 3], [2, 2], [3, 3], [4, 3], [5, 2], [6, 3]].map(([k, g], i) => ({ k, g, name: `J${i}`, born: now - 864e5 })),
+});
 const tanks = {
-  new: null,
-  "full (7 jellies, 7 species)": JSON.stringify({
-    v: 9, tier: 2, dollars: 500, lastSeen: now, night: false, lamp: null,
-    slots: [[0, 3], [1, 3], [2, 2], [3, 3], [4, 3], [5, 2], [6, 3]].map(([k, g], i) => ({ k, g, name: `J${i}`, born: now - 864e5 })),
-  }),
+  new: { save: null, season: "none" },
+  "full (7 jellies, 7 species)": { save: FULL, season: "none" },
+  "new, first Halloween visit": { save: null, season: "halloween" },
+  "full, first Halloween visit": { save: FULL, season: "halloween" },
 };
 const browser = await puppeteer.launch({ channel: "chrome", headless: true, args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
-for (const [tank, save] of Object.entries(tanks)) {
+for (const [tank, { save, season }] of Object.entries(tanks)) {
   for (const [name, net] of Object.entries(profiles)) {
     const p = await browser.newPage();
     await p.setViewport({ width: 390, height: 844, deviceScaleFactor: 2 });
     const cdp = await p.createCDPSession();
     await cdp.send("Network.enable");
     await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
+    // every load a first visit: in pages mode dist/index.html installs the service worker, which would
+    // otherwise serve every later load from its cache (tools/offline.mjs times repeat visits)
+    await cdp.send("Network.setBypassServiceWorker", { bypass: true });
     await cdp.send("Network.emulateNetworkConditions", { offline: false, downloadThroughput: net.download, uploadThroughput: net.upload, latency: net.latency });
     let bytes = 0;
     cdp.on("Network.loadingFinished", (e) => (bytes += e.encodedDataLength));
     // timed inside the page (performance.now() from navigation), so a busy machine's slow polling doesn't count:
     // `first` = the loading screen lifts (first frame), `all` = every jelly's art is in (off-screen ones come later)
-    await p.evaluateOnNewDocument((s, keys) => {
+    // and, in Halloween, the event's decor is showing
+    await p.evaluateOnNewDocument((s, keys, event) => {
       try {
         localStorage.clear();
         localStorage.setItem("jellytank:tips", "1");
@@ -72,19 +81,20 @@ for (const [tank, save] of Object.entries(tanks)) {
           lt.kb = Math.round(performance.getEntriesByType("resource").reduce((a, r) => a + r.transferSize, performance.getEntriesByType("navigation")[0]?.transferSize ?? 0) / 1024);
         }
         const g = window.__spriteGroups;
-        if (lt.first && window.__tank && (!g || window.__tank.slots.every((j) => !j || g.isReady(`sp-${keys[j.k]}`)))) {
+        const jellies = !g || window.__tank?.slots.every((j) => !j || g.isReady(`sp-${keys[j.k]}`));
+        if (lt.first && window.__tank && jellies && (!event || window.__tank.event === event)) {
           lt.all = performance.now();
           clearInterval(poll);
         }
       }, 10);
-    }, save, SPECIES_KEYS);
-    await p.goto(`http://127.0.0.1:${PORT}/?season=none`, { waitUntil: "domcontentloaded", timeout: 120000 });
+    }, save, SPECIES_KEYS, season === "none" ? null : season);
+    await p.goto(`http://127.0.0.1:${PORT}/?season=${season}`, { waitUntil: "domcontentloaded", timeout: 120000 });
     await p.waitForFunction(() => window.__lt?.all > 0, { timeout: 120000 });
     const lt = await p.evaluate(() => window.__lt);
     // the browser's own first paint: when the loading screen showed
     const loaderAt = await p.evaluate(() => performance.getEntriesByName("first-contentful-paint")[0]?.startTime ?? performance.getEntriesByName("first-paint")[0]?.startTime ?? -1);
     const s_ = (ms) => `${(ms / 1000).toFixed(1)} s`;
-    console.log(`${tank}, ${name}: loading screen ${s_(loaderAt)}, first frame ${s_(lt.first)} (${lt.kb} KB by then), every jelly drawn ${s_(lt.all)}; ${Math.round(bytes / 1024)} KB in all`);
+    console.log(`${tank}, ${name}: loading screen ${s_(loaderAt)}, first frame ${s_(lt.first)} (${lt.kb} KB by then), every jelly${season === "none" ? "" : " and the decor"} drawn ${s_(lt.all)}; ${Math.round(bytes / 1024)} KB in all`);
     await p.close();
   }
 }

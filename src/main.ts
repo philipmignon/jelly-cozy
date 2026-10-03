@@ -13,6 +13,7 @@ import { SHELL_DOLLARS, connectFriends, giftLines, liveId, type Friends, type Gi
 import { captionDate, capture, downloadsCapability, flash, photoFilename, savePng, toPng } from "./photo";
 import { clearVisit, createBackupPanel, createSharePanel, noteAfterReload, pendingVisit, showNote, showVisitBar, takeNote } from "./share";
 import { createOverlay, type JellyCardInfo } from "./overlay";
+import { createPacer, readBatterySaver, wakes, writeBatterySaver, type Pacer } from "./pace";
 import { registerOffline, updateChip } from "./offline";
 import { activeSeason, readSeasonDecor, seasonalMorph, writeSeasonDecor } from "./season";
 import { createRequestNote, type RequestNote } from "./requestnote";
@@ -239,7 +240,6 @@ async function main() {
     : DEMO
       ? { save: demoSave(Date.now()), away: null }
       : loadGame(raw, Date.now(), { growthMultiplier });
-  // v12: daily requests only in the player's own tank (not the demo, not someone else's)
   // daily requests and seasonal (ghost) births only in the player's own tank: not the demo, not someone else's
   const state = createState(loaded.save, Math.random, {
     growthMultiplier: DEMO ? 1 : growthMultiplier,
@@ -369,6 +369,19 @@ async function main() {
     });
   });
   new ResizeObserver(() => rive.resizeDrawingSurfaceToCanvas()).observe(canvas);
+
+  // frames come from our own loop (src/pace.ts): every display frame while something is happening, 30 a
+  // second once the tank has been quiet a few seconds, or always with the battery saver on. Any input wakes it.
+  const pacer = createPacer(rive, {
+    raf: (cb) => requestAnimationFrame(cb),
+    caf: (id) => cancelAnimationFrame(id),
+    now: () => performance.now(),
+    reduced: () => reduceMotion,
+  });
+  pacer.saver = readBatterySaver(store);
+  for (const type of ["pointerdown", "pointermove", "wheel", "keydown"] as const) window.addEventListener(type, () => pacer.wake(), { capture: true, passive: true });
+  pacer.start();
+  (window as unknown as { __pace: Pacer }).__pace = pacer; // for tools/battery.mjs and the e2e
 
   const vmi = rive.viewModelInstance;
   if (!vmi) throw new Error("Tank view model not bound");
@@ -653,6 +666,13 @@ async function main() {
         applySeason();
       },
     },
+    batterySaver: {
+      get: () => pacer.saver,
+      set: (on) => {
+        pacer.saver = on;
+        writeBatterySaver(store, on);
+      },
+    },
   });
   settings = settingsUi;
   if (VISIT_SAVE) showVisitBar();
@@ -704,9 +724,11 @@ async function main() {
   const PHOTO_HIDE = { panL: 0, panR: 0, canO: 0, jarO: 0, bottleO: 0, spongeO: 0 };
   let photoHide = false;
   let photoBusy = false;
+  /** n frames drawn (not display frames: at the calm rate only every other one is) */
   const frames = (n: number) =>
     new Promise<void>((resolve) => {
-      const f = () => (--n <= 0 ? resolve() : requestAnimationFrame(f));
+      const until = pacer.drawn + n;
+      const f = () => (pacer.drawn >= until ? resolve() : requestAnimationFrame(f));
       requestAnimationFrame(f);
     });
   const takePhoto = async () => {
@@ -846,6 +868,7 @@ async function main() {
 
     let lastKind = "";
     for (const e of step(state, dt)) {
+      if (wakes(e)) pacer.wake();
       kb.event(e);
       switch (e.type) {
         case "ate":
@@ -933,6 +956,7 @@ async function main() {
       }
       lastKind = e.type;
     }
+    pacer.frame(state); // food in the water, the camera moving, a visitor...: the full rate
     SHOP_ITEMS.forEach((it, i) => {
       if (!affordable.has(i) && state.dollars >= it.price) {
         affordable.add(i);
@@ -965,14 +989,22 @@ async function main() {
     if (reqNote && (reqTick = (reqTick + 1) % 12) === 0) reqNote.update(requests(state)?.items ?? null);
   });
 
-  setInterval(() => persist(state), 5000);
+  // not while hidden: nothing changes then (no frames, no steps), and hiding saved already
+  setInterval(() => document.hidden || persist(state), 5000);
   document.addEventListener("visibilitychange", () => {
+    // hidden: no frames and no steps (the audio suspends itself, src/audio.ts)
     if (document.hidden) {
+      pacer.stop();
       persist(state, true); // hand the cloud the latest straight away
       return;
     }
+    // back: the clock catches up (day or night, the day's pearl and requests); everything that moves picks up
+    // where it was, the first step one frame long rather than the time away
     syncClock(state, Date.now());
+    last = performance.now();
     applySeason();
+    pacer.wake();
+    pacer.start();
     // back on this device: did another one save a newer tank meanwhile?
     void cloud?.check().then((c) => {
       if (c && c.at > mySaveAt + 1000) offerNewer(c.json);

@@ -424,6 +424,65 @@ async function keyboardFlow(browser) {
   await ctx.close();
 }
 
+/**
+ * Battery (src/pace.ts): a quiet tank drops to the calm rate and any input brings the full rate back; a hidden
+ * tab draws and steps nothing, and on return the clock catches up while what moves picks up where it was;
+ * the "Battery saver" setting keeps the calm rate and is remembered.
+ */
+async function batteryFlow(browser) {
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  page.setDefaultNavigationTimeout(90_000);
+  await page.setViewport({ ...VIEW, deviceScaleFactor: 1 });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto(`http://localhost:${PORT}/?season=none`, DCL);
+  await page.evaluate(() => localStorage.setItem("jellytank:tips", "1"));
+  await page.reload(DCL);
+  await page.waitForFunction(() => window.__tank && window.__pace && window.__tank.t > 0.5, { timeout: 30000 });
+  const calm = await until(page, () => window.__pace.calm, undefined, 20000);
+  const rate = await page.evaluate(() => new Promise((r) => { const d0 = window.__pace.drawn; setTimeout(() => r(window.__pace.drawn - d0), 1000); }));
+  check("battery: a quiet tank goes calm, about 30 frames a second at most", calm && rate <= 32, `calm=${calm} drawn in 1 s=${rate}`);
+  await page.mouse.move(VIEW.width / 2, VIEW.height / 3);
+  check("battery: input brings the full rate back", !(await page.evaluate(() => window.__pace.calm)));
+
+  // hidden: nothing drawn, nothing stepped; back: no time-away step, the clock caught up, the camera where it was
+  const other = await ctx.newPage();
+  await other.bringToFront();
+  const hid = await until(page, () => document.hidden, undefined, 5000);
+  const before = await page.evaluate(() => ({ drawn: window.__pace.drawn, t: window.__tank.t, cam: window.__tank.cam.x }));
+  await sleep(1500);
+  const during = await page.evaluate(() => ({ drawn: window.__pace.drawn, t: window.__tank.t }));
+  check("battery: a hidden tab draws and steps nothing", hid && during.drawn === before.drawn && during.t === before.t, JSON.stringify({ hid, before, during }));
+  await page.evaluate(() => (window.__tank.clock -= 3_600_000)); // as if it had been away an hour
+  await page.bringToFront();
+  await other.close();
+  await until(page, (t) => window.__tank.t > t, before.t, 5000);
+  const back = await page.evaluate(() => ({ t: window.__tank.t, cam: window.__tank.cam.x, lag: Date.now() - window.__tank.clock }));
+  check(
+    "battery: back from hidden, the first step is a frame, not the time away; the clock caught up; the camera stayed",
+    back.t - before.t < 0.25 && Math.abs(back.lag) < 2000 && back.cam === before.cam,
+    JSON.stringify({ step: +(back.t - before.t).toFixed(3), lag: back.lag, cam: [before.cam, back.cam] }),
+  );
+
+  // the setting: the calm rate even right after input, and remembered
+  await page.click(".jt-gear");
+  await page.click(".jt-menu-battery");
+  const saver = await page.evaluate(() => ({
+    on: window.__pace.saver,
+    calm: window.__pace.calm,
+    stored: localStorage.getItem("jellytank:battery"),
+    checked: document.querySelector(".jt-menu-battery").getAttribute("aria-checked"),
+  }));
+  check("battery: the saver setting keeps the calm rate, even just after input", saver.on && saver.calm && saver.stored === "1" && saver.checked === "true", JSON.stringify(saver));
+  await page.keyboard.press("Escape");
+  await page.reload(DCL);
+  await page.waitForFunction(() => window.__tank && window.__pace && window.__tank.t > 0.5, { timeout: 30000 });
+  check("battery: the saver setting survives a reload", await page.evaluate(() => window.__pace.saver && window.__pace.calm));
+  check("battery: no page errors", errors.length === 0, errors.join(" | "));
+  await ctx.close();
+}
+
 async function main() {
   const server = await startServer();
   const browser = await puppeteer.launch({
@@ -910,6 +969,7 @@ async function main() {
     await keyboardFlow(browser);
     await keepsakeFlow(browser);
     await friendsFlow(browser);
+    await batteryFlow(browser);
   } finally {
     await browser.close();
     server.kill();

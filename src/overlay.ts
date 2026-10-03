@@ -4,6 +4,8 @@
  * "while you were away" note. Styled to sit inside the pixel tank: cream
  * panel, dark wood border, a pixel font.
  */
+import { focusReturn } from "./a11y";
+
 export interface JellyCardInfo {
   name: string;
   species: string;
@@ -79,7 +81,7 @@ const CSS = `
   background: #fffaf0; border: 2px solid #a78560; border-radius: 6px; padding: 5px 8px;
 }
 .jt-panel button { font: inherit; cursor: pointer; }
-.jt-panel button:focus-visible, .jt-name:focus-visible { outline: 2px solid #e09a28; outline-offset: 2px; }
+.jt-panel button:focus-visible, .jt-name:focus-visible { outline: 2px solid #b5541b; outline-offset: 2px; }
 .jt-close {
   flex: none; width: 32px; height: 32px; font-size: 14px !important; color: #fffaf0;
   background: #d04a46; border: 2px solid #5a1418; border-radius: 6px; box-shadow: 0 2px 0 #5a1418;
@@ -161,6 +163,8 @@ export function createOverlay(): Overlay {
   const input = $<HTMLInputElement>(".jt-name");
   const rehomeBtn = $<HTMLButtonElement>(".jt-rehome");
   const rehomeWhy = $<HTMLElement>(".jt-rehome-why");
+  const closeBtn = $<HTMLButtonElement>(".jt-close");
+  const cardFocus = focusReturn(card);
   let slot: number | null = null;
   let handlers: CardHandlers | null = null;
   let armed = false;
@@ -178,6 +182,7 @@ export function createOverlay(): Overlay {
     slot = null;
     handlers = null;
     armed = false;
+    cardFocus.closed();
     h?.closed?.();
   };
   input.addEventListener("keydown", (e) => {
@@ -186,7 +191,7 @@ export function createOverlay(): Overlay {
     e.stopPropagation(); // typing "m" in the name must not mute the sound
   });
   input.addEventListener("change", commit);
-  $<HTMLButtonElement>(".jt-close").addEventListener("click", hide);
+  closeBtn.addEventListener("click", hide);
   rehomeBtn.addEventListener("click", () => {
     if (!handlers || !last?.rehome.allowed) return;
     if (!armed) {
@@ -201,6 +206,7 @@ export function createOverlay(): Overlay {
     card.hidden = true;
     slot = null;
     armed = false;
+    cardFocus.closed();
     h.rehome();
     h.closed?.();
   });
@@ -246,7 +252,10 @@ export function createOverlay(): Overlay {
     <div class="jt-tip-foot"><span class="jt-tip-count"></span><button class="jt-btn" type="button" id="jt-tip-next">Next</button></div>`);
   tip.hidden = true;
   tip.setAttribute("role", "dialog");
+  tip.setAttribute("aria-label", "Tip");
   tip.setAttribute("aria-live", "polite");
+  const tipFocus = focusReturn(tip);
+  let endTips: (() => void) | null = null;
   document.body.append(tip);
   const tipText = tip.querySelector(".jt-tip-text") as HTMLElement;
   const tipCount = tip.querySelector(".jt-tip-count") as HTMLElement;
@@ -281,10 +290,15 @@ export function createOverlay(): Overlay {
   away.setAttribute("role", "dialog");
   away.setAttribute("aria-label", "While you were away");
   document.body.append(away);
+  const awayFocus = focusReturn(away);
+  const awayOk = away.querySelector("#jt-away-ok") as HTMLButtonElement;
 
+  // Escape closes the card, puts the away note away, or skips the rest of the tips
   window.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     if (!card.hidden) hide();
+    else if (!away.hidden) awayOk.click();
+    else if (!tip.hidden) endTips?.();
   });
 
   return {
@@ -313,12 +327,15 @@ export function createOverlay(): Overlay {
       tags.set(key, { el, timer });
     },
     openCard(s, info, on) {
+      if (card.hidden) cardFocus.opened();
       slot = s;
       handlers = on;
       armed = false;
       input.value = info.name;
       fill(info);
+      card.setAttribute("aria-label", `${info.name}'s card`);
       card.hidden = false;
+      closeBtn.focus({ preventScroll: true });
     },
     updateCard(info) {
       if (card.hidden) return;
@@ -335,11 +352,14 @@ export function createOverlay(): Overlay {
     tips(list) {
       return new Promise((resolve) => {
         let i = 0;
+        tipFocus.opened();
         const show = () => {
           const t = list[i];
           if (!t) {
             tip.hidden = true;
             tipTarget = null;
+            endTips = null;
+            tipFocus.closed();
             resolve();
             return;
           }
@@ -355,6 +375,10 @@ export function createOverlay(): Overlay {
           i++;
           show();
         };
+        endTips = () => {
+          i = list.length;
+          show();
+        };
         show();
       });
     },
@@ -363,11 +387,12 @@ export function createOverlay(): Overlay {
       return new Promise((resolve) => {
         const ul = away.querySelector("ul") as HTMLUListElement;
         ul.replaceChildren(...lines.map((l) => Object.assign(document.createElement("li"), { textContent: l })));
+        if (away.hidden) awayFocus.opened();
         away.hidden = false;
-        const ok = away.querySelector("#jt-away-ok") as HTMLButtonElement;
-        ok.focus({ preventScroll: true });
-        ok.onclick = () => {
+        awayOk.focus({ preventScroll: true });
+        awayOk.onclick = () => {
           away.hidden = true;
+          awayFocus.closed();
           resolve();
         };
       });

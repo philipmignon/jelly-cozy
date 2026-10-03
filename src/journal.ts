@@ -3,6 +3,7 @@
  * Portraits come from src/journal-art.json (written by tools/gen.py);
  * the facts live here.
  */
+import { focusReturn } from "./a11y";
 import { SPECIES_NAMES } from "./species";
 import { FOOD_NAMES, MORPH_CLASSIC, MORPH_GHOST, favouriteFood, morphSeen, type Species } from "./sim";
 
@@ -81,7 +82,7 @@ const CSS = `
 .jt-book-morphs { display: grid; gap: 4px; }
 .jt-book-morphs[hidden] { display: none; }
 .jt-book-morph { display: flex; align-items: center; gap: 8px; min-height: 24px; padding: 4px 8px; border: 2px dashed #d9bf94; border-radius: 6px; font-size: 11px; text-transform: uppercase; color: #8e5632; }
-.jt-book-morph b { font-weight: normal; color: #a78560; }
+.jt-book-morph b { font-weight: normal; color: #8e5632; }
 .jt-book-morph.found b { color: #8e5632; }
 .jt-book-morph.ghost.found { border-color: #8f86c8; color: #3c3466; background: #ece8ff; }
 .jt-book-morph img { image-rendering: pixelated; }
@@ -91,7 +92,7 @@ const CSS = `
   min-width: 44px; height: 32px; font: 14px ${FONT}; color: #2b1712; cursor: pointer;
   background: #fffaf0; border: 2px solid #693c24; border-radius: 6px; box-shadow: 0 2px 0 #693c24;
 }
-.jt-book-nav button:focus-visible, .jt-book-x:focus-visible { outline: 2px solid #e09a28; outline-offset: 2px; }
+.jt-book-nav button:focus-visible, .jt-book-x:focus-visible { outline: 2px solid #b5541b; outline-offset: 2px; }
 .jt-book-dots { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
 .jt-book-dots i { width: 8px; height: 8px; border-radius: 2px; background: #d9bf94; }
 .jt-book-dots i.seen { background: #a78560; }
@@ -191,8 +192,11 @@ export function createJournal(pages: () => JournalPage[]): Journal {
   };
   $<HTMLButtonElement>(".prev").addEventListener("click", () => turn(-1));
   $<HTMLButtonElement>(".next").addEventListener("click", () => turn(1));
+  const back = focusReturn(book);
   const close = () => {
+    if (book.hidden) return;
     book.hidden = true;
+    back.closed();
   };
   $<HTMLButtonElement>(".jt-book-x").addEventListener("click", close);
   window.addEventListener("keydown", (e) => {
@@ -205,6 +209,7 @@ export function createJournal(pages: () => JournalPage[]): Journal {
   return {
     open() {
       render();
+      if (book.hidden) back.opened();
       book.hidden = false;
       $<HTMLButtonElement>(".next").focus({ preventScroll: true });
     },

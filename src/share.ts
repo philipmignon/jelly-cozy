@@ -5,6 +5,7 @@
  * On the synced copy a live code (friends.ts) visits a friend's tank as it is
  * now, and the visit bar offers a gift.
  */
+import { focusReturn } from "./a11y";
 import { GIFT_KINDS, LIVE_PREFIX, SHELL_DOLLARS, type GiftKind, type GiveResult } from "./friends";
 
 const VISIT_KEY = "jellytank:visit";
@@ -26,13 +27,13 @@ const CSS = `
   width: 100%; box-sizing: border-box; min-height: 64px; resize: vertical; font: 11px/1.35 ui-monospace, Menlo, monospace;
   color: #2b1712; background: #fffaf0; border: 2px solid #a78560; border-radius: 6px; padding: 6px 8px; word-break: break-all;
 }
-.jt-share textarea:focus-visible { outline: 2px solid #e09a28; outline-offset: 1px; }
+.jt-share textarea:focus-visible { outline: 2px solid #b5541b; outline-offset: 1px; }
 .jt-share .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .jt-share button {
   padding: 6px 12px; font: 12px ${FONT}; text-transform: uppercase; color: #2b1712; cursor: pointer;
   background: #fffaf0; border: 2px solid #693c24; border-radius: 6px; box-shadow: 0 2px 0 #693c24;
 }
-.jt-share button:focus-visible { outline: 2px solid #e09a28; outline-offset: 2px; }
+.jt-share button:focus-visible { outline: 2px solid #b5541b; outline-offset: 2px; }
 .jt-share .x { margin-left: auto; color: #fffaf0; background: #d04a46; border-color: #5a1418; box-shadow: 0 2px 0 #5a1418; }
 .jt-share .note { color: #8e5632; font-size: 11px; min-height: 1em; }
 .jt-share hr { border: 0; border-top: 2px dashed #d9bf94; margin: 2px 0; width: 100%; }
@@ -46,7 +47,7 @@ const CSS = `
   padding: 4px 10px; font: 11px ${FONT}; text-transform: uppercase; color: #2b1712; cursor: pointer;
   background: #fffaf0; border: 2px solid #693c24; border-radius: 6px;
 }
-.jt-visit-bar button:focus-visible { outline: 2px solid #e09a28; outline-offset: 2px; }
+.jt-visit-bar button:focus-visible { outline: 2px solid #b5541b; outline-offset: 2px; }
 .jt-visit-bar button[disabled] { opacity: 0.55; cursor: default; }
 .jt-visit-bar button[hidden] { display: none; }
 .jt-visit-bar { flex-wrap: wrap; justify-content: center; max-width: calc(100vw - 32px); box-sizing: border-box; }
@@ -169,8 +170,11 @@ export function createSharePanel(exportCode: () => string, check: (code: string)
     setVisit(code);
     location.reload();
   });
+  const back = focusReturn(panel);
   const close = () => {
+    if (panel.hidden) return;
     panel.hidden = true;
+    back.closed();
   };
   $<HTMLButtonElement>(".x").addEventListener("click", close);
   panel.addEventListener("keydown", (e) => {
@@ -183,7 +187,9 @@ export function createSharePanel(exportCode: () => string, check: (code: string)
       mine.value = exportCode();
       copied.textContent = "";
       err.textContent = "";
+      if (panel.hidden) back.opened();
       panel.hidden = false;
+      $<HTMLButtonElement>(".copy").focus({ preventScroll: true });
     },
     get isOpen() {
       return !panel.hidden;
@@ -345,8 +351,11 @@ export function createBackupPanel(backup: () => string, restore: (json: string) 
     }
     restore(json);
   });
+  const back = focusReturn(panel);
   const close = () => {
+    if (panel.hidden) return;
     panel.hidden = true;
+    back.closed();
   };
   $<HTMLButtonElement>(".x").addEventListener("click", close);
   panel.addEventListener("keydown", (e) => {
@@ -368,7 +377,9 @@ export function createBackupPanel(backup: () => string, restore: (json: string) 
       $<HTMLButtonElement>(".act").textContent = m === "backup" ? "Copy code" : "Restore";
       area.readOnly = m === "backup";
       area.value = m === "backup" ? encodeSave(backup()) : "";
+      if (panel.hidden) back.opened();
       panel.hidden = false;
+      $<HTMLButtonElement>(".act").focus({ preventScroll: true }); // not the box: a phone's keyboard would pop up
     },
     get isOpen() {
       return !panel.hidden;

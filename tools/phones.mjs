@@ -49,6 +49,15 @@ for (const [name, vp] of Object.entries(devices)) {
   await p.tap(".jt-gear");
   await new Promise((r) => setTimeout(r, 300));
   await p.screenshot({ path: `shots/phone-${name}-menu.png` });
+  // the smallest HTML control showing (its box, before any invisible hit margin): WCAG 2.2 asks for 24 px
+  const small = await p.evaluate(() =>
+    [...document.querySelectorAll("button")]
+      .map((b) => ({ c: b.className || b.textContent.trim(), r: b.getBoundingClientRect() }))
+      .filter((b) => b.r.width > 0 && b.r.height > 0)
+      .map((b) => ({ c: b.c, s: Math.round(Math.min(b.r.width, b.r.height)) }))
+      .sort((a, b) => a.s - b.s)[0],
+  );
+  report.push(`  smallest button with the menu open: ${small ? `${small.c} ${small.s} px${small.s < 24 ? " (UNDER 24)" : ""}` : "none"}`);
   await p.close();
 }
 console.log(report.join("\n"));

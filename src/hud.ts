@@ -1,6 +1,6 @@
 /**
  * The settings button in the hood strip (top right of the tank) and the menu it opens:
- * jelly journal, share your tank, take a photo, saves, music, sound and seasonal decor. HTML over the canvas, placed in
+ * jelly journal, share your tank, take a photo, saves, music, sound, reduce motion and seasonal decor. HTML over the canvas, placed in
  * artboard coordinates.
  */
 import type { TankAudio } from "./audio";
@@ -40,11 +40,11 @@ const CSS = `
   background: transparent; border: 2px solid transparent; border-radius: 6px;
 }
 .jt-menu button:hover { background: #fffaf0; border-color: #d9bf94; }
-.jt-menu button:focus-visible { outline: none; background: #fffaf0; border-color: #e09a28; }
+.jt-menu button:focus-visible { outline: none; background: #fffaf0; border-color: #b5541b; }
 .jt-menu svg { width: 22px; height: 22px; flex: none; shape-rendering: crispEdges; }
 .jt-menu .label { flex: 1; }
 .jt-menu .state { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: #d9bf94; color: #693c24; }
-.jt-menu [aria-checked="true"] .state { background: #3fae5c; color: #fffaf0; }
+.jt-menu [aria-checked="true"] .state { background: #2a7f42; color: #fffaf0; }
 .jt-menu .jt-menu-status { padding: 6px 10px 2px; border-top: 2px dashed #d9bf94; font-size: 10px; color: #8e5632; text-transform: uppercase; }
 `;
 
@@ -64,6 +64,8 @@ const ICONS = {
   photo: svg(ink("0,3,12,8;3,2,4,1", "#693c24") + ink("4,4,4,6;3,5,6,4", "#f1e2c4") + ink("5,6,2,2", "#23253a") + ink("9,4,2,1", "#e09a28")),
   music: svg(ink("4,1,6,1;4,2,1,6;9,2,1,6;2,7,3,3;7,7,3,3", "#693c24")),
   sound: svg(ink("1,4,2,4;3,3,1,6;4,2,1,8;5,1,1,10", "#693c24") + ink("7,5,1,2;8,3,1,1;8,8,1,1;9,4,1,4;10,2,1,1;10,9,1,1;11,3,1,6", "#e09a28")),
+  // reduce motion: a jelly hanging still, its tentacles straight
+  calm: svg(ink("4,1,4,1;2,2,8,1;1,3,10,2;1,5,10,1", "#693c24") + ink("3,3,2,1", "#d9bf94") + ink("3,7,1,4;6,7,1,4;9,7,1,4", "#e09a28")),
   // seasonal decor: a little carved pumpkin
   season: svg(
     ink("5,0,2,3", "#5e5c22") + ink("2,3,8,1;1,4,10,6;2,10,8,1", "#e2701a") + ink("1,5,1,4;4,4,1,6;7,4,1,6", "#b8480c")
@@ -79,6 +81,8 @@ export interface SettingsHandlers {
   backup(): void;
   restore(): void;
   photo(): void;
+  /** the "Reduce motion" setting (src/a11y.ts keeps it): omitted = no toggle in the menu */
+  reduceMotion?: { get(): boolean; set(on: boolean): void };
   /** the "Seasonal decor" setting (Halloween pumpkins, the bat...): omitted = no toggle in the menu */
   seasonDecor?: { get(): boolean; set(on: boolean): void };
 }
@@ -163,6 +167,9 @@ export function createSettings(
   const music = item("jt-menu-music", ICONS.music, "Music", true, () => audio.setMusic?.(!audio.music));
   if (typeof audio.setMusic !== "function") (music.parentElement as HTMLElement).hidden = true;
   const sound = item("jt-menu-sound", ICONS.sound, "Sound", true, () => audio.setMuted(!audio.muted));
+  const calm = on.reduceMotion;
+  const motion = item("jt-menu-motion", ICONS.calm, "Reduce motion", true, () => calm?.set(!calm.get()));
+  if (!calm) (motion.parentElement as HTMLElement).hidden = true;
   const decor = on.seasonDecor;
   const season = item("jt-menu-season", ICONS.season, "Seasonal decor", true, () => decor?.set(!decor.get()));
   if (!decor) (season.parentElement as HTMLElement).hidden = true;
@@ -177,6 +184,9 @@ export function createSettings(
     (music.querySelector(".state") as HTMLElement).textContent = audio.music ? "On" : "Off";
     sound.setAttribute("aria-checked", String(!audio.muted));
     (sound.querySelector(".state") as HTMLElement).textContent = audio.muted ? "Off" : "On";
+    const calmOn = calm?.get() ?? false;
+    motion.setAttribute("aria-checked", String(calmOn));
+    (motion.querySelector(".state") as HTMLElement).textContent = calmOn ? "On" : "Off";
     const decorOn = decor?.get() ?? false;
     season.setAttribute("aria-checked", String(decorOn));
     (season.querySelector(".state") as HTMLElement).textContent = decorOn ? "On" : "Off";
@@ -207,6 +217,15 @@ export function createSettings(
     if (e.key === "Escape" && !menu.hidden) {
       close();
       gear.focus({ preventScroll: true });
+    }
+    // a menu's arrow keys: up and down the items, Home and End to the ends
+    if (!menu.hidden && ["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) {
+      const items = [...menu.querySelectorAll<HTMLButtonElement>("li:not([hidden]) button")];
+      const i = items.indexOf(document.activeElement as HTMLButtonElement);
+      const n = items.length;
+      const to = e.key === "Home" ? 0 : e.key === "End" ? n - 1 : (i + (e.key === "ArrowDown" ? 1 : -1) + n) % n;
+      items[e.key.startsWith("Arrow") && i < 0 ? 0 : to]?.focus({ preventScroll: true });
+      e.preventDefault();
     }
     if ((e.key === "m" || e.key === "M") && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
       audio.setMuted(!audio.muted);

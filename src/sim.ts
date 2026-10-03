@@ -470,6 +470,14 @@ export interface State {
   focus: { slot: number; on: boolean; e: number };
   /** pan hint chevrons, eased 0..1 */
   hints: { l: number; r: number };
+  /**
+   * Reduce motion (the player's setting, or the OS's prefers-reduced-motion; the host sets it with
+   * setReducedMotion, src/a11y.ts stores it). Not saved. Anything new that moves for show should read it:
+   * when on, the camera jumps instead of flinging or easing, the close-up and the shop snap, a petted jelly
+   * doesn't shimmy, bells pulse gentler (no peak squeeze or overshoot frame) and the comb shimmers slower.
+   * HTML overlays read the same setting from :root[data-jt-reduce-motion].
+   */
+  reducedMotion: boolean;
   /** screen x of the finger dragging a decoration (for edge scrolling), null when not dragging */
   dragX: number | null;
   /** v7: the journal, index = species */
@@ -1150,6 +1158,7 @@ export function createState(save: Save, rand: () => number = Math.random, opts: 
     cam: newCam(clamp(finite(save.cam, 0), camLo(worldW), 0)),
     focus: { slot: -1, on: false, e: 0 },
     hints: { l: 0, r: 0 },
+    reducedMotion: false,
     dragX: null,
     journal: journalOf(save.journal, save.slots, clock),
     visit: null,
@@ -1300,7 +1309,7 @@ export function flingCam(s: State, vx: number): void {
   if (shopBlocks(s) || !Number.isFinite(vx)) return;
   s.cam.ease = null;
   const v = clamp(vx, -FLING_MAX, FLING_MAX);
-  s.cam.v = Math.abs(v) < FLING_REST ? 0 : v;
+  s.cam.v = Math.abs(v) < FLING_REST || s.reducedMotion ? 0 : v;
 }
 
 /** Ease the view to centre on world x (as near as the tank's ends allow). */
@@ -1308,7 +1317,23 @@ export function camTo(s: State, x: number): void {
   if (!Number.isFinite(x)) return;
   const to = clamp(VIEW_W / 2 - x, camLo(worldW(s)), 0);
   s.cam.v = 0;
+  if (s.reducedMotion) {
+    s.cam.ease = null;
+    s.cam.x = to;
+    return;
+  }
   s.cam.ease = { from: s.cam.x, to, t0: s.t, dur: easeTime(to - s.cam.x) };
+}
+
+/** Reduce motion on or off (State.reducedMotion). Turning it on lands any camera move where it was going. */
+export function setReducedMotion(s: State, on: boolean): void {
+  s.reducedMotion = !!on;
+  if (!s.reducedMotion) return;
+  s.cam.v = 0;
+  if (s.cam.ease) {
+    s.cam.x = clamp(s.cam.ease.to, camMin(s), 0);
+    s.cam.ease = null;
+  }
 }
 
 /** Is the camera still moving (fling or ease)? */
@@ -1591,7 +1616,7 @@ export function rehome(s: State, slot: number): { name: string; dollars: number 
 }
 
 export const shopY = (s: State) => {
-  const p = clamp((s.t - s.shop.t0) / SHOP_SLIDE);
+  const p = s.reducedMotion ? 1 : clamp((s.t - s.shop.t0) / SHOP_SLIDE);
   const e = 1 - (1 - p) ** 3;
   return s.shop.from + (s.shop.to - s.shop.from) * e;
 };
@@ -1948,6 +1973,31 @@ function hit(j: Jelly, x: number, y: number): boolean {
   return Math.abs(x - j.x) <= halfW && y >= j.y - top && y <= j.y + below;
 }
 
+/** Where a jelly's body is (world), for the host to point at it (keyboard focus, its pets); null if the slot is empty. */
+export function jellyCentre(s: State, slot: number): { x: number; y: number } | null {
+  const j = s.slots[slot];
+  return j ? bodyCentre(j) : null;
+}
+
+/**
+ * Pet the jelly in `slot` (a tap on its body, or the keyboard's Enter): it wiggles, likes you a little more,
+ * pays EARN.pet if it hasn't lately, and counts toward a "pet" request. False if the slot is empty or the
+ * shop is up.
+ */
+export function petJelly(s: State, slot: number): boolean {
+  const pj = s.slots[slot];
+  if (!pj || shopBlocks(s)) return false;
+  pj.affection = clamp(pj.affection + 0.08);
+  pj.wiggleT0 = s.t;
+  if (pj.mode === "swim") pj.vy -= 25;
+  if (s.t >= pj.petReadyAt) {
+    pj.petReadyAt = s.t + PET_COOLDOWN;
+    earn(s, EARN.pet, s.queued, slot);
+  }
+  requestDeed(s, { kind: "pet" }, s.queued);
+  return true;
+}
+
 /**
  * A tap in the water, world coordinates (x from screenToWorld). On a visitor: the first tap of a visit
  * pays 5-10 with a sparkle, and it leaves a little early, happily ("visitor" either way).
@@ -1973,19 +2023,7 @@ export function tap(s: State, x: number, y: number): "visitor" | "pearl" | "pet"
   }
   if (x < K.glassL || x > rightGlass(s) || y < K.waterTop || y > K.waterBot) return null;
   s.ripple = { x, y, t0: s.t };
-  const pet = jellyAt(s, x, y);
-  const pj = s.slots[pet];
-  if (pj) {
-    pj.affection = clamp(pj.affection + 0.08);
-    pj.wiggleT0 = s.t;
-    if (pj.mode === "swim") pj.vy -= 25;
-    if (s.t >= pj.petReadyAt) {
-      pj.petReadyAt = s.t + PET_COOLDOWN;
-      earn(s, EARN.pet, s.queued, pet);
-    }
-    requestDeed(s, { kind: "pet" }, s.queued);
-    return "pet";
-  }
+  if (petJelly(s, jellyAt(s, x, y))) return "pet";
   let call: Jelly | null = null;
   let callD = Infinity;
   for (const j of jellies(s)) {
@@ -2241,7 +2279,7 @@ function swim(s: State, slot: number, j: Jelly, dt: number, events: SimEvent[]):
   const calm = calmOf(s.night);
   if (sw.glide) {
     // comb: cilia, not a bell: no thrust, just a smooth glide; the rows shimmer all the time
-    j.pulse = (j.pulse + dt / sw.shimmer) % 1;
+    j.pulse = (j.pulse + (dt / sw.shimmer) * (s.reducedMotion ? 0.35 : 1)) % 1;
     const speed = busy ? sw.speedBusy : sw.speedIdle * quietScale(QUIET.glide, calm);
     const want = dist > 6 ? Math.min(speed, dist * 0.6) / dist : 0;
     const a = 1 - Math.exp(-sw.ease * dt);
@@ -2462,7 +2500,7 @@ export function step(s: State, dt: number): SimEvent[] {
 
   stepView(s, dt, events);
   if (s.focus.on && !s.slots[s.focus.slot]) s.focus.on = false;
-  s.focus.e = clamp(s.focus.e + (s.focus.on ? dt : -dt) / FOCUS_TIME);
+  s.focus.e = s.reducedMotion ? (s.focus.on ? 1 : 0) : clamp(s.focus.e + (s.focus.on ? dt : -dt) / FOCUS_TIME);
 
   // the glass gets dirty: spots grow, and a new one appears every 90-150 s while there's room
   stepDirt(s, dt);
@@ -2647,6 +2685,14 @@ function stepView(s: State, dt: number, events: SimEvent[]): void {
       moveDecor(s, s.lifted, screenToWorld(s, s.dragX));
     }
   }
+  if (s.reducedMotion) {
+    // no glide, no ease: a move lands where it was going (an upgrade's, once its wall starts out)
+    s.cam.v = 0;
+    if (s.cam.ease && s.t >= s.cam.ease.t0) {
+      s.cam.x = s.cam.ease.to;
+      s.cam.ease = null;
+    }
+  }
   stepCam(s.cam, s.t, dt, lo);
   const k = dt / HINT_TIME;
   s.hints.l += clamp(hintTarget(s, -1) - s.hints.l, -k, k);
@@ -2748,6 +2794,9 @@ function babies(s: State, dt: number, events: SimEvent[]): void {
 export type View = Record<string, number>;
 
 /** Body frame for a pulse phase: the eased 8-frame curve where the stage draws 8, else the v2 four. */
+/** Reduce motion's 8-frame beat: swell -> rest, peak -> the deeper squeeze before it, overshoot -> settle. */
+const GENTLE_FRAME: readonly number[] = [0, 0, 2, 3, 3, 5, 7, 7];
+
 function bellFrame(j: Jelly, pulse: number, squeeze = 0.3): number {
   return bodyFramesOf(j.k, j.g) === 8 ? pulseFrame(pulse, squeeze) : pulseFrame4(pulse, squeeze);
 }
@@ -2781,18 +2830,20 @@ function writeSlot(v: View, s: State, slot: number, j: Jelly | null, night: numb
   // happy wiggle: three quick squeezes and a one-pixel shimmy, no thrust
   const wp = (s.t - j.wiggleT0) / WIGGLE_TIME;
   const wiggling = wp >= 0 && wp < 1;
-  const shimmy = wiggling ? (Math.floor(wp * 8) % 2 ? P : -P) : 0;
+  const shimmy = wiggling && !s.reducedMotion ? (Math.floor(wp * 8) % 2 ? P : -P) : 0;
   v[p + "on"] = 1;
   v[p + "x"] = snap(j.x) + shimmy;
   v[p + "y"] = snap(j.y);
   let bf: number;
-  if (wiggling) bf = bellFrame(j, (wp * 3) % 1);
+  if (wiggling && !s.reducedMotion) bf = bellFrame(j, (wp * 3) % 1);
   else if (j.mode === "fixed") bf = Math.floor(j.pulse * 4) % 4;
   else if (j.mode !== "swim") bf = bellFrame(j, j.pulse);
   else {
     const sw = swimOf(j.k, j.g);
     bf = sw.glide ? Math.floor(j.pulse * 4) % 4 : bellFrame(j, j.pulse, sw.squeeze);
   }
+  // reduce motion: a gentler beat, without the swell, the peak squeeze or the overshoot
+  if (s.reducedMotion && bodyFramesOf(j.k, j.g) === 8) bf = GENTLE_FRAME[bf] ?? bf;
   // juveniles and adults ripple through 8 sway frames off their own clock (wiggling too, so it never jumps)
   const nt = tentFramesOf(j.g);
   const tf = wiggling && nt === 4 ? Math.floor(wp * 8) % 4 : tentFrame(j.tent, nt);

@@ -332,12 +332,13 @@ export interface LampOverride {
 
 /**
  * The save version written by toSave (v6 changed no save fields; v8 added the dirt spots; v9 foods and themes; v10 morph
- * ids instead of a boolean, the morphSeen bitmask and today's requests). The save key stays jellytank:v5.
+ * ids instead of a boolean, the morphSeen bitmask and today's requests; v11 jelly traits, the keepsakes' `keep` and
+ * decorations 5..10, the keepsakes and the bubbler). The save key stays jellytank:v5.
  */
-export const SAVE_VERSION = 10;
+export const SAVE_VERSION = 11;
 
 export interface Save {
-  v: 10;
+  v: 11;
   /** always length 7 (MAX_SLOTS); null = empty slot */
   slots: (SaveJelly | null)[];
   dollars: number;
@@ -349,7 +350,7 @@ export interface Save {
   night: boolean;
   /** an unexpired lamp override, or null to follow the clock */
   lamp: LampOverride | null;
-  /** decor 0..4 bought */
+  /** decorations owned, DECOR_N long (v11: 0..4 bought, 5..9 keepsakes, 10 the bubbler; older saves are padded) */
   owned: boolean[];
   /** snail, shrimp, crab bought */
   helpers: boolean[];
@@ -756,7 +757,7 @@ export function defaultSave(now = Date.now()): Save {
   const slots = withSlots([freshJelly(MOON, POLYP, pickName([], seedOf(now, 0)), now)]);
   const spots = spotsForMurk(0.1, tierRight(0), rng(now));
   return {
-    v: 10,
+    v: 11,
     slots,
     dollars: 0,
     murk: murkOf(spots),
@@ -782,7 +783,7 @@ export function migrateV1(v1: SaveV1, now = v1.lastSeen): Save {
   const j: SaveJelly = { ...freshJelly(MOON, ADULT, pickName([], seedOf(now, 0)), now), fullness: clamp(v1.fullness), affection: clamp(v1.affection) };
   const spots = spotsForMurk(clamp(finite(v1.murk, 0.1)), tierRight(0), rng(v1.lastSeen));
   return {
-    v: 10,
+    v: 11,
     slots: withSlots([j]),
     dollars: 10,
     murk: murkOf(spots),
@@ -865,9 +866,9 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
   const foods = ownedList(raw.foods, FOOD_KINDS);
   const themes = ownedList(raw.themes, THEME_N);
   const spots =
-    raw.v === 8 || raw.v === 9 || raw.v === 10 ? spotsFromSave(raw.spots, tierRight(tier)) : spotsForMurk(clamp(finite(raw.murk, 0.1)), tierRight(tier), rng(finite(raw.lastSeen, now)));
+    raw.v === 8 || raw.v === 9 || raw.v === 10 || raw.v === 11 ? spotsFromSave(raw.spots, tierRight(tier)) : spotsForMurk(clamp(finite(raw.murk, 0.1)), tierRight(tier), rng(finite(raw.lastSeen, now)));
   return {
-    v: 10,
+    v: 11,
     slots,
     dollars: clamp(Math.floor(finite(raw.dollars, 0)), 0, MAX_DOLLARS),
     murk: murkOf(spots),
@@ -881,7 +882,7 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
     lastSeen: finite(raw.lastSeen, now),
     tier,
     cam: snap(clamp(finite(raw.cam, 0), camLo(worldWOf(tier)), 0)),
-    journal: raw.v === 7 || raw.v === 8 || raw.v === 9 || raw.v === 10 ? journalOf(raw.journal, slots, now) : journalFrom(slots, now),
+    journal: raw.v === 7 || raw.v === 8 || raw.v === 9 || raw.v === 10 || raw.v === 11 ? journalOf(raw.journal, slots, now) : journalFrom(slots, now),
     foods,
     themes,
     theme: themeOf(raw.theme, themes),
@@ -956,12 +957,12 @@ export function applyAway(save: Save, now: number, growthMultiplier = 1): Save {
   };
 }
 
-/** Parse whatever localStorage held into a v10 save (no time away yet); `fresh` = it was a brand-new game. */
+/** Parse whatever localStorage held into a v11 save (no time away yet); `fresh` = it was a brand-new game. */
 function parseSave(raw: string | null, now: number): { save: Save; fresh: boolean } {
   try {
     const d: unknown = raw ? JSON.parse(raw) : null;
     const o = d && typeof d === "object" ? (d as Record<string, unknown>) : null;
-    if (o?.v === 10 || o?.v === 9 || o?.v === 8 || o?.v === 7 || o?.v === 5 || o?.v === 4 || o?.v === 3 || o?.v === 2) return { save: sanitize(o, now), fresh: false };
+    if (o?.v === 11 || o?.v === 10 || o?.v === 9 || o?.v === 8 || o?.v === 7 || o?.v === 5 || o?.v === 4 || o?.v === 3 || o?.v === 2) return { save: sanitize(o, now), fresh: false };
     if (o?.v === 1)
       return {
         save: migrateV1(
@@ -983,7 +984,7 @@ function parseSave(raw: string | null, now: number): { save: Save; fresh: boolea
   return { save: defaultSave(now), fresh: true };
 }
 
-/** Parse whatever localStorage held (v1..v9, garbage or nothing), migrate to v9, and apply time away. */
+/** Parse whatever localStorage held (v1..v11, no v6; garbage or nothing), migrate to v11, and apply time away. */
 export function loadSave(raw: string | null, now: number, opts: SimOptions = {}): Save {
   return loadGame(raw, now, opts).save;
 }
@@ -1072,7 +1073,7 @@ export function demoSave(now = Date.now()): Save {
     { ...freshJelly(MOON, POLYP, "Bloop", now), gp: GROWTH[EPHYRA] - 1, fullness: 0.25, affection: 0.6, anchor: 0 },
   ]);
   return {
-    v: 10,
+    v: 11,
     slots,
     dollars: 200,
     murk: 0,
@@ -1276,7 +1277,7 @@ export function createState(save: Save, rand: () => number = Math.random, opts: 
 
 export function toSave(s: State, now: number): Save {
   return {
-    v: 10,
+    v: 11,
     slots: s.slots.map((j) =>
       j
         ? { k: j.k, g: j.g, gp: j.gp, care: j.care, fullness: j.fullness, affection: j.affection, anchor: j.anchor, spot: j.spot, name: j.name, born: j.born, content: j.content, morph: j.morph, trait: j.trait }
@@ -1895,7 +1896,11 @@ export function buy(s: State, i: number): BuyResult {
   if (item.kind === "polyp") {
     addPolyp(s, item.k);
   } else {
-    if (item.kind === "decor") s.owned[item.d] = true;
+    if (item.kind === "decor") {
+      // v14: the bubbler is wide and the small tank is crowded: it lands on the open sand with the most room
+      if (item.d === BUBBLER) s.decorX[BUBBLER] = clearSpotFor(s, BUBBLER);
+      s.owned[item.d] = true;
+    }
     else if (item.kind === "food") s.foods[item.f] = true;
     else {
       s.helpers[item.h] = true;
@@ -2379,7 +2384,7 @@ export function importTank(code: string, now = Date.now()): Save | null {
   const theme = clamp(Math.round(t.theme ?? 0), 0, THEME_N - 1);
   themes[theme] = true;
   return {
-    v: 10,
+    v: 11,
     slots,
     dollars: 0,
     murk: 0,
@@ -2470,8 +2475,10 @@ function swim(s: State, slot: number, j: Jelly, dt: number, events: SimEvent[]):
   const { bounds, hard } = g;
   const sw = swimOf(j.k, j.g);
 
-  // v13: hiding, saying hello and riding the bubbler are errands too
-  const busy = j.targetKind !== null && j.targetKind !== "wander";
+  // v13: hiding, saying hello and riding the bubbler are errands too. With reduce motion a frightened shy jelly
+  // doesn't dart: it drifts to its hiding place at its idle pace and sinks only a little faster.
+  const gentleHide = j.targetKind === "hide" && s.reducedMotion;
+  const busy = j.targetKind !== null && j.targetKind !== "wander" && !gentleHide;
   const target = j.target ?? { x: j.x, y: j.y };
   const tx = target.x - j.x;
   const ty = target.y - j.y;
@@ -2514,7 +2521,7 @@ function swim(s: State, slot: number, j: Jelly, dt: number, events: SimEvent[]):
       if (sw.twitch) j.vx += (s.rand() - 0.5) * 2 * sw.twitch * quietScale(QUIET.twitch, calm);
     }
     // sink between pulses, water drag; v13: a frightened shy jelly folds up and drops faster toward its hiding place
-    j.vy += (j.targetKind === "hide" && ty > 20 ? 25 + SHY_SINK : 25) * dt;
+    j.vy += (j.targetKind === "hide" && ty > 20 ? 25 + (gentleHide ? SHY_SINK / 4 : SHY_SINK) : 25) * dt;
     const drag = Math.exp(-1.6 * dt);
     j.vx *= drag;
     j.vy *= drag;
@@ -2638,6 +2645,63 @@ function groupPoint(s: State, me: Jelly): { x: number; y: number } | null {
     n++;
   }
   return n ? { x: x / n, y: y / n } : null;
+}
+
+/** v14: a gap this wide (artboard px) either side is room enough; past it, nearer the default spot wins. */
+const ROOM_ENOUGH = 12;
+/** something on the sand: base centre, width, from which tier; `cost` scales an overlap with it (the chest is the
+ *  worst thing to land on, the season's little pumpkins the least) */
+type SandRun = { x: number; w: number; tier?: number; cost?: number };
+
+/**
+ * v14: where decoration n goes when it arrives (the bubbler, bought): its default spot if nothing's there, else the
+ * spot in this tank's width with the most room from the owned decorations, the chest and the season's decor on the
+ * sand (contract `chest`, seasons.*.sand), the nearest to the default among those with room enough. Where nothing
+ * has room (a small tank fills up), an overlap costs more the bigger the thing: the chest most, pumpkins and the
+ * rocks in front of the sand outside OPEN_SANDS least.
+ */
+export function clearSpotFor(s: State, n: number): number {
+  const d = DECOR[n]!;
+  const taken: SandRun[] = s.owned.flatMap((o, m) => (o && m !== n ? [{ x: s.decorX[m] ?? DECOR[m]!.x, w: DECOR[m]!.w }] : []));
+  const k = K as unknown as { chest?: SandRun; seasons?: Record<string, { sand?: SandRun[] }> };
+  if (k.chest) taken.push({ ...k.chest, cost: 4 });
+  if (s.event) for (const r of k.seasons?.[s.event]?.sand ?? []) if ((r.tier ?? 0) <= s.tier) taken.push({ ...r, cost: 0.5 });
+  // ...and the sand the rocks and kelp stand in front of (between the stretches of open sand): half hidden is a pity
+  let edge = K.glassL;
+  for (const o of OPEN_SANDS.filter((o) => o.tier <= s.tier).sort((a, b) => a.x0 - b.x0)) {
+    if (o.x0 > edge) taken.push({ x: (edge + o.x0) / 2, w: o.x0 - edge, cost: 0.5 });
+    edge = Math.max(edge, o.x1);
+  }
+  const right = rightGlass(s);
+  if (right > edge) taken.push({ x: (edge + right) / 2, w: right - edge, cost: 0.5 });
+  const room = (x: number) =>
+    Math.min(
+      ROOM_ENOUGH,
+      ...taken.map((t) => {
+        const gap = Math.max(t.x - t.w / 2 - (x + d.w / 2), x - d.w / 2 - (t.x + t.w / 2));
+        return gap < 0 ? gap * (t.cost ?? 1) : gap;
+      }),
+    );
+  let lo = decorClampX(n, -1e9, s.tier);
+  let hi = decorClampX(n, 1e9, s.tier);
+  if (n === BUBBLER) {
+    // ...where every kind of jelly can swim into its column (the big ones keep further from the glass)
+    for (let k = 0; k < SPECIES_N; k++) {
+      const b = geomIn(s, k as Species, ADULT).bounds;
+      lo = Math.max(lo, Math.ceil((b.x0 - COLUMN_HALF / 2) / P) * P);
+      hi = Math.min(hi, Math.floor((b.x1 + COLUMN_HALF / 2) / P) * P);
+    }
+  }
+  let best = clamp(decorClampX(n, d.x, s.tier), lo, hi);
+  let bestRoom = room(best);
+  for (let x = lo; x <= hi; x += P) {
+    const r = room(x);
+    if (r > bestRoom || (r === bestRoom && Math.abs(x - d.x) < Math.abs(best - d.x))) {
+      best = x;
+      bestRoom = r;
+    }
+  }
+  return best;
 }
 
 /**

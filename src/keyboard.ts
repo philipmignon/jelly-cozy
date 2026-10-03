@@ -27,13 +27,15 @@ import {
   type SayEvent,
   type Target,
 } from "./a11y";
-import { COMB, JUVENILE, TAB_ITEMS } from "./species";
+import { COMB, JUVENILE, TAB_ITEMS, keepsakeOf } from "./species";
+import { MILESTONES } from "./keepsakes";
 import { SCRUB_STEP_MAX } from "./dirt";
 import {
   K,
   SHOP_ITEMS,
-  SHOP_SCROLL,
+  SHOP_SCROLLS,
   THEME_NAMES,
+  TRAIT_PHRASES,
   camTo,
   geomOf,
   hasTool,
@@ -263,8 +265,9 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
   const cardRect = (i: number): Rect | null => {
     const c = CARDS[i];
     if (!c) return null;
-    const scroll = c.tab === 0 ? state.shopScroll : 0;
-    if (c.tab === 0 && (c.y - scroll < SHOP_SCROLL.viewTop - 1 || c.y + c.h - scroll > SHOP_SCROLL.viewBottom + 1)) return null;
+    const w = SHOP_SCROLLS[c.tab];
+    const scroll = w && c.tab === state.tab ? state.shopScroll : 0;
+    if (w && (c.y - scroll < w.viewTop - 1 || c.y + c.h - scroll > w.viewBottom + 1)) return null;
     // the list's window slides with the shop
     const dy = shopY(state) - scroll;
     return { x0: c.x, y0: c.y + dy, x1: c.x + c.w, y1: c.y + c.h + dy };
@@ -274,7 +277,8 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
 
   const jellyWords = (slot: number) => {
     const i = jellyInfo(state, slot);
-    return i ? describeJelly(i as DescribeInfo) : "";
+    // v13: its personality, as the card says it ("shy — hides by the rocks")
+    return i ? describeJelly({ ...i, trait: TRAIT_PHRASES[i.trait] } as DescribeInfo) : "";
   };
   const describe = (t: Target): string => {
     if (t.kind === "jelly") return jellyWords(t.slot);
@@ -320,6 +324,10 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
         return "That needs the medium tank first.";
       case "needsLarge":
         return "That needs the large tank first.";
+      case "keepsake": {
+        const m = MILESTONES[keepsakeOf(it)];
+        return m ? `${name} is a keepsake, not for sale. To earn it: ${m.title.toLowerCase()}.` : `${name} is a keepsake.`;
+      }
     }
     return "";
   };
@@ -414,10 +422,11 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
       withTab = true;
     }
     shopSel = i;
-    if (c.tab === 0) {
-      // scroll the JELLIES list so the card is inside its window
-      const want = Math.min(Math.max(state.shopScroll, c.y + c.h - SHOP_SCROLL.viewBottom), c.y - SHOP_SCROLL.viewTop);
-      const to = Math.min(Math.max(want, 0), SHOP_SCROLL.max);
+    const w = SHOP_SCROLLS[c.tab];
+    if (w) {
+      // scroll the tab's list (JELLIES; v13 DECOR and TANK too) so the card is inside its window
+      const want = Math.min(Math.max(state.shopScroll, c.y + c.h - w.viewBottom), c.y - w.viewTop);
+      const to = Math.min(Math.max(want, 0), w.max);
       scrollShop(state, state.shopScroll - to);
     }
     tell(cardWords(i, withTab));

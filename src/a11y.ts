@@ -5,6 +5,7 @@
  * HTML panels use focusReturn() to hand focus back when they close.
  */
 import { SPECIES_NAMES } from "./species";
+import { MILESTONES } from "./keepsakes";
 
 // ---------------------------------------------------------------- keys
 
@@ -216,6 +217,18 @@ export interface SayEvent {
   kind?: string;
   fav?: boolean;
   theme?: number;
+  /** v13 "keepsake": the milestone (index into MILESTONES) */
+  keepsake?: number;
+  /** v13 "rode": the bubbler was on screen */
+  seen?: boolean;
+}
+
+/** v13: what a keepsake unlock says: the last sentence of its note ("A little lighthouse washed up for you."). */
+export function keepsakeWords(m: number): string | null {
+  const note = MILESTONES[m]?.note;
+  if (!note) return null;
+  const parts = note.split(/(?<=\.)\s+/);
+  return parts[parts.length - 1] ?? note;
 }
 
 /**
@@ -257,6 +270,13 @@ export function eventWords(
       return { text: `${themeName(e.theme ?? 0)} theme on.`, low: false };
     case "dug":
       return { text: `The crab dug up treasure: ${plus(e.amount)}.`, low: true };
+    case "keepsake": {
+      const text = e.keepsake !== undefined ? keepsakeWords(e.keepsake) : null;
+      return text ? { text, low: false } : null;
+    }
+    case "rode":
+      // only a ride you could see (the bubbler on screen), and now and then: rides are frequent
+      return j && e.seen ? { text: `${j.name} rode the bubbler.`, low: true } : null;
   }
   return null;
 }

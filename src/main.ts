@@ -13,7 +13,7 @@ import { SHELL_DOLLARS, connectFriends, giftLines, liveId, type Friends, type Gi
 import { captionDate, capture, downloadsCapability, flash, photoFilename, savePng, toPng } from "./photo";
 import { clearVisit, createBackupPanel, createSharePanel, noteAfterReload, pendingVisit, showNote, showVisitBar, takeNote } from "./share";
 import { createOverlay, type JellyCardInfo } from "./overlay";
-import { registerOffline } from "./offline";
+import { registerOffline, updateChip } from "./offline";
 import { activeSeason, readSeasonDecor, seasonalMorph, writeSeasonDecor } from "./season";
 import { createRequestNote, type RequestNote } from "./requestnote";
 import { SPECIES_NAMES, TAB_N, keepsakeOf } from "./species";
@@ -750,7 +750,9 @@ async function main() {
     state,
     canvas,
     client,
-    busy: () => overlay.busy || overlay.cardSlot !== null || book.isOpen || sharePanel.isOpen || backupPanel.isOpen || !!reqNote?.isOpen || settingsUi.isOpen,
+    // v13: a keepsake note, and the "updated" chip while focus is on it
+    busy: () =>
+      overlay.busy || overlay.cardSlot !== null || book.isOpen || sharePanel.isOpen || backupPanel.isOpen || !!reqNote?.isOpen || settingsUi.isOpen || keepNote.isOpen || !!updateChip()?.contains(document.activeElement),
     audio,
     press: (name) => press[name](),
     tapWorld,

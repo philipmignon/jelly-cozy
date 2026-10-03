@@ -1,11 +1,11 @@
 /**
- * v13: jelly personalities (shy, curious, sleepy, social) and the bubbler (decoration 5, shop item 24) with its current.
+ * v13: jelly personalities (shy, curious, sleepy, social) and the bubbler (decoration 10, shop item 24) with its current.
  */
 import { describe, expect, it } from "vitest";
-import { BUBBLER, DECOR_N, SHOP_ITEMS, TAB_ITEMS } from "./species";
+import { BUBBLER, DECOR_N, KEEP_DECOR0, SHOP_ITEMS, TAB_ITEMS } from "./species";
 import { CURIOUS, RIDE_CHANCE, SHY, SHY_FOOD_DELAY, SHY_TRUST, SLEEPY, SOCIAL, TRAIT_INHERIT, TRAIT_N, TRAIT_PHRASES, drowsy, rollTrait, traitFromName, traitsIn } from "./traits";
 import { COLUMN_HALF, CURRENT_HALF, FOOD_LIFT_TIME, currentAt, foodLift } from "./currents";
-import { decodeTank } from "./tankcode";
+import { CODE_VERSION_V5, decodeTank, encodeTank } from "./tankcode";
 import { planRequests, requestText, rewardOf, type DailyRequests } from "./requests";
 import {
   DECOR,
@@ -21,11 +21,15 @@ import {
   jellyInfo,
   journal,
   journalFrom,
+  geomOf,
   liftDecor,
+  loadGame,
+  openShop,
   loadSave,
   moveDecor,
   requests,
   setCursor,
+  setReducedMotion,
   setTool,
   sprinkle,
   step,
@@ -60,7 +64,7 @@ const jelly = (k: Species, g: Stage, extra: Partial<SaveJelly> = {}): SaveJelly 
 });
 const owned = (...ds: number[]) => Array.from({ length: DECOR_N }, (_, d) => ds.includes(d));
 const tank = (slots: (SaveJelly | null)[], extra: Partial<Save> = {}): Save => ({
-  v: 10, foods: [true, false, false], themes: [true, false, false, false], theme: 0,
+  v: 11, foods: [true, false, false], themes: [true, false, false, false], theme: 0,
   slots: Array.from({ length: 7 }, (_, i) => slots[i] ?? null),
   dollars: 0, murk: 0, spots: [], night: false, lamp: null,
   owned: owned(), helpers: [false, false, false], decorX: DECOR.map((d) => d.x),
@@ -191,6 +195,22 @@ describe("shy", () => {
     expect(tap(s, 380, 470)).toBe("call");
     expect(s.slots[0]!.targetKind).toBe("hide");
     expect(s.slots[1]!.targetKind).toBe("tap");
+  });
+
+  it("with reduce motion it still hides, but drifts there gently instead of darting", () => {
+    const speed = (reduce: boolean) => {
+      const { s, me } = one(SHY, 360, 500, { owned: owned(1) });
+      setReducedMotion(s, reduce);
+      tap(s, 500, 420);
+      expect(me.targetKind).toBe("hide");
+      let top = 0;
+      for (let i = 0; i < 90; i++) {
+        step(s, 1 / 60);
+        top = Math.max(top, Math.hypot(me.vx, me.vy));
+      }
+      return top;
+    };
+    expect(speed(true)).toBeLessThan(speed(false) * 0.8);
   });
 
   it("a held item swept fast past it startles it; moved slowly, it doesn't", () => {
@@ -328,6 +348,31 @@ describe("the bubbler", () => {
     expect(toSave(s, NOON).owned[BUBBLER]).toBe(true);
   });
 
+  it("lands on open sand when bought: its default spot when that's clear, else the roomiest spot every jelly can reach", () => {
+    const fresh = createState(tank([jelly(0, 3)], { dollars: 100 }), seeded());
+    openShop(fresh);
+    expect(buy(fresh, 24)).toBe("bought");
+    expect(fresh.decorX[BUBBLER]).toBe(DECOR[BUBBLER]!.x);
+    // the ship's wheel (a keepsake) where it would go, and Halloween's pumpkins and cauldron out: the gap between
+    // them is a little narrow, so it shares the squeeze rather than landing on any one thing
+    const busy = createState(tank([jelly(0, 3)], { dollars: 100, owned: owned(8) }), seeded());
+    busy.event = "halloween";
+    openShop(busy);
+    expect(buy(busy, 24)).toBe("bought");
+    const x = busy.decorX[BUBBLER]!;
+    const half = DECOR[BUBBLER]!.w / 2;
+    const apart = (cx: number, w: number) => x + half <= cx - w / 2 || x - half >= cx + w / 2;
+    expect(x).not.toBe(DECOR[BUBBLER]!.x);
+    expect(apart(DECOR[8]!.x, DECOR[8]!.w)).toBe(true);
+    const chest = (K as unknown as { chest: { x: number; w: number } }).chest;
+    expect(apart(chest.x, chest.w)).toBe(true);
+    for (let k = 0; k < 9; k++) {
+      const b = geomOf(k as Species, 3).bounds;
+      expect(x).toBeGreaterThanOrEqual(b.x0 - COLUMN_HALF);
+      expect(x).toBeLessThanOrEqual(b.x1 + COLUMN_HALF);
+    }
+  });
+
   it("can be picked up and moved along the sand like the others; the column follows", () => {
     const { s } = bubbled();
     const d = DECOR[BUBBLER]!;
@@ -456,5 +501,79 @@ describe("share codes (v13)", () => {
     // the bubbler alone is enough for version 5
     const only = createState(tank([jelly(0, 3, { name: "Taffy", trait: traitFromName("Taffy", 0) })], { owned: owned(BUBBLER) }), seeded());
     expect(version(exportTank(only))).toBe(5);
+  });
+
+  it("one version 5 for both: every keepsake, the bubbler, the lagoon, a ghost and traits round-trip together", () => {
+    const all = Array.from({ length: DECOR_N }, (_, d) => d);
+    const save = tank(
+      [jelly(0, 3, { name: "Taffy", trait: (traitFromName("Taffy", 0) + 1) % TRAIT_N, morph: 2 }), jelly(3, 2, { name: "Pip", trait: SHY, spot: 0 }), jelly(1, 0, { name: "Bean", trait: SLEEPY, anchor: 1 })],
+      { owned: owned(...all), tier: 2, themes: [true, false, false, false, true], theme: 4 },
+    );
+    const s = createState(save, seeded());
+    const c = exportTank(s);
+    expect(version(c)).toBe(CODE_VERSION_V5);
+    const t = decodeTank(c)!;
+    expect(t.theme).toBe(4);
+    expect(t.decor.every((x) => x !== null)).toBe(true);
+    expect(t.jellies.map((j) => [j.morph, j.trait])).toEqual([[2, (traitFromName("Taffy", 0) + 1) % TRAIT_N], [0, SHY], [0, SLEEPY]]);
+    const back = createState(importTank(c, NOON)!, seeded());
+    expect(back.owned).toEqual(owned(...all));
+    expect(back.theme).toBe(4);
+    expect(exportTank(back)).toBe(c);
+  });
+
+  it("version 5 carries decorations only up to the last owned one, and only that spelling decodes", () => {
+    const s = createState(tank([jelly(0, 3, { name: "Taffy", trait: traitFromName("Taffy", 0) })], { owned: owned(0, KEEP_DECOR0) }), seeded());
+    const t = decodeTank(exportTank(s))!;
+    expect(t.decor.slice(0, KEEP_DECOR0 + 1).map((x) => x !== null)).toEqual([true, false, false, false, false, true]);
+    // a hand-made code with a longer decoration count (trailing unowned bits) isn't one encodeTank writes
+    const bits: number[] = [];
+    const put = (v: number, w: number) => { for (let i = w - 1; i >= 0; i--) bits.push((v >> i) & 1); };
+    const code = (nd: number) => {
+      bits.length = 0;
+      put(CODE_VERSION_V5, 4); put(0, 2); put(0, 3); put(0, 3); put(nd, 4);
+      for (let n = 0; n < nd; n++) put(n === KEEP_DECOR0 ? 1 : 0, 1);
+      put(DECOR[KEEP_DECOR0]!.x / 3, 9);
+      put(0, 3);
+      while (bits.length % 8) bits.push(0);
+      const bytes = Array.from({ length: bits.length / 8 }, (_, i) => parseInt(bits.slice(i * 8, i * 8 + 8).join(""), 2));
+      let a = 0, b = 0;
+      for (const x of bytes) { a = (a + x) % 255; b = (b + a) % 255; }
+      return Buffer.from([...bytes, b, a]).toString("base64url");
+    };
+    const exact = decodeTank(code(KEEP_DECOR0 + 1));
+    expect(exact?.decor[KEEP_DECOR0]).toBe(DECOR[KEEP_DECOR0]!.x);
+    expect(encodeTank(exact!)).toBe(code(KEEP_DECOR0 + 1));
+    expect(decodeTank(code(KEEP_DECOR0 + 2))).toBeNull();
+    expect(decodeTank(code(DECOR_N + 1))).toBeNull();
+  });
+});
+
+describe("v11 saves", () => {
+  it("a v10 save (no traits, no keepsakes, five decorations) loads as v11: traits from names, keep seeded, arrays padded", () => {
+    const v10 = {
+      ...tank([jelly(0, 3, { name: "Taffy" }), jelly(2, 1, { name: "Pip" })]),
+      v: 10,
+      owned: [true, false, false, true, false],
+      decorX: DECOR.slice(0, 5).map((d) => d.x),
+    } as Record<string, unknown>;
+    for (const j of v10.slots as (Record<string, unknown> | null)[]) if (j) delete j.trait;
+    const { save } = loadGame(JSON.stringify(v10), NOON);
+    expect(save.v).toBe(11);
+    expect(save.slots[0]!.trait).toBe(traitFromName("Taffy", 0));
+    expect(save.slots[1]!.trait).toBe(traitFromName("Pip", 2));
+    expect(save.owned).toEqual(owned(0, 3));
+    expect(save.decorX).toEqual(DECOR.map((d) => d.x));
+    expect(save.decorX[BUBBLER]).toBe(DECOR[BUBBLER]!.x);
+    expect(save.keep).toBeUndefined();
+    const s = createState(save, seeded(), { keepsakes: true });
+    expect(s.keep).not.toBeNull();
+    expect(s.keep!.days).toBe(1);
+    expect(s.keep!.earned & 1).toBe(1); // an adult already raised: the bottle, quietly
+    const out = toSave(s, NOON);
+    expect(out.v).toBe(11);
+    expect(out.keep).toMatchObject({ days: 1, lastDay: dayKey(NOON) });
+    expect(out.slots[0]!.trait).toBe(traitFromName("Taffy", 0));
+    expect(out.owned.length).toBe(DECOR_N);
   });
 });

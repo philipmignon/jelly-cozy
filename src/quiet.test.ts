@@ -42,7 +42,7 @@ const jelly = (k: Species, g: Stage, extra: Partial<SaveJelly> = {}): SaveJelly 
   ...extra,
 });
 const tank = (slots: (SaveJelly | null)[], extra: Partial<Save> = {}): Save => ({
-  v: 10, foods: [true, false, false], themes: [true, false, false, false], theme: 0,
+  v: 11, foods: [true, false, false], themes: [true, false, false, false], theme: 0,
   slots: Array.from({ length: 7 }, (_, i) => slots[i] ?? null),
   dollars: 0, murk: 0, spots: [], night: false, lamp: null,
   owned: [false, false, false, false, false], helpers: [false, false, false], decorX: DECOR.map((d) => d.x),

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { TRAIT_PHRASES } from "./traits";
 import {
   REDUCE_MOTION_KEY,
   createAnnouncer,
@@ -181,6 +182,17 @@ describe("words", () => {
     expect(eventWords({ type: "themed", theme: 1 }, jelly, (n) => ["Reef", "Kelp Forest"][n] ?? "")?.text).toBe("Kelp Forest theme on.");
     for (const type of ["pulse", "earned", "cleaned", "adult", "rehomed"]) expect(eventWords({ type, slot: 1 }, jelly)).toBeNull();
     expect(eventWords({ type: "ate", slot: 9 }, jelly)).toBeNull();
+  });
+
+  it("v13: keepsake unlocks, rides you could see, and a jelly's personality as its card says it", () => {
+    const jelly = (slot: number) => (slot === 1 ? { name: "Muffin", k: 0, g: 3 } : null);
+    expect(eventWords({ type: "keepsake", keepsake: 1 }, jelly)).toEqual({ text: "A little lighthouse washed up for you.", low: false });
+    expect(eventWords({ type: "keepsake", keepsake: 0 }, jelly)?.text).toBe("A message in a bottle drifted down for you.");
+    expect(eventWords({ type: "keepsake", keepsake: 99 }, jelly)).toBeNull();
+    expect(eventWords({ type: "rode", slot: 1, seen: true }, jelly)).toEqual({ text: "Muffin rode the bubbler.", low: true });
+    expect(eventWords({ type: "rode", slot: 1, seen: false }, jelly)).toBeNull();
+    expect(eventWords({ type: "rode", slot: 1 }, jelly)).toBeNull();
+    expect(describeJelly({ name: "Muffin", k: 0, g: 3, fullness: 0.9, mood: 0.8, trait: TRAIT_PHRASES[0] })).toBe("Muffin, adult moon jelly, full, happy, shy — hides by the rocks");
   });
 });
 

@@ -1,3 +1,5 @@
+import { focusReturn } from "./a11y";
+
 /**
  * Keepsake notes (v13): a small card over the tank when a journal milestone leaves something in it: the
  * keepsake's portrait (journal art "keep{m}", from tools/gen.py), the milestone's note and two buttons.
@@ -59,6 +61,7 @@ const CSS = `
 .jt-keep-btns button:active { transform: translateY(2px); box-shadow: none; }
 .jt-keep-btns button:focus-visible { outline: 2px solid #e09a28; outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .jt-keep-note { animation: none; } }
+:root[data-jt-reduce-motion] .jt-keep-note { animation: none; }
 `;
 
 /** A portrait scaled by a whole number (every art pixel stays square) to fit maxW x maxH. */
@@ -85,6 +88,14 @@ export function createKeepNote(journal: () => void): KeepNote {
   card.setAttribute("role", "dialog");
   card.setAttribute("aria-live", "polite");
   document.body.append(card);
+  const back = focusReturn(card);
+  let closeNow: (() => void) | null = null;
+  card.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !closeNow) return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeNow();
+  });
 
   return {
     show(entries) {
@@ -126,12 +137,16 @@ export function createKeepNote(journal: () => void): KeepNote {
         const ok = Object.assign(document.createElement("button"), { type: "button", className: "ok", textContent: "Lovely" });
         btns.append(see, ok);
         card.append(btns);
+        back.opened();
         card.hidden = false;
         ok.focus({ preventScroll: true });
         const close = () => {
+          closeNow = null;
           card.hidden = true;
+          back.closed();
           resolve();
         };
+        closeNow = close;
         ok.onclick = close;
         see.onclick = () => {
           close();

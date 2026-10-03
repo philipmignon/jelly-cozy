@@ -1277,13 +1277,17 @@
   },
   {
    "name": "Bubbler",
-   "x": 420,
+   "x": 267,
    "y": 1047,
    "w": 138,
    "h": 66
   }
  ],
  "decorLift": 18,
+ "chest": {
+  "x": 501,
+  "w": 102
+ },
  "pearl": {
   "dx": 0,
   "dy": -30,
@@ -2360,7 +2364,39 @@
    "prop": "evHalloween",
    "sprites": "hw_",
    "visitor": "bat",
-   "morphKey": "ghost"
+   "morphKey": "ghost",
+   "sand": [
+    {
+     "x": 171,
+     "w": 66,
+     "tier": 0
+    },
+    {
+     "x": 225,
+     "w": 36,
+     "tier": 0
+    },
+    {
+     "x": 615,
+     "w": 48,
+     "tier": 0
+    },
+    {
+     "x": 852,
+     "w": 42,
+     "tier": 1
+    },
+    {
+     "x": 1338,
+     "w": 54,
+     "tier": 2
+    },
+    {
+     "x": 393,
+     "w": 78,
+     "tier": 0
+    }
+   ]
   }
  },
  "batHangY": 42,

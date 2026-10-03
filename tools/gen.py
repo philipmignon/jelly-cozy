@@ -2995,7 +2995,12 @@ R_GLAZE = ramp("4a1006", "962a0c", "d8541a", "f8923a", "ffd27a")  # painted lava
 BUB_LIP = 21         # logical px from the base point up to the crater's lip
 BUB_TOP = WATER_TOP + 8  # where the bubbles pop (world y, logical): just under the surface line
 BUB_BASE = SAND_BASE + 31  # its default base y (logical), as in DECOR
-BUB_X = 140  # its default base x (logical): open sand clear of the chest, cauldron, clam, castle and keepsakes
+# its default base x (logical): on the open sand (OPEN_SAND, in front of no rocks), clear of the chest and the
+# Halloween cauldron, just left of where the castle and clam stand, and near enough the middle that the biggest jelly
+# can swim into its column. A small tank has no spot clear of everything (the keepsakes fill it), so a bought bubbler
+# goes to the open sand with the most room (sim.ts clearSpotFor; contract `chest` and seasons.*.sand say what else is
+# on the sand) and lands here when here is clear.
+BUB_X = 89
 
 
 def bubbler_art():
@@ -4444,7 +4449,9 @@ def hw_bat_node():
 
 def hw_contract(c):
     """What the logic needs to know, merged into contract.json."""
-    c["seasons"] = {"halloween": {"prop": "evHalloween", "sprites": "hw_", "visitor": "bat", "morphKey": "ghost"}}
+    # v14 `sand`: what the event stands on the sand (base centre x, width; artboard units), for placing a new bubbler
+    sand = [{"x": x * P, "w": 2 * rx * P, "tier": t} for x, rx, _, _, t in HW_PUMPKINS] + [{"x": HW_CAULDRON_X * P, "w": 26 * P, "tier": 0}]
+    c["seasons"] = {"halloween": {"prop": "evHalloween", "sprites": "hw_", "visitor": "bat", "morphKey": "ghost", "sand": sand}}
     c["batHangY"] = HW_BAT_HANG_Y
     c["visitorOrigin"]["bat"] = "where its feet grip the hood's lip (y = batHangY when hanging); flying, the same point above it"
 # ---- end Halloween event ----
@@ -7567,6 +7574,7 @@ contract = {
     "decor": [{"name": nm, "x": x * P, "y": y * P, "w": decor_box[n][0] * P, "h": decor_box[n][1] * P}
               for n, (nm, x, y, _) in enumerate(DECOR)],
     "decorLift": LIFT * P,
+    "chest": {"x": (CHEST_X + 17) * P, "w": 34 * P},  # v14: base centre and width, for placing a new bubbler
     "pearl": {"dx": 0, "dy": PEARL_DY * P, "r": PEARL_R * P},
     **{f"{k}Size": {"w": 2 * max(-b[0], b[2] + 1) * P,
                     "h": (2 * max(-b[1], b[3] + 1) if k == "snail" else -b[1]) * P} for k, b in helper_box.items()},

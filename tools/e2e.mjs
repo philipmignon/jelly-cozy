@@ -98,6 +98,25 @@ function fakeClaude() {
 /** Navigations here wait for the DOM only (window.__tank says when the tank is up), not for web fonts. */
 const DCL = { waitUntil: "domcontentloaded" };
 
+// ---------------------------------------------------------------- waits on the tank's state (every flow uses these)
+
+// Rive takes a press on its next frame and fires the trigger as it advances, so after a click wait for a
+// few frames (sim time moves at most 0.1 s a frame: 0.3 s of it is 3+ frames), not just a fixed time
+const framesOn = (page, n) =>
+  page.evaluate(() => window.__tank.t).then((t0) => page.waitForFunction((t) => window.__tank.t >= t, { timeout: 15000 }, t0 + 0.1 * n)).catch(() => {});
+// the shop has finished sliding up (sim time, so a slow frame rate doesn't leave the tabs mid-slide)
+const shopUpOn = (page) =>
+  page.waitForFunction(() => { const t = window.__tank; return t.shop.open && t.t - t.shop.t0 > 0.45; }, { timeout: 8000 }).then(() => sleep(150), () => {});
+// ...and has finished sliding away: taps in the water are ignored until it is out of the way (sim time again:
+// under load a frame can be 300 ms, and the slide is 0.35 s of sim time at no more than 0.1 s a frame)
+const shopDownOn = (page) =>
+  page.waitForFunction(() => { const t = window.__tank; return !t.shop.open && t.t - t.shop.t0 > 0.4; }, { timeout: 8000 }).then(() => true, () => false);
+// a tab's cards are laid out (and hit-tested) a frame or two after the state flips: wait 3+ frames (sim time
+// moves at most 0.1 s a frame, so 0.3 s of it is at least three) as well as 400 ms
+const laidOutOn = (page) => Promise.all([sleep(400), framesOn(page, 3)]);
+/** wait for a condition in the page; true/false rather than throwing */
+const until = (page, fn, arg, timeout = 8000) => page.waitForFunction(fn, { timeout }, arg).then(() => true, () => false);
+
 /**
  * v13 keepsakes: a save one step short of a milestone (two kinds raised, a blubber juvenile one meal from adult),
  * the step completed in the tank (feed it), the note, the reward, the journal's Keepsakes page, no second unlock
@@ -127,7 +146,7 @@ async function keepsakeFlow(browser) {
   const jelly = (k, g, extra = {}) => ({ k, g, gp: [0, 4, 12, 30][g], care: 0, fullness: 0.8, affection: 0.5, anchor: -1, spot: -1, name: ["Mochi", "Tofu", "Bloop"][k % 3], born: now, content: 0, morph: 0, ...extra });
   const entry = (raised) => ({ seen: true, raised, firstAdultAt: raised ? now : null, firstName: raised ? "Mochi" : null, morphSeen: 0 });
   const blank = { seen: false, raised: 0, firstAdultAt: null, firstName: null, morphSeen: 0 };
-  const base = { v: 10, dollars: 0, murk: 0, spots: [], night: false, lamp: null, helpers: [false, false, false], pearlDay: "", lastSeen: now, tier: 0, cam: 0,
+  const base = { v: 11, dollars: 0, murk: 0, spots: [], night: false, lamp: null, helpers: [false, false, false], pearlDay: "", lastSeen: now, tier: 0, cam: 0,
                  foods: [true, false, false], themes: [true, false, false, false, false], theme: 0 };
   const noteText = () => page.evaluate(() => { const n = document.querySelector(".jt-keep-note"); return n && !n.hidden ? n.textContent : ""; });
 
@@ -135,11 +154,13 @@ async function keepsakeFlow(browser) {
   await inject({
     ...base,
     slots: [jelly(0, 3), jelly(4, 3), jelly(1, 2, { gp: 29, fullness: 0.4 }), null, null, null, null],
-    owned: [false, false, false, false, false, true, false, false, false, false],
+    owned: [false, false, false, false, false, true, false, false, false, false, false],
     journal: [entry(1), entry(0), blank, blank, entry(1), blank, blank, blank, blank],
     keep: { earned: 1, days: 1, lastDay: day(now), requests: 0 },
   });
-  await sleep(1500);
+  // nothing should show: give it the time a note would take to come up (wall clock and sim time)
+  const settle = () => Promise.all([sleep(1500), framesOn(page, 10)]);
+  await settle();
   check("keepsakes: nothing new at load, nothing shown", (await noteText()) === "" && (await page.evaluate(() => window.__tank.owned[6] === false)));
   const S1 = Math.min(VIEW.width / K.W, VIEW.height / K.H);
   const ox = (VIEW.width - K.W * S1) / 2;
@@ -163,7 +184,7 @@ async function keepsakeFlow(browser) {
   check("keepsakes: the unlock is saved", saved);
   // "See journal" opens the book on the Keepsakes page: two done, the rest with their progress
   if (shown) await page.click(".jt-keep-note button:not(.ok)");
-  await sleep(300);
+  await until(page, () => !document.querySelector(".jt-book").hidden && !document.querySelector(".jt-keep-page").hidden, null, 5000);
   const page_ = await page.evaluate(() => ({
     open: !document.querySelector(".jt-book").hidden && !document.querySelector(".jt-keep-page").hidden,
     done: document.querySelectorAll(".jt-keep-row.done").length,
@@ -175,12 +196,14 @@ async function keepsakeFlow(browser) {
   // a reload doesn't unlock it again
   await page.reload(DCL);
   await page.waitForFunction(() => window.__tank && window.__tank.t > 0.5, { timeout: 20000 });
-  await sleep(1500);
+  await settle();
   check("keepsakes: no second unlock after a reload", (await noteText()) === "" && (await page.evaluate(() => window.__tank.owned[6] && window.__tank.keep.earned === 3)));
 
-  // an older save (no keep field) that already reached four milestones: one summary note, every reward in
+  // an older save (v10: no keep field, five decorations) that already reached four milestones: one summary note,
+  // every reward in
   await inject({
     ...base,
+    v: 10,
     slots: [jelly(0, 3, { morph: 1 }), null, null, null, null, null, null],
     owned: [true, false, false, false, false],
     journal: Array.from({ length: 9 }, (_, k) => ({ ...entry(1), morphSeen: k === 0 ? 1 : 0 })),
@@ -191,27 +214,35 @@ async function keepsakeFlow(browser) {
   check("keepsakes: an older save gets one summary note for all it had reached", sum && rows === 4 && /keepsakes for you/i.test(await noteText()) && got.decor && got.lagoon, `${rows} ${JSON.stringify(got)}`);
   await page.screenshot({ path: "shots/e2e-keep-summary.png" });
   if (sum) await page.click(".jt-keep-note .ok");
-  await sleep(200);
+  await until(page, () => document.querySelector(".jt-keep-note").hidden, null, 3000);
+  await settle();
   check("keepsakes: just the one note", (await noteText()) === "");
 
   // the shop: DECOR scrolls down to the keepsakes; a locked one says how it's earned
   const shopBtn = K.buttons.find((b) => b.name === "shop");
   await page.mouse.click(ox + (shopBtn.x + shopBtn.w / 2) * S1, oy + (shopBtn.y + shopBtn.h / 2) * S1);
-  await page.waitForFunction(() => { const t = window.__tank; return t.shop.open && t.t - t.shop.t0 > 0.45; }, { timeout: 8000 }).catch(() => {});
+  await shopUpOn(page);
   const tab = K.shopTabs[1];
   await page.mouse.click(ox + (tab.x + tab.w / 2) * S1, oy + (tab.y + tab.h / 2) * S1);
-  await page.waitForFunction(() => window.__tank.tab === 1, { timeout: 3000 }).then(() => sleep(400), () => {});
+  await until(page, () => window.__tank.tab === 1).then(() => laidOutOn(page));
   await page.mouse.move(ox + 360 * S1, oy + 600 * S1);
   for (let i = 0; i < 6; i++) {
     await page.mouse.wheel({ deltaY: 200 });
     await sleep(60);
   }
-  const scroll = await page.evaluate(() => window.__tank.shopScroll);
+  // the wheel's scroll eases in over a few frames: wait until it has stopped moving
+  let scroll = -1;
+  for (let i = 0; i < 20; i++) {
+    await framesOn(page, 2);
+    const now_ = await page.evaluate(() => window.__tank.shopScroll);
+    if (now_ === scroll) break;
+    scroll = now_;
+  }
   check("keepsakes: the DECOR tab scrolls to them", scroll > 0, `scroll=${scroll}`);
-  await sleep(300);
+  await laidOutOn(page);
   const card = K.shopCards[29];
   await page.mouse.click(ox + (card.x + card.w / 2) * S1, oy + (card.y + card.h / 2 - scroll) * S1);
-  await sleep(300);
+  await until(page, () => /keepsake:/i.test([...document.querySelectorAll(".jt-tag")].map((t) => t.textContent).join(" ")), null, 5000);
   const tag = await page.evaluate(() => [...document.querySelectorAll(".jt-tag")].map((t) => t.textContent).join(" "));
   check("keepsakes: a locked keepsake card says how it's earned, and isn't sold", /keepsake: finish 10 daily requests/i.test(tag) && (await page.evaluate(() => !window.__tank.owned[9])), tag);
   await page.screenshot({ path: "shots/e2e-keep-shop.png" });
@@ -300,57 +331,70 @@ async function keyboardFlow(browser) {
   });
   await page.reload(DCL);
   await page.waitForFunction(() => window.__tank && window.__tank.t > 0.5, { timeout: 15000 });
-  const key = async (k, ms = 120) => {
+  /** press a key, then let the tank take it: a couple of frames of sim time (or wait on a state with `until`) */
+  const key = async (k) => {
     await page.keyboard.press(k);
-    await sleep(ms);
+    await framesOn(page, 2);
   };
   const live = (id) => page.evaluate((i) => document.getElementById(i)?.textContent ?? "", id);
+  const hears = (id, re) => until(page, ([i, src]) => new RegExp(src).test(document.getElementById(i)?.textContent ?? ""), [id, re.source], 5000);
 
   const label = await page.evaluate(() => ({ role: document.getElementById("tank").getAttribute("role"), label: document.getElementById("tank").getAttribute("aria-label") ?? "" }));
   check("kb: the tank canvas is labelled for screen readers", label.role === "application" && /1 jelly/.test(label.label), JSON.stringify(label));
   await key("Tab");
   check("kb: Tab reaches the tank", await page.evaluate(() => document.activeElement?.id === "tank"));
-  await key("Tab", 250);
+  await key("Tab");
+  await until(page, () => !document.querySelector(".jt-a11y-ring").hidden && document.querySelector(".jt-a11y-ring-label").textContent !== "", null, 5000);
   const ring = await page.evaluate(() => ({ shown: !document.querySelector(".jt-a11y-ring").hidden, label: document.querySelector(".jt-a11y-ring-label").textContent, name: window.__tank.slots[0].name }));
   const said = await live("jt-a11y-focus");
   check("kb: Tab lands on the jelly, ringed and described", ring.shown && ring.label === ring.name && said.startsWith(`${ring.name}, moon jelly polyp`), `${JSON.stringify(ring)} "${said}"`);
+  // v13: the description ends with its personality, as the card words it
+  check("kb: the jelly's description includes its personality", /, (shy|curious|sleepy|social) — /.test(said), said);
   await page.screenshot({ path: "shots/e2e-13-kb-focus.png" });
 
   const aff0 = await page.evaluate(() => window.__tank.slots[0].affection);
-  await key("Enter", 200);
+  await key("Enter");
+  await until(page, (a) => window.__tank.slots[0].affection > a && document.querySelectorAll(".jt-tag").length > 0, aff0, 5000);
   const pet = await page.evaluate(() => ({ aff: window.__tank.slots[0].affection, tags: document.querySelectorAll(".jt-tag").length }));
   check("kb: Enter pets it", pet.aff > aff0 && pet.tags === 1, `${aff0} -> ${JSON.stringify(pet)}`);
 
-  await key("f", 200);
+  await key("f");
+  await until(page, () => window.__tank.tool === "food" && window.__tank.food.some((f) => f.state !== "off"), null, 5000);
   const fed = await page.evaluate(() => ({ tool: window.__tank.tool, food: window.__tank.food.filter((f) => f.state !== "off").length }));
   check("kb: F picks up the can and sprinkles", fed.tool === "food" && fed.food > 0, JSON.stringify(fed));
   await key("Escape");
-  check("kb: Escape puts the can down", (await page.evaluate(() => window.__tank.tool)) === "none");
+  check("kb: Escape puts the can down", await until(page, () => window.__tank.tool === "none", null, 5000));
 
-  await key("j", 200);
+  await key("j");
+  await until(page, () => !document.querySelector(".jt-book").hidden, null, 5000);
   const book = await page.evaluate(() => ({ open: !document.querySelector(".jt-book").hidden, inside: document.querySelector(".jt-book").contains(document.activeElement) }));
   check("kb: J opens the journal with focus inside it", book.open && book.inside, JSON.stringify(book));
-  await key("Escape", 200);
+  await key("Escape");
+  await until(page, () => document.querySelector(".jt-book").hidden && document.activeElement?.id === "tank", null, 5000);
   const back = await page.evaluate(() => ({ open: !document.querySelector(".jt-book").hidden, focus: document.activeElement?.id }));
   check("kb: Escape closes it and focus returns to the tank", !back.open && back.focus === "tank", JSON.stringify(back));
 
   await page.evaluate(() => { window.__tank.dollars = 300; });
-  await key("b", 300);
-  await page.waitForFunction(() => { const t = window.__tank; return t.shop.open && t.t - t.shop.t0 > 0.45; }, { timeout: 8000 }).catch(() => {});
-  await sleep(150);
+  await key("b");
+  await shopUpOn(page);
+  await hears("jt-a11y-focus", /Blue blubber/);
   const shop = await page.evaluate(() => ({ open: window.__tank.shop.open, ring: !document.querySelector(".jt-a11y-ring").hidden }));
   const card = await live("jt-a11y-focus");
   check("kb: B opens the shop on its first card", shop.open && shop.ring && /Blue blubber, 40 sand dollars/.test(card), `${JSON.stringify(shop)} "${card}"`);
   await key("ArrowRight");
+  await hears("jt-a11y-focus", /Fried egg/);
   const right = await live("jt-a11y-focus");
   await key("ArrowLeft");
+  await hears("jt-a11y-focus", /Blue blubber/);
   check("kb: arrows walk the cards", /Fried egg/.test(right) && /Blue blubber/.test(await live("jt-a11y-focus")), right);
   await page.screenshot({ path: "shots/e2e-14-kb-shop.png" });
-  await key("Enter", 300);
+  await key("Enter");
+  await until(page, () => window.__tank.slots.filter(Boolean).length === 2, null, 5000);
+  await hears("jt-a11y-focus", /Bought Blue blubber/);
   const bought = await page.evaluate(() => ({ n: window.__tank.slots.filter(Boolean).length, dollars: window.__tank.dollars }));
   check("kb: Enter buys it", bought.n === 2 && bought.dollars === 260 && /Bought Blue blubber/.test(await live("jt-a11y-focus")), JSON.stringify(bought));
-  await key("Escape", 700);
-  check("kb: Escape closes the shop", !(await page.evaluate(() => window.__tank.shop.open)));
+  await key("Escape");
+  check("kb: Escape closes the shop", await shopDownOn(page));
 
   // the moments region: the pearl showing up is announced
   await page.evaluate(() => {
@@ -405,10 +449,7 @@ async function main() {
         food: s.food.filter((f) => f.state !== "off").length, wipe: !!s.wipe,
       };
     });
-    // Rive takes a press on its next frame and fires the trigger as it advances, so after a click wait for a
-    // few frames (sim time moves at most 0.1 s a frame: 0.3 s of it is 3+ frames), not just a fixed time
-    const frames = (n) =>
-      page.evaluate(() => window.__tank.t).then((t0) => page.waitForFunction((t) => window.__tank.t >= t, { timeout: 15000 }, t0 + 0.1 * n)).catch(() => {});
+    const frames = (n) => framesOn(page, n);
     const click = async (ax, ay) => {
       await page.mouse.click(OX + ax * S, OY + ay * S);
       await Promise.all([sleep(250), frames(3)]);
@@ -419,16 +460,9 @@ async function main() {
       await sleep(140);
     };
     const shot = (name) => page.screenshot({ path: `shots/e2e-${name}.png` });
-    // the shop has finished sliding up (sim time, so a slow frame rate doesn't leave the tabs mid-slide)
-    const shopUp = () =>
-      page.waitForFunction(() => { const t = window.__tank; return t.shop.open && t.t - t.shop.t0 > 0.45; }, { timeout: 8000 }).then(() => sleep(150), () => {});
-    // ...and has finished sliding away: taps in the water are ignored until it is out of the way (sim time again:
-    // under load a frame can be 300 ms, and the slide is 0.35 s of sim time at no more than 0.1 s a frame)
-    const shopDown = () =>
-      page.waitForFunction(() => { const t = window.__tank; return !t.shop.open && t.t - t.shop.t0 > 0.4; }, { timeout: 8000 }).then(() => true, () => false);
-    // a tab's cards are laid out (and hit-tested) a frame or two after the state flips: wait 3+ frames (sim time
-    // moves at most 0.1 s a frame, so 0.3 s of it is at least three) as well as 400 ms
-    const laidOut = () => Promise.all([sleep(400), frames(3)]);
+    const shopUp = () => shopUpOn(page);
+    const shopDown = () => shopDownOn(page);
+    const laidOut = () => laidOutOn(page);
 
     // first-run tips: four bubbles, each with a Next / Got it button
     await page.waitForSelector(".jt-tip:not([hidden])", { timeout: 8000 }).catch(() => {});
@@ -574,6 +608,10 @@ async function main() {
     await click(...centre(K.shopCards[4]));
     s = await st();
     check("owned decor can't be bought twice", s.dollars === before);
+    // v13: the bubbler (item 24, decoration 10) follows the sold decorations on the DECOR tab
+    await page.evaluate(() => { window.__tank.dollars = Math.max(window.__tank.dollars, 300); });
+    await click(...centre(K.shopCards[24]));
+    check("buy the bubbler (decoration 10)", await until(page, () => window.__tank.owned[10] === true, null, 5000), JSON.stringify((await st()).owned));
     await shot("5-bought");
     await click(...tabBtn(2));
     await page.waitForFunction(() => window.__tank.tab === 2, { timeout: 8000 }).then(laidOut).catch(() => {});
@@ -634,6 +672,9 @@ async function main() {
     await sleep(200);
     const cardOpen = await page.evaluate(() => !document.querySelector(".jt-card").hidden);
     check("long-press opens the jelly card", cardOpen);
+    // v13: the card has its personality line
+    const trait = await page.evaluate(() => { const t = document.querySelector(".jt-card .jt-trait"); return t && !t.hidden ? t.textContent : ""; });
+    check("the card says the jelly's personality", /^(Shy|Curious|Sleepy|Social) — /.test(trait), trait);
     if (cardOpen) {
       await page.click("#jt-name");
       await page.evaluate(() => document.querySelector("#jt-name").select());

@@ -7,7 +7,12 @@
  * reloads by itself. Saves stay in localStorage; the worker never touches them.
  */
 
+import { focusReturn } from "./a11y";
+
 const UPDATE_CHECK_MS = 60 * 60 * 1000;
+
+/** The "updated" chip, while it's up (the keyboard leaves the tank's keys alone while focus is in it). */
+export const updateChip = (): HTMLElement | null => document.querySelector<HTMLElement>(".jt-upd");
 
 /** Should this page run the service worker? (exported for the tests) */
 export function swUrl(doc: Pick<Document, "querySelector">, win: { __JELLYTANK_RIV_B64?: unknown }, prod: boolean): string | null {
@@ -65,11 +70,21 @@ function showUpdated(anchor: () => { x: number; y: number }): void {
   };
   place();
   window.addEventListener("resize", place);
-  chip.querySelector(".go")!.addEventListener("click", () => location.reload()); // pagehide saves the tank first
-  chip.querySelector(".x")!.addEventListener("click", () => {
+  const back = focusReturn(chip);
+  const dismiss = () => {
     window.removeEventListener("resize", place);
     chip.remove();
+    back.closed(); // focus was on the chip's buttons: back to where it came from (the tank)
+  };
+  chip.querySelector(".go")!.addEventListener("click", () => location.reload()); // pagehide saves the tank first
+  chip.querySelector(".x")!.addEventListener("click", dismiss);
+  chip.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    e.stopPropagation();
+    dismiss();
   });
+  back.opened();
   document.body.append(chip);
 }
 

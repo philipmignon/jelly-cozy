@@ -1,10 +1,9 @@
 /**
  * Offline play and instant repeat visits on the GitHub Pages build: registers dist/sw.js (built from src/sw.js).
  *
- * Only index.html carries <meta name="jellytank-sw" content="sw.js">, so the claude.ai pages tools/page.mjs
- * writes (which can't use service workers) never register one; nor does the dev server, nor a page with the
- * .riv inlined. When a new build takes over while the tank is open, a small chip offers a reload; nothing
- * reloads by itself. Saves stay in localStorage; the worker never touches them.
+ * index.html carries <meta name="jellytank-sw" content="sw.js">; the dev server never registers one. When a new
+ * build takes over while the tank is open, a small chip offers a reload; nothing reloads by itself. Saves stay
+ * in localStorage; the worker never touches them.
  */
 
 import { focusReturn } from "./a11y";
@@ -15,8 +14,8 @@ const UPDATE_CHECK_MS = 60 * 60 * 1000;
 export const updateChip = (): HTMLElement | null => document.querySelector<HTMLElement>(".jt-upd");
 
 /** Should this page run the service worker? (exported for the tests) */
-export function swUrl(doc: Pick<Document, "querySelector">, win: { __JELLYTANK_RIV_B64?: unknown }, prod: boolean): string | null {
-  if (!prod || typeof win.__JELLYTANK_RIV_B64 === "string") return null;
+export function swUrl(doc: Pick<Document, "querySelector">, prod: boolean): string | null {
+  if (!prod) return null;
   const meta = doc.querySelector<HTMLMetaElement>('meta[name="jellytank-sw"]');
   return meta?.content || null;
 }
@@ -93,7 +92,7 @@ function showUpdated(anchor: () => { x: number; y: number }): void {
  * "updated" chip goes (client px, its top centre).
  */
 export function registerOffline(anchor: () => { x: number; y: number }): void {
-  const url = swUrl(document, window as { __JELLYTANK_RIV_B64?: unknown }, import.meta.env.PROD);
+  const url = swUrl(document, import.meta.env.PROD);
   if (!url) return;
   let sw: ServiceWorkerContainer | undefined;
   try {

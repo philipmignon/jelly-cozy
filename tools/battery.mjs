@@ -1,7 +1,7 @@
 // What a tank costs to keep open: CPU time per second and frames drawn per second, for an idle tank,
 // a busy one (food can held, pointer moving, flakes falling) and a hidden tab, at full speed and with
 // 4x CPU throttling (a slow phone).
-//   npm run build && node tools/page.mjs && node tools/battery.mjs
+//   npm run build && node tools/battery.mjs    (serves dist/ as GitHub Pages does; the service worker bypassed)
 //   BATTERY_PORT=5199          the port (default 5199)
 //   BATTERY_SECONDS=10         the length of each measured window
 //   BATTERY_RUNS=2             runs per scenario (the median is printed)
@@ -26,13 +26,10 @@ const RUNS = Number(process.env.BATTERY_RUNS ?? 2);
 const GL = process.env.BATTERY_GL === "swiftshader" ? ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] : [];
 const K = JSON.parse(readFileSync("src/contract.json", "utf8"));
 
-const page = readFileSync("pub/jellytank.html", "utf8");
-const shell = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body>${page}</body></html>`;
-const types = { ".js": "text/javascript", ".wasm": "application/wasm", ".json": "application/json" };
+const types = { ".js": "text/javascript", ".wasm": "application/wasm", ".json": "application/json", ".html": "text/html", ".png": "image/png", ".webmanifest": "application/manifest+json" };
 const server = createServer((req, res) => {
   const url = req.url.split("?")[0];
-  if (url === "/") return res.writeHead(200, { "content-type": "text/html" }).end(shell);
-  const f = join("dist", url);
+  const f = join("dist", url === "/" ? "index.html" : url);
   if (!existsSync(f)) return res.writeHead(404).end();
   res.writeHead(200, { "content-type": types[extname(f)] ?? "application/octet-stream" }).end(readFileSync(f));
 }).listen(PORT, "127.0.0.1");
@@ -75,6 +72,9 @@ async function measure(browser, { scenario, cpuRate, saver = false }) {
   await p.setViewport(VIEW);
   const cdp = await p.createCDPSession();
   await cdp.send("Performance.enable");
+  // a fresh profile each time, as tools/loadtime.mjs: the worker's installing (caching every file) isn't the tank
+  await cdp.send("Network.enable");
+  await cdp.send("Network.setBypassServiceWorker", { bypass: true });
   await p.evaluateOnNewDocument((save, saver) => {
     try {
       localStorage.clear();

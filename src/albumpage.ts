@@ -1,6 +1,6 @@
 /**
  * The journal's Album page (v14): a grid of the kept photos (./album.ts), newest first. Tap one to see it larger
- * with its caption, save it again (the same downloads capability / <a download> path as photo mode) or delete
+ * with its caption, save it again (the same <a download> path as photo mode) or delete
  * it (the button asks twice, like rehoming). The viewer is a dialog over the book: Escape closes it, the arrow
  * keys step through the photos, focus goes back to the thumbnail it came from (focusReturn).
  */
@@ -200,7 +200,7 @@ export function createAlbumPage(album: () => Promise<Album | null>, save: (blob:
     const e = showing;
     if (!e) return;
     const r = await save(new Blob([e.data], { type: e.type }), albumFilename(e));
-    if (showing === e) status.textContent = r === "saved" ? "Saved." : r === "declined" ? "" : "The photo couldn't be saved here.";
+    if (showing === e) status.textContent = r === "saved" ? "Saved." : "The photo couldn't be saved here.";
   });
   delBtn.addEventListener("click", async () => {
     const e = showing;

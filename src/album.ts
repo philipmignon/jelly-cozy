@@ -157,6 +157,8 @@ export async function idbBackend(factory: IDBFactory | undefined = globalThis.in
       };
       open.onsuccess = () => {
         clearTimeout(timer);
+        // let go when another tab (or a test) deletes or upgrades the album, rather than leave it blocked
+        open.result.onversionchange = () => open.result.close();
         resolve(open.result);
       };
       open.onerror = () => {

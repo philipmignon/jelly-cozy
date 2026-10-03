@@ -4585,31 +4585,49 @@ NV_OCTO_PALS = {
 NV_OCTO_EYE = (hx("f4c24a"), hx("b07a1a"), hx("160a0e"), hx("fff6dc"))  # iris, iris shadow, pupil, glint
 
 
+# v15: the octopus is drawn NV_OCTO_S times its first size (a reddish blob on the rock at 1×; at 1.7× its eye, mantle
+# and curled arm tips read at phone zoom). The shapes below are in the 1× design units; the helpers scale them, so the
+# pixel density stays the tank's (no node scale: P stays 3 units an art pixel).
+NV_OCTO_S = 1.7
+
+
+def _os_ellipse(cx, cy, rx, ry, rot=0.0):
+    return nv_ellipse(cx * NV_OCTO_S, cy * NV_OCTO_S, rx * NV_OCTO_S, ry * NV_OCTO_S, rot)
+
+
+def _os_curve(p0, p1, p2, p3, n):
+    return [(x * NV_OCTO_S, y * NV_OCTO_S) for x, y in nv_curve(p0, p1, p2, p3, n)]
+
+
+def _os_stroke(pts, w0, w1):
+    return nv_stroke(pts, w0 * NV_OCTO_S, w1 * NV_OCTO_S)
+
+
 def nv_octo_body(frame):
     """The masks: (mantle+head, arms, reach arm or None). Origin = the rock-top point it peeks over."""
     swell = 0.5 if frame == 1 else 0.0
-    mantle = nv_ellipse(-4.2, -12.2 - swell, 6.3 + swell, 7.9 + swell, rot=-0.5)
-    neck = nv_ellipse(-1.6, -7.6, 5.6, 4.6)
-    head = nv_ellipse(0.6, -4.2, 6.2, 4.2)
+    mantle = _os_ellipse(-4.2, -12.2 - swell, 6.3 + swell, 7.9 + swell, rot=-0.5)
+    neck = _os_ellipse(-1.6, -7.6, 5.6, 4.6)
+    head = _os_ellipse(0.6, -4.2, 6.2, 4.2)
     body = mantle | neck | head
     # below the rock edge (hidden in the tank, whole in the journal): the web and five arms, curling outward
-    arms = nv_ellipse(0.2, 0.2, 6.4, 2.8)
+    arms = _os_ellipse(0.2, 0.2, 6.4, 2.8)
     for x0, side, L in ((-5.0, -1, 8.5), (-2.4, -1, 10.5), (0.3, 1, 11.5), (3.0, 1, 10.0), (5.4, 1, 8.0)):
         out = side * (1.2 + abs(x0) * 0.35)
         pts = nv_curve((x0, -1.0), (x0 + out * 0.4, 3.5), (x0 + out * 1.4, L - 2.5), (x0 + out * 2.6, L - 3.5), 14)
         tip = nv_curve(pts[-1], (x0 + out * 3.6, L - 4.5), (x0 + out * 3.4, L - 6.4), (x0 + out * 2.4, L - 6.0), 6)
-        arms |= nv_stroke(pts + tip[1:], 3.2, 1.0)
+        arms |= _os_stroke([(x * NV_OCTO_S, y * NV_OCTO_S) for x, y in pts + tip[1:]], 3.2, 1.0)
     # arm tips curled up over the rock's top, front and back
-    front = nv_curve((4.0, -0.6), (7.6, -0.8), (10.0, -3.2), (8.4, -5.4), 12)
-    back = nv_curve((-5.4, -0.6), (-8.8, -0.8), (-10.4, -3.0), (-9.0, -4.8), 12)
-    arms |= nv_stroke(front, 3.0, 1.2) | nv_stroke(back, 2.6, 1.0)
+    front = _os_curve((4.0, -0.6), (7.6, -0.8), (10.0, -3.2), (8.4, -5.4), 12)
+    back = _os_curve((-5.4, -0.6), (-8.8, -0.8), (-10.4, -3.0), (-9.0, -4.8), 12)
+    arms |= _os_stroke(front, 3.0, 1.2) | _os_stroke(back, 2.6, 1.0)
     reach = None
     if frame >= 2:
         if frame == 2:  # up and forward toward the jelly, the tip curling over
-            pts = nv_curve((5.0, -2.0), (12, -4), (13, -13), (18.5, -18.5), 18) + nv_curve((18.5, -18.5), (21.5, -21.8), (24.2, -19.2), (21.8, -17.2), 10)[1:]
+            pts = _os_curve((5.0, -2.0), (12, -4), (13, -13), (18.5, -18.5), 18) + _os_curve((18.5, -18.5), (21.5, -21.8), (24.2, -19.2), (21.8, -17.2), 10)[1:]
         else:  # the flick: the tip whipped the other way, the arm a touch lower
-            pts = nv_curve((5.0, -2.0), (12, -3), (14, -11), (19.5, -15.5), 18) + nv_curve((19.5, -15.5), (23.5, -18), (25.2, -13.6), (22.6, -13.0), 10)[1:]
-        reach = nv_stroke(pts, 3.2, 1.0)
+            pts = _os_curve((5.0, -2.0), (12, -3), (14, -11), (19.5, -15.5), 18) + _os_curve((19.5, -15.5), (23.5, -18), (25.2, -13.6), (22.6, -13.0), 10)[1:]
+        reach = _os_stroke(pts, 3.2, 1.0)
     return body, arms, reach
 
 
@@ -4618,46 +4636,53 @@ def octo_art(frame, pal="red"):
     spot_d, spot_l, sucker = hx(spot_d), hx(spot_l), hx(sucker)
     body, arms, reach = nv_octo_body(frame)
     px = Px()
-    mottle = (lambda x, y: -0.32 if fbm(x * 0.32, y * 0.32, 71) > 0.56 else 0.06) if pal == "camo" else (lambda x, y: 0.0)
-    nv_paste(px, nv_pillow(arms - body, rmp, R=2.0, bias=lambda x, y: mottle(x, y) - 0.08))
+    S = NV_OCTO_S
+    q = lambda v: round(v * S)  # a 1× design pixel position at this size
+    mottle = (lambda x, y: -0.32 if fbm(x * 0.32 / S, y * 0.32 / S, 71) > 0.56 else 0.06) if pal == "camo" else (lambda x, y: 0.0)
+    nv_paste(px, nv_pillow(arms - body, rmp, R=2.0 * S, bias=lambda x, y: mottle(x, y) - 0.08))
     if reach:
-        nv_paste(px, nv_pillow(reach, rmp, R=1.6, bias=mottle))
-    nv_paste(px, nv_pillow(body, rmp, R=4.5, bias=mottle))
+        nv_paste(px, nv_pillow(reach, rmp, R=1.6 * S, bias=mottle))
+    nv_paste(px, nv_pillow(body, rmp, R=4.5 * S, bias=mottle))
     # papillae: little dark and light bumps over the mantle
     for (x, y) in body:
-        if (x, y + 1) in body and (x, y - 1) in body and (x - 1, y) in body and (x + 1, y) in body and y < -6:
+        if (x, y + 1) in body and (x, y - 1) in body and (x - 1, y) in body and (x + 1, y) in body and y < -6 * S:
             h = _hash2(x, y, 7 if pal != "camo" else 9)
-            if h < 0.09:
+            if h < 0.07:
                 px.put(x, y, spot_d)
-            elif h > 0.95:
+            elif h > 0.96:
                 px.put(x, y, spot_l)
     # suckers along the undersides of the curled tips (and the reaching arm)
-    for pts in ((8, -2), (9, -3), (-8, -2), (-9, -3)):
-        if px.has(*pts):
-            px.put(pts[0], pts[1], sucker)
+    for x0, y0 in ((8, -2), (9, -3), (-8, -2), (-9, -3)):
+        for x, y in ((q(x0), q(y0)), (q(x0) + (1 if x0 > 0 else -1), q(y0) - 1)):
+            if px.has(x, y):
+                px.put(x, y, sucker)
     if reach:
         for x, y in sorted(reach):
-            if (x, y + 1) not in reach and (x + y) % 2 == 0 and 7 < x < 22:
+            if (x, y + 1) not in reach and (x + y) % 2 == 0 and 7 * S < x < 22 * S:
                 px.put(x, y, sucker)
     # the eye: a raised lid in the body's colour, a gold iris, a dark bar pupil, one glint
-    ex, ey = 2, -6
-    lid = nv_ellipse(ex + 0.5, ey + 0.5, 3.0, 2.6)
+    ex, ey = q(2), q(-6)
+    lid = nv_ellipse(ex + 0.5, ey + 0.5, 3.0 * S, 2.6 * S)
     for (x, y) in lid:
         if (x, y) in body:
             px.put(x, y, rmp[4] if y < ey else rmp[2])
     shut = 1 if frame == 1 else 0  # it squints a little as it breathes
-    for (x, y) in nv_ellipse(ex + 0.5, ey + 0.5 + shut * 0.5, 2.1, 1.6 - shut * 0.5):
+    for (x, y) in nv_ellipse(ex + 0.5, ey + 0.5 + shut * 0.8, 2.1 * S, (1.6 - shut * 0.5) * S):
         px.put(x, y, NV_OCTO_EYE[1] if y > ey else NV_OCTO_EYE[0])
-    for x in range(ex - 1, ex + 2):
+    for x in range(ex - 2, ex + 3):
         px.put(x, ey, NV_OCTO_EYE[2])
     if not shut:
-        px.put(ex - 1, ey - 1, NV_OCTO_EYE[3])
+        px.put(ex - 2, ey - 2, NV_OCTO_EYE[3])
+        px.put(ex - 1, ey - 2, NV_OCTO_EYE[3])
     # the far eye, just a bump and a sliver of gold behind the mantle's curve
-    px.put(-3, -7, rmp[4])
-    px.put(-4, -7, NV_OCTO_EYE[1])
-    px.put(-3, -6, NV_OCTO_EYE[2])
+    fx, fy = q(-3), q(-7)
+    px.put(fx, fy, rmp[4])
+    px.put(fx - 1, fy, rmp[4])
+    px.put(fx - 2, fy, NV_OCTO_EYE[1])
+    px.put(fx - 1, fy + 1, NV_OCTO_EYE[2])
+    px.put(fx, fy + 1, NV_OCTO_EYE[2])
     # the siphon, a little tube low on the far side
-    for (x, y) in nv_stroke([(-6.0, -3.0), (-8.0, -2.4)], 1.8, 1.4):
+    for (x, y) in _os_stroke([(-6.0 * S, -3.0 * S), (-8.0 * S, -2.4 * S)], 1.8, 1.4):
         if not px.has(x, y):
             px.put(x, y, rmp[2])
     return px
@@ -4828,10 +4853,12 @@ def hermit_art(frame):
 # so each of its spots clips it along that rock's top edge instead. The manta is a shadow: it stays in the Far
 # group, under the Night layer, and reads as a darker shape against the night water.
 NV_OCTO_CLIP = 2   # rows of the octopus drawn below its peek point (the clip trims them along the rock's edge)
-NV_OCTO_RISE = 15  # how far below its peek point it starts (and slips back to): all of it under the edge
+NV_OCTO_RISE = round(15 * NV_OCTO_S)  # how far below its peek point it starts (and slips back to): all of it under the edge
 NV_OCTO_HALF = 6   # the half width of rock it needs under its peek point
-NV_OCTO_EDGE = 18  # how far either side the clip follows the rock's edge
+NV_OCTO_DEPTH = 17  # and how deep (the 1× rise + clip: the spots stay where they were before v15's scale-up)
+NV_OCTO_EDGE = round(18 * NV_OCTO_S)  # how far either side the clip follows the rock's edge
 NV_NIGHT = hx("08103a", 120)  # their night tint: lighter than the Night layer (they only come at night)
+NV_OCTO_NIGHT = hx("08103a", 64)  # v15: lighter still on the octopus, so its red (and its shape) read at night
 NV_BOXES = {}  # contract.visitors entries: each node's art extent around its origin (logical)
 
 
@@ -4843,8 +4870,8 @@ def nv_clip(px, y_max):
 
 def nv_octo_spots(reef):
     """Where the octopus can peek over a reef rock (logical): on each big rock, the highest point of its top
-    edge with solid rock under it, NV_OCTO_HALF either side and NV_OCTO_RISE + NV_OCTO_CLIP down, so it can
-    rise from (and sink back to) out of sight. Only rock counts (not the corals growing on it).
+    edge with solid rock under it, NV_OCTO_HALF either side and NV_OCTO_DEPTH down, so it can
+    rise from (and sink back to) out of sight (the clip hides all of it below the edge). Only rock counts (not the corals growing on it).
     (x, y, tier, edge): edge = the rock's top (dy from y) for dx in -NV_OCTO_EDGE..NV_OCTO_EDGE."""
     rock = set(R_ROCK)
     solid = lambda x, y: (c := reef.get(x, y)) is not None and c in rock
@@ -4862,7 +4889,7 @@ def nv_octo_spots(reef):
                 continue
             y = max(tops) + 1  # every column's rock reaches up to here
             if all(reef.has(x + dx, y + dy) for dx in range(-NV_OCTO_HALF, NV_OCTO_HALF + 1)
-                   for dy in range(0, NV_OCTO_RISE + NV_OCTO_CLIP + 1)):
+                   for dy in range(0, NV_OCTO_DEPTH + 1)):
                 if best is None or y < best[1]:
                     best = (x, y)
         if best:
@@ -4881,10 +4908,11 @@ def nv_frames(key, title, art, frames):
                   binds=[bind(prop(f"{key}F{f}", default=1 if f == 0 else 0), 18)]) for f in frames]
 
 
-def nv_tint(key, title, art, frames):
+def nv_tint(key, title, art, frames, tint=None):
     """The night tint: the frames as dark silhouettes, faded in with nightShade."""
+    tint = tint or NV_NIGHT
     return node(f"{title}Night", list(reversed([
-        image(f"{title}Night{f}", lambda f=f: silhouette(art(f), NV_NIGHT), opacity=1 if f == 0 else 0,
+        image(f"{title}Night{f}", lambda f=f: silhouette(art(f), tint), opacity=1 if f == 0 else 0,
               binds=[bind(prop(f"{key}F{f}", default=1 if f == 0 else 0), 18)]) for f in frames])),
         opacity=0, binds=[bind(prop("nightShade"), 18)])
 
@@ -4904,7 +4932,7 @@ def nv_octo_mid(spots):
         base = nv_frames("octo", "Octo", art("red"), range(4))
         camo = node("OctoCamo", list(reversed(nv_frames("octo", "OctoCamo", art("camo"), range(4)))), opacity=0, binds=[bind(prop("octoC1"), 18)])
         pale = node("OctoPale", list(reversed(nv_frames("octo", "OctoPale", art("pale"), range(4)))), opacity=0, binds=[bind(prop("octoC2"), 18)])
-        tint = nv_tint("octo", "Octo", art("red"), range(4))
+        tint = nv_tint("octo", "Octo", art("red"), range(4), NV_OCTO_NIGHT)
         octo = node("Octo", [tint, pale, camo] + list(reversed(base)), y=NV_OCTO_RISE * P,
                     binds=[bind(prop("octoDY", default=NV_OCTO_RISE * P), 14), bind(prop("octoSX", default=1), 16)])
         # the clip: everything above the rock's top edge, NV_OCTO_EDGE either side (a path with no fill)

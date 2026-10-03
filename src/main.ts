@@ -10,10 +10,8 @@ import { createJournal } from "./journal";
 import { openAlbum, shrink } from "./album";
 import { createAlbumPage } from "./albumpage";
 import { createKeepNote } from "./keepnote";
-import { connectCloud, savedAt, type CloudSync } from "./cloud";
-import { SHELL_DOLLARS, connectFriends, giftLines, liveId, type Friends, type Gift } from "./friends";
-import { captionDate, capture, downloadsCapability, flash, photoFilename, savePng, toPng } from "./photo";
-import { clearVisit, createBackupPanel, createSharePanel, noteAfterReload, pendingVisit, showNote, showVisitBar, takeNote } from "./share";
+import { captionDate, capture, flash, photoFilename, savePng, toPng } from "./photo";
+import { clearVisit, createBackupPanel, createSharePanel, pendingVisit, showNote, showVisitBar } from "./share";
 import { createOverlay, type JellyCardInfo } from "./overlay";
 import { createPacer, readBatterySaver, wakes, writeBatterySaver, type Pacer } from "./pace";
 import { registerOffline, updateChip } from "./offline";
@@ -42,7 +40,7 @@ import {
   sprinkle,
   toggleTool,
   demoSave,
-  earn,
+  catchUp,
   exportTank,
   feed,
   importTank,
@@ -108,41 +106,22 @@ function readSave(): string | null {
 
 /** The demo tank (?demo=1) is for recording clips: it never touches the real save. */
 const DEMO = new URLSearchParams(location.search).get("demo") === "1";
-/** Visiting a friend's tank from a share code: like the demo, nothing is saved. */
+/** Visiting a friend's tank from a share code (a frozen snapshot): like the demo, nothing is saved. */
 const VISIT_CODE = DEMO ? null : pendingVisit();
-/** On the synced copy, a live code names a friend whose tank is read from the db as it is now. */
-const LIVE_ID = liveId(VISIT_CODE);
-const VISIT_SAVE = VISIT_CODE && !LIVE_ID ? importTank(VISIT_CODE) : null;
-const READ_ONLY = DEMO || VISIT_SAVE !== null || LIVE_ID !== null;
+const VISIT_SAVE = VISIT_CODE ? importTank(VISIT_CODE) : null;
+const READ_ONLY = DEMO || VISIT_SAVE !== null;
 const TIPS_KEY = "jellytank:tips";
 
 /** Set while a restored save is being written: the reload's own pagehide save must not overwrite it. */
 let savesSuspended = false;
 
-/** The synced copy's cloud save (null on the main link, or when the viewer can't use it). */
-let cloud: CloudSync | null = null;
-/** The `lastSeen` of the newest save this page wrote or loaded (to spot another device's newer one). */
-let mySaveAt = 0;
-/** The synced copy's live tank and gifts (null on the main link, signed out, or without a db). */
-let friends: Friends | null = null;
-
-function persist(s: State, cloudNow = false): void {
+/** The save lives in this browser's localStorage (back it up with a save code from the settings menu). */
+function persist(s: State): void {
   if (READ_ONLY || savesSuspended) return;
-  const now = Date.now();
-  const json = JSON.stringify(toSave(s, now));
-  mySaveAt = now;
   try {
-    localStorage.setItem(SAVE_KEY, json);
+    localStorage.setItem(SAVE_KEY, JSON.stringify(toSave(s, Date.now())));
   } catch {
     /* ignore */
-  }
-  cloud?.save(json, now, cloudNow);
-  if (friends) {
-    try {
-      friends.publish(exportTank(s), now, cloudNow);
-    } catch {
-      /* a layout the share code can't hold: keep the last one published */
-    }
   }
 }
 
@@ -192,56 +171,14 @@ function artToClient(canvas: HTMLCanvasElement, x: number, y: number) {
   return { x: r.left + ox + x * s, y: r.top + oy + y * s };
 }
 
-/** A hosted build can carry the .riv in the page as base64 (window.__JELLYTANK_RIV_B64): no second request, no .riv MIME type needed. */
-function embeddedRiv(): ArrayBuffer | null {
-  const b64 = (window as unknown as { __JELLYTANK_RIV_B64?: string }).__JELLYTANK_RIV_B64;
-  if (typeof b64 !== "string" || !b64) return null;
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes.buffer;
-}
-
 async function main() {
   RuntimeLoader.setWasmUrl(wasmUrl);
   void RuntimeLoader.awaitInstance(); // start fetching + compiling the engine before anything else
   const canvas = document.getElementById("tank") as HTMLCanvasElement;
   const growthMultiplier = new URLSearchParams(location.search).get("fast") === "1" ? 20 : 1;
-  void downloadsCapability(); // ask once, early: the photo button shouldn't wait on it
-  // the synced copy's live tank and gifts; a live visit needs them to read the friend's tank
-  const friendsReady = DEMO || VISIT_SAVE ? Promise.resolve(null) : connectFriends();
-  // the synced copy reads the cloud save first (the loading screen covers the wait); the newer copy wins
-  let raw = READ_ONLY ? null : readSave();
-  if (!READ_ONLY) {
-    cloud = await connectCloud();
-    if (cloud?.initial && savedAt(cloud.initial.json) > savedAt(raw)) {
-      raw = cloud.initial.json;
-      try {
-        localStorage.setItem(SAVE_KEY, raw);
-      } catch {
-        /* ignore */
-      }
-    }
-    mySaveAt = savedAt(raw);
-  }
-  friends = await friendsReady;
-  // a live visit reads the friend's tank as it is now; if it can't, back to your own tank with a note
-  const liveSave = LIVE_ID ? await friends?.tank(LIVE_ID).then((t) => (t ? importTank(t.code) : null)) : null;
-  if (LIVE_ID && !liveSave) {
-    clearVisit();
-    noteAfterReload(
-      friends
-        ? "That tank isn't shared yet. Your friend needs to open this page once, signed in."
-        : "Live codes open on the synced copy of Jelly Tank, signed in.",
-    );
-    location.reload();
-    return;
-  }
-  // gifts friends left: claimed (marked) now, applied once the tank is up
-  const giftsReady: Promise<Gift[]> = friends && !READ_ONLY ? friends.claim() : Promise.resolve([]);
-  const visitSave = VISIT_SAVE ?? liveSave ?? null;
-  const loaded = visitSave
-    ? { save: visitSave, away: null }
+  const raw = READ_ONLY ? null : readSave();
+  const loaded = VISIT_SAVE
+    ? { save: VISIT_SAVE, away: null }
     : DEMO
       ? { save: demoSave(Date.now()), away: null }
       : loadGame(raw, Date.now(), { growthMultiplier });
@@ -285,8 +222,7 @@ async function main() {
   }
   const sharePanel = createSharePanel(
     () => exportTank(state),
-    (code) => importTank(code) !== null || (friends !== null && liveId(code) !== null),
-    friends?.code,
+    (code) => importTank(code) !== null,
   );
   (window as unknown as { __tank: State }).__tank = state;
 
@@ -356,11 +292,10 @@ async function main() {
   applySeason();
   setInterval(applySeason, 60_000); // a tab left open over midnight picks up the new day
 
-  const embedded = embeddedRiv();
   const rive = await new Promise<Rive>((resolve, reject) => {
     const r: Rive = new Rive({
       canvas,
-      ...(embedded ? { buffer: embedded } : { src: rivUrl }),
+      src: rivUrl,
       artboard: "Tank",
       stateMachines: "Tank",
       autoplay: true,
@@ -695,47 +630,6 @@ async function main() {
   });
   settings = settingsUi;
   if (VISIT_SAVE) showVisitBar();
-  if (LIVE_ID && friends) {
-    const f = friends;
-    showVisitBar({
-      async state() {
-        if (LIVE_ID === f.me || !f.canGift) return "hidden";
-        return (await f.gaveToday(LIVE_ID)) ? "given" : "ready";
-      },
-      async give(kind) {
-        audio.unlock();
-        const r = await f.give(LIVE_ID, kind);
-        if (r === "given") {
-          audio.play("buy");
-          buzz(12);
-        } else {
-          audio.play("ui");
-        }
-        return r;
-      },
-    });
-  }
-  const note = takeNote();
-  if (note) showNote(note);
-
-  // ---------------------------------------------------------------- friends' gifts
-
-  /** Apply claimed gifts through the sim (shells pay now, snacks drop food once the note is read); returns the note lines. */
-  const applyGifts = async (gifts: Gift[]) => {
-    const shells = gifts.filter((g) => g.kind === "shell").length;
-    if (shells) earn(state, shells * SHELL_DOLLARS, []);
-    persist(state, true);
-    const names = friends ? await friends.names([...new Set(gifts.map((g) => g.from))]) : {};
-    return { lines: giftLines(gifts, (id) => names[id] ?? ""), snacks: gifts.length - shells };
-  };
-  /** A free meal per snack (up to three pinches, a beat apart). */
-  const serveSnacks = (n: number) => {
-    for (let i = 0; i < Math.min(3, n); i++) {
-      setTimeout(() => {
-        if (feed(state) > 0) audio.play("feed");
-      }, 400 + i * 900);
-    }
-  };
 
   // ---------------------------------------------------------------- photo mode
 
@@ -824,26 +718,13 @@ async function main() {
   const affordable = new Set(SHOP_ITEMS.flatMap((it, i) => (state.dollars >= it.price ? [i] : [])));
   const cleanBtn = (K.buttons as unknown as { name: string; x: number; y: number; w: number; h: number }[] | undefined)?.find((b) => b.name === "clean");
 
-  /**
-   * After the first frame: the away note (with any gifts friends left), then the first-run tips
-   * (once per browser). Gifts that take longer to arrive get a note of their own afterwards.
-   */
+  /** After the first frame: the away note, any keepsake notes, then the first-run tips (once per browser). */
   const intro = async () => {
-    const early = await Promise.race([giftsReady, new Promise<null>((r) => setTimeout(() => r(null), 2500))]);
-    const gift = early?.length ? await applyGifts(early) : null;
-    const lines = [...(loaded.away?.lines ?? []), ...(gift?.lines ?? [])];
+    const lines = loaded.away?.lines ?? [];
     if (lines.length) await overlay.awayNote(lines);
-    if (gift) serveSnacks(gift.snacks);
     keepReady = true;
     await showKeeps();
     await tips();
-    if (early === null) {
-      const late = await giftsReady;
-      if (!late.length) return;
-      const g = await applyGifts(late);
-      await overlay.awayNote(g.lines);
-      serveSnacks(g.snacks);
-    }
   };
   const tips = async () => {
     let seen = READ_ONLY;
@@ -879,6 +760,7 @@ async function main() {
   };
 
   let last = performance.now();
+  let hiddenAt = Date.now(); // v15: when the tab was last hidden (catchUp counts from here)
   let loadedFrame = false;
   let room: Room | null = null; // v15: the room beside the tank on wide screens
   let cardTick = 0;
@@ -1040,47 +922,29 @@ async function main() {
     // hidden: no frames and no steps (the audio suspends itself, src/audio.ts)
     if (document.hidden) {
       pacer.stop();
-      persist(state, true); // hand the cloud the latest straight away
+      hiddenAt = Math.max(state.clock, Date.now());
+      persist(state);
       return;
     }
-    // back: the clock catches up (day or night, the day's pearl and requests); everything that moves picks up
-    // where it was, the first step one frame long rather than the time away
-    syncClock(state, Date.now());
+    // back: the time hidden counts like time away (sim catchUp: hunger, growth, dirt, with the same "while you
+    // were away" note a reload would show), the clock catches up (day or night, the day's pearl and requests);
+    // everything that moves picks up where it was, the first step one frame long rather than the time away
+    const now = Date.now();
+    const away = READ_ONLY ? (syncClock(state, now), null) : catchUp(state, hiddenAt, now);
+    hiddenAt = now;
     last = performance.now();
     applySeason();
     pacer.wake();
     pacer.start();
-    // back on this device: did another one save a newer tank meanwhile?
-    void cloud?.check().then((c) => {
-      if (c && c.at > mySaveAt + 1000) offerNewer(c.json);
-    });
+    if (away) {
+      persist(state);
+      void (async () => {
+        // never over another away note or a tip (that one's promise would never settle): after it
+        while (overlay.busy) await new Promise((r) => setTimeout(r, 400));
+        await overlay.awayNote(away.lines);
+      })();
+    }
   });
-  /** Another device saved a newer tank: offer it rather than overwrite either copy. */
-  const offerNewer = (json: string) => {
-    if (document.querySelector(".jt-newer")) return;
-    const bar = document.createElement("div");
-    bar.className = "jt-visit-bar jt-newer";
-    bar.setAttribute("role", "status");
-    bar.innerHTML = `<span>A newer tank was saved on another device</span><button type="button">Load it</button>`;
-    bar.querySelector("button")!.addEventListener("click", () => {
-      savesSuspended = true;
-      try {
-        localStorage.setItem(SAVE_KEY, json);
-      } catch {
-        savesSuspended = false;
-        return;
-      }
-      location.reload();
-    });
-    document.body.append(bar);
-  };
-  if (cloud) {
-    const c = cloud;
-    const label = () =>
-      c.status === "saving" ? "Cloud save: saving…" : c.status === "offline" ? "Cloud save: offline, saved on this device" : "Cloud save: synced";
-    settingsUi.setStatus(label());
-    c.onStatus(() => settingsUi.setStatus(label()));
-  }
   window.addEventListener("pagehide", () => persist(state));
 }
 

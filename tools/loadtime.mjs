@@ -1,7 +1,7 @@
-// Time to first frame of the published bundle over throttled connections.
-//   node tools/loadtime.mjs            (serves pub/jellytank.html + dist/ with gzip)
-//   LOAD_MODE=pages node tools/loadtime.mjs   (serves dist/index.html as GitHub Pages would: .riv uncompressed)
-//   LOAD_PORT=5211                      (the port, default 5196)
+// Time to first frame of the built game over throttled connections.
+//   npm run build && node tools/loadtime.mjs   (serves dist/ as GitHub Pages does: gzip for text, the .riv,
+//                                               PNGs and wasm... as they are; the service worker bypassed)
+//   LOAD_PORT=5211                              (the port, default 5196)
 // Two tanks: a NEW one (a moon polyp, empty storage) and a FULL one (Large tank, seven jellies of seven species),
 // each with no seasonal event (?season=none) and on a first visit during Halloween (?season=halloween: the
 // event's art, ev-halloween, comes on top of the jellies'; `every jelly drawn` then also waits for the decor).
@@ -12,22 +12,15 @@ import { extname, join } from "node:path";
 import puppeteer from "puppeteer-core";
 
 const PORT = Number(process.env.LOAD_PORT ?? 5196);
-const PAGES = process.env.LOAD_MODE === "pages";
-const page = PAGES ? null : readFileSync("pub/jellytank.html", "utf8");
-const shell = page && `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body>${page}</body></html>`;
 const types = { ".js": "text/javascript", ".wasm": "application/wasm", ".bin": "application/octet-stream", ".html": "text/html", ".json": "application/json", ".riv": "application/octet-stream", ".png": "image/png", ".webmanifest": "application/manifest+json" };
 // GitHub Pages compresses text types only; a .riv goes out as it is
-const compressible = (type) => !PAGES || !/octet-stream|image\//.test(type);
+const compressible = (type) => !/octet-stream|image\//.test(type);
 const cache = new Map();
 const server = createServer((req, res) => {
   const url = req.url.split("?")[0];
-  let body, type;
-  if (!PAGES && (url === "/" || url === "/index.html")) [body, type] = [Buffer.from(shell), "text/html"];
-  else {
-    const f = join("dist", url === "/" ? "index.html" : url);
-    if (!existsSync(f)) return res.writeHead(404).end();
-    [body, type] = [readFileSync(f), types[extname(f)] ?? "application/octet-stream"];
-  }
+  const f = join("dist", url === "/" ? "index.html" : url);
+  if (!existsSync(f)) return res.writeHead(404).end();
+  const [body, type] = [readFileSync(f), types[extname(f)] ?? "application/octet-stream"];
   const gz = compressible(type);
   if (!cache.has(url)) cache.set(url, gz ? gzipSync(body, { level: 6 }) : body);
   res.writeHead(200, { "content-type": type, ...(gz ? { "content-encoding": "gzip" } : {}), "cache-control": "no-store" });

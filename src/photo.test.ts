@@ -12,21 +12,24 @@ describe("photo mode", () => {
     expect(captionDate(t)).toBe("2 OCT 2026");
   });
 
-  it("saves through the downloads capability, and a declined save is not an error", async () => {
-    const calls: { filename: string; data: unknown }[] = [];
-    let decline = false;
-    const downloads = {
-      save: async (req: { filename: string; data: unknown }) => {
-        calls.push(req);
-        if (decline) throw { code: "declined", message: "no" };
-        return { status: "saved" };
-      },
-    };
-    (globalThis as unknown as { window: unknown }).window = { claude: { use: async (n: string) => (n === "downloads" ? downloads : null) } };
+  it("saves with a plain download link (and says so when there's no page to click it in)", async () => {
     const png = new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" });
-    expect(await savePng(png, "jelly-tank-2026-10-02.png")).toBe("saved");
-    expect(calls[0]).toEqual({ filename: "jelly-tank-2026-10-02.png", data: png });
-    decline = true;
-    expect(await savePng(png, "jelly-tank-2026-10-02.png")).toBe("declined");
+    const g = globalThis as unknown as { document?: unknown };
+    const had = g.document;
+    const clicked: { href: string; download: string }[] = [];
+    g.document = {
+      createElement: () => {
+        const a = { href: "", download: "", rel: "", click: () => clicked.push({ href: a.href, download: a.download }), remove: () => {} };
+        return a;
+      },
+      body: { append: () => {} },
+    };
+    try {
+      expect(await savePng(png, "jelly-tank-2026-10-02.png")).toBe("saved");
+      expect(clicked).toEqual([{ href: expect.stringMatching(/^blob:/), download: "jelly-tank-2026-10-02.png" }]);
+    } finally {
+      g.document = had;
+    }
+    if (had === undefined) expect(await savePng(png, "x.png")).toBe("failed");
   });
 });

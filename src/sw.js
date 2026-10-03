@@ -1,6 +1,6 @@
 /*
- * Jelly Tank's service worker: the GitHub Pages build only (src/offline.ts registers it when the page carries
- * <meta name="jellytank-sw">; the claude.ai pages from tools/page.mjs never do, and neither does dev).
+ * Jelly Tank's service worker, for the GitHub Pages build (src/offline.ts registers it when the page carries
+ * <meta name="jellytank-sw">, as index.html does; the dev server never does).
  *
  * vite.config.ts writes dist/sw.js from this file, filling in CONFIG below:
  *   { version, precache: [paths relative to the scope], versioned: [sprite group "file?v=hash" paths] }.

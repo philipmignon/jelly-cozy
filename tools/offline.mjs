@@ -1,11 +1,10 @@
-// The GitHub Pages build's service worker, end to end (needs `npm run build`; `node tools/page.mjs` too for the
-// last check). Serves dist/ under /jelly-cozy/ the way Pages does (text gzipped, max-age=600), then:
+// The GitHub Pages build's service worker, end to end (needs `npm run build`). Serves dist/ under /jelly-cozy/
+// the way Pages does (text gzipped, max-age=600), then:
 //   1. first visit over fast 4G: time to first frame; the worker installs and caches what the tank used
 //   2. repeat visit, HTTP cache off (a later day): time to first frame (the bundle comes from the worker's cache)
 //   3. offline reload: the tank still runs, jellies drawn
 //   4. a new build is deployed while the tank is open: the "Updated" chip shows; after reloading it doesn't,
 //      only one cache is left, and the tank still works offline
-//   5. the claude.ai page (pub/jellytank.html) never registers a worker
 //   OFFLINE_PORT=5213 [OFFLINE_NET=slow] node tools/offline.mjs
 import { createServer } from "node:http";
 import { readFileSync, existsSync } from "node:fs";
@@ -34,12 +33,7 @@ let hits = [];
 const server = createServer((req, res) => {
   const url = req.url.split("?")[0];
   hits.push(url);
-  if (url === "/pub/") {
-    const page = readFileSync("pub/jellytank.html", "utf8");
-    return res.writeHead(200, { "content-type": "text/html" }).end(`<!doctype html><html><head><meta charset="utf-8"></head><body>${page}</body></html>`);
-  }
-  if (url.startsWith("/pub/")) req.url = url.replace("/pub/", BASE);
-  const u = req.url.split("?")[0];
+  const u = url;
   if (!u.startsWith(BASE)) return res.writeHead(404).end();
   const body = served(u);
   if (!body) return res.writeHead(404).end();
@@ -167,17 +161,6 @@ try {
   check("offline after the update: the tank runs", v5.ok && !v5.lt.error && (await v5.p.evaluate(() => [...document.scripts].some((s) => s.src.includes("-b2.js")))));
   await v5.p.close();
 
-  // 5. the claude.ai page
-  if (existsSync("pub/jellytank.html")) {
-    const ctx2 = await browser.createBrowserContext();
-    const p = await ctx2.newPage();
-    await p.goto(`http://127.0.0.1:${PORT}/pub/`, { waitUntil: "domcontentloaded" });
-    await p.waitForFunction(() => window.__tank && window.__tank.t > 1, { timeout: 60000 });
-    await new Promise((r) => setTimeout(r, 1500));
-    const regs = await p.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).length);
-    check("the claude.ai page registers no worker", regs === 0, `registrations=${regs}`);
-    await ctx2.close();
-  }
   check("no page errors", errors.length === 0, errors.join(" | "));
 } finally {
   await browser.close();

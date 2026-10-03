@@ -64,7 +64,7 @@ const jelly = (k: Species, g: Stage, extra: Partial<SaveJelly> = {}): SaveJelly 
 });
 const owned = (...ds: number[]) => Array.from({ length: DECOR_N }, (_, d) => ds.includes(d));
 const tank = (slots: (SaveJelly | null)[], extra: Partial<Save> = {}): Save => ({
-  v: 11, foods: [true, false, false], themes: [true, false, false, false], theme: 0,
+  v: 12, foods: [true, false, false], themes: [true, false, false, false], theme: 0,
   slots: Array.from({ length: 7 }, (_, i) => slots[i] ?? null),
   dollars: 0, murk: 0, spots: [], night: false, lamp: null,
   owned: owned(), helpers: [false, false, false], decorX: DECOR.map((d) => d.x),
@@ -561,7 +561,7 @@ describe("v11 saves", () => {
     } as Record<string, unknown>;
     for (const j of v10.slots as (Record<string, unknown> | null)[]) if (j) delete j.trait;
     const { save } = loadGame(JSON.stringify(v10), NOON);
-    expect(save.v).toBe(11);
+    expect(save.v).toBe(12);
     expect(save.slots[0]!.trait).toBe(traitFromName("Taffy", 0));
     expect(save.slots[1]!.trait).toBe(traitFromName("Pip", 2));
     expect(save.owned).toEqual(owned(0, 3));
@@ -573,7 +573,7 @@ describe("v11 saves", () => {
     expect(s.keep!.days).toBe(1);
     expect(s.keep!.earned & 1).toBe(1); // an adult already raised: the bottle, quietly
     const out = toSave(s, NOON);
-    expect(out.v).toBe(11);
+    expect(out.v).toBe(12);
     expect(out.keep).toMatchObject({ days: 1, lastDay: dayKey(NOON) });
     expect(out.slots[0]!.trait).toBe(traitFromName("Taffy", 0));
     expect(out.owned.length).toBe(DECOR_N);

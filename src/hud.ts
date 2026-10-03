@@ -28,7 +28,8 @@ const CSS = `
 .jt-gear svg { width: 70%; height: 70%; shape-rendering: crispEdges; }
 .jt-menu {
   position: fixed; z-index: 8; min-width: 210px; box-sizing: border-box; margin: 0; padding: 6px;
-  display: grid; gap: 4px; list-style: none;
+  display: grid; gap: 4px; list-style: none; align-content: start;
+  overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #b07a4a transparent;
   font: 12px/1.2 ${FONT}; color: #2b1712;
   background: #f1e2c4; border: 3px solid #45261a; border-radius: 10px;
   box-shadow: inset 0 0 0 2px #d9bf94, 0 4px 0 #2b1712, 0 12px 30px rgba(0, 0, 0, 0.45);
@@ -45,7 +46,6 @@ const CSS = `
 .jt-menu .label { flex: 1; }
 .jt-menu .state { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: #d9bf94; color: #693c24; }
 .jt-menu [aria-checked="true"] .state { background: #2a7f42; color: #fffaf0; }
-.jt-menu .jt-menu-status { padding: 6px 10px 2px; border-top: 2px dashed #d9bf94; font-size: 10px; color: #8e5632; text-transform: uppercase; }
 `;
 
 const ink = (rects: string, fill: string) =>
@@ -94,8 +94,6 @@ export interface SettingsHandlers {
 export interface Settings {
   readonly isOpen: boolean;
   close(): void;
-  /** A status line at the foot of the menu (the synced copy's cloud save); null hides it. */
-  setStatus(text: string | null): void;
 }
 
 /** Artboard rect of the gear: the hood's right end (the hood is y 0..42). */
@@ -180,11 +178,6 @@ export function createSettings(
   const saver = on.batterySaver;
   const battery = item("jt-menu-battery", ICONS.battery, "Battery saver", true, () => saver?.set(!saver.get()));
   if (!saver) (battery.parentElement as HTMLElement).hidden = true;
-  const status = document.createElement("li");
-  status.className = "jt-menu-status";
-  status.setAttribute("role", "none");
-  status.hidden = true;
-  menu.append(status);
 
   function sync() {
     music.setAttribute("aria-checked", String(!!audio.music));
@@ -234,7 +227,9 @@ export function createSettings(
       const i = items.indexOf(document.activeElement as HTMLButtonElement);
       const n = items.length;
       const to = e.key === "Home" ? 0 : e.key === "End" ? n - 1 : (i + (e.key === "ArrowDown" ? 1 : -1) + n) % n;
-      items[e.key.startsWith("Arrow") && i < 0 ? 0 : to]?.focus({ preventScroll: true });
+      const next = items[e.key.startsWith("Arrow") && i < 0 ? 0 : to];
+      next?.focus({ preventScroll: true });
+      next?.scrollIntoView({ block: "nearest" }); // the menu scrolls on a short screen: keep the focused item in it
       e.preventDefault();
     }
     if ((e.key === "m" || e.key === "M") && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
@@ -259,7 +254,11 @@ export function createSettings(
     Object.assign(gear.style, { left: `${c.x - w}px`, top: `${top}px`, width: `${w}px`, height: `${h}px` });
     // the menu hangs below the gear, right-aligned to it, and never off the screen's left edge
     const mw = menu.offsetWidth || 210;
-    Object.assign(menu.style, { left: `${Math.max(8, c.x - mw)}px`, top: `${top + h + 8}px` });
+    // v15: ten items only just fit a 360×640 phone: on a shorter screen the menu stops 8 px above the bottom
+    // and scrolls (arrow keys and Tab bring the focused item into view)
+    const mtop = top + h + 8;
+    const vh = window.visualViewport?.height ?? window.innerHeight;
+    Object.assign(menu.style, { left: `${Math.max(8, c.x - mw)}px`, top: `${mtop}px`, maxHeight: `${Math.max(120, vh - mtop - 8)}px` });
   }
   new ResizeObserver(place).observe(canvas);
   window.addEventListener("resize", place);
@@ -270,9 +269,5 @@ export function createSettings(
       return !menu.hidden;
     },
     close,
-    setStatus(text) {
-      status.hidden = text === null;
-      status.textContent = text ?? "";
-    },
   };
 }

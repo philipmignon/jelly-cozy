@@ -45,62 +45,6 @@ function startServer() {
   });
 }
 
-/**
- * The synced copy as the artifact runs it: window.__JELLYTANK_SYNC and a fake window.claude (db + user)
- * injected before the page loads. The fake db lives in localStorage, so it outlasts reloads, and the
- * signed-in user is whoever localStorage.__fakeUser names: players take turns in one fresh profile.
- * It refuses writes outside the writer's own tanks/<id>, gifts/<id> and data/users/<id>, as the rules do.
- */
-function fakeClaude() {
-  window.__JELLYTANK_SYNC = true;
-  const load = () => JSON.parse(localStorage.getItem("__fakedb") || "{}");
-  const store = (d) => localStorage.setItem("__fakedb", JSON.stringify(d));
-  const me = () => localStorage.getItem("__fakeUser");
-  const own = (path) => {
-    const s = path.split("/");
-    return s[0] === "tanks" || s[0] === "gifts" ? s[1] === me() : s[0] === "data" && s[2] === me();
-  };
-  const readable = (path) => path.split("/")[0] !== "data" || path.split("/")[2] === me();
-  const snap = (path) => {
-    const d = load()[path];
-    const ok = d !== undefined && readable(path);
-    return { exists: ok, id: path.split("/").pop(), data: () => (ok ? d : undefined), metadata: { fromCache: false, hasPendingWrites: false } };
-  };
-  const db = {
-    doc: (path) => ({
-      id: path.split("/").pop(),
-      path,
-      get: async () => snap(path),
-      set: async (data) => {
-        if (!own(path)) throw { code: "invalid_argument", message: "write refused" };
-        const d = load();
-        d[path] = JSON.parse(JSON.stringify(data));
-        store(d);
-      },
-    }),
-    collection: (path) => {
-      const filters = [];
-      const q = {
-        where(field, _op, value) {
-          filters.push([field, value]);
-          return q;
-        },
-        async get() {
-          const n = path.split("/").length + 1;
-          const docs = Object.keys(load())
-            .filter((p) => p.startsWith(`${path}/`) && p.split("/").length === n)
-            .map(snap)
-            .filter((s) => s.exists && filters.every(([f, v]) => Array.isArray(s.data()[f]) && s.data()[f].includes(v)));
-          return { docs, size: docs.length, empty: !docs.length };
-        },
-      };
-      return q;
-    },
-  };
-  const user = { id: async () => me(), can: async () => true };
-  window.claude = { use: async (n) => (n === "db" ? db : n === "user" ? user : null) };
-}
-
 /** Navigations here wait for the DOM only (window.__tank says when the tank is up), not for web fonts. */
 const DCL = { waitUntil: "domcontentloaded" };
 
@@ -256,69 +200,54 @@ async function keepsakeFlow(browser) {
   await ctx.close();
 }
 
-/** Live visits and gifts on the synced copy: A publishes, B visits A's live tank and leaves a shell, A claims it. */
-async function friendsFlow(browser) {
+/**
+ * v15: time in a hidden tab counts like time away. The tab is hidden (another tab brought to the front), the
+ * page's clock jumps an hour, the tab comes back: the jelly is hungrier and the "while you were away" note shows.
+ */
+async function hiddenFlow(browser) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
   page.setDefaultNavigationTimeout(90_000);
   await page.setViewport({ ...VIEW, deviceScaleFactor: 1 });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
-  await page.evaluateOnNewDocument(fakeClaude);
-  const as = async (user) => {
-    await page.evaluate((u) => {
-      localStorage.setItem("__fakeUser", u);
-      localStorage.setItem("jellytank:tips", "1");
-    }, user);
-    await page.reload(DCL);
-    await page.waitForFunction(() => window.__tank && window.__tank.t > 0.5, { timeout: 15000 });
-  };
-  const db = () => page.evaluate(() => JSON.parse(localStorage.getItem("__fakedb") || "{}"));
-  await page.goto(`http://localhost:${PORT}/`, DCL);
-  await as("u_a");
-
-  // A's tank goes up as a live tank, and A's share panel offers the live code
-  const published = await page.waitForFunction(() => (JSON.parse(localStorage.getItem("__fakedb") || "{}")["tanks/u_a"] || {}).code, { timeout: 8000 }).then(() => true, () => false);
-  check("sync: my tank is published live", published);
-  await page.click(".jt-gear");
-  await page.click(".jt-menu-share");
-  await sleep(150);
-  const liveCode = await page.evaluate(() => document.querySelector(".jt-gift-live")?.textContent ?? "");
-  check("sync: the share panel offers a live code", liveCode === "JTLIVE1.u_a", liveCode);
-  await page.click(".jt-share .x");
-
-  // B pastes it: A's tank, read-only, with a gift button
-  await as("u_b");
-  await page.click(".jt-gear");
-  await page.click(".jt-menu-share");
-  await page.evaluate((c) => { document.querySelector("#jt-visit-code").value = c; }, liveCode);
-  await Promise.all([page.waitForNavigation(DCL), page.click(".jt-share .go")]);
+  // the page's clock: Date.now() plus an offset the test can move (the sim and catchUp both read Date.now)
+  await page.evaluateOnNewDocument(() => {
+    const real = Date.now.bind(Date);
+    window.__clockOffset = 0;
+    Date.now = () => real() + window.__clockOffset;
+  });
+  await page.goto(`http://localhost:${PORT}/?season=none`, DCL);
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem("jellytank:tips", "1");
+  });
+  await page.reload(DCL);
   await page.waitForFunction(() => window.__tank && window.__tank.t > 0.5, { timeout: 15000 });
-  const giftBtn = await page.waitForSelector(".jt-gift-open:not([hidden])", { timeout: 5000 }).then(() => true, () => false);
-  check("sync: a live visit shows the gift button", giftBtn && (await page.evaluate(() => !!document.querySelector(".jt-visit-bar"))));
-  await page.click(".jt-gift-open");
-  await page.click(".jt-gift-shell");
-  await page.waitForFunction(() => /Gift left/.test(document.querySelector(".jt-gift-note")?.textContent ?? ""), { timeout: 5000 }).catch(() => {});
-  await page.screenshot({ path: "shots/e2e-11-gift.png" });
-  const gifts = (await db())["gifts/u_b"];
-  check("sync: the shell is left in B's gift document for A", gifts?.to?.includes("u_a") && gifts.sent.u_a?.[0]?.kind === "shell", JSON.stringify(gifts));
-  check("sync: one gift a day", await page.evaluate(() => document.querySelector(".jt-gift-open").disabled));
-  await Promise.all([page.waitForNavigation(DCL), page.click(".jt-visit-bar .back")]);
-  await page.waitForFunction(() => window.__tank && window.__tank.t > 0.5, { timeout: 15000 });
+  const before = await page.evaluate(() => ({ full: window.__tank.slots.find(Boolean).fullness, note: !document.querySelector(".jt-away")?.hidden }));
 
-  // A opens their tank: the shell is claimed once, with a note
-  const before = await page.evaluate(() => JSON.parse(localStorage.getItem("jellytank:v5")).dollars);
-  await as("u_a");
-  const noted = await page.waitForFunction(() => /left you a shell/.test(document.querySelector(".jt-away:not([hidden])")?.textContent ?? ""), { timeout: 8000 }).then(() => true, () => false);
-  await page.screenshot({ path: "shots/e2e-12-gift-claimed.png" });
-  const after = await page.evaluate(() => window.__tank.dollars);
-  check("sync: the recipient gets the gift note and +5", noted && after >= before + 5, `${before} -> ${after}`);
-  check("sync: the claim is marked", ((await db())["data/users/u_a/gifts"]?.seen ?? {}).u_b > 0);
+  const other = await ctx.newPage();
+  await other.bringToFront();
+  const hidden = await page.waitForFunction(() => document.hidden, { timeout: 5000 }).then(() => true, () => false);
+  check("hidden tab: the page is hidden behind another tab", hidden);
+  const drawn0 = await page.evaluate(() => window.__pace.drawn);
+  await sleep(500);
+  const drawn1 = await page.evaluate(() => window.__pace.drawn);
+  check("hidden tab: no frames drawn while hidden", drawn1 === drawn0, `${drawn0} -> ${drawn1}`);
+  await page.evaluate(() => (window.__clockOffset += 3_600_000)); // an hour passes
+  await page.bringToFront();
+  await other.close();
+  await page.waitForFunction(() => !document.hidden, { timeout: 5000 }).catch(() => {});
+  const noted = await until(page, () => !document.querySelector(".jt-away").hidden && document.querySelectorAll(".jt-away li").length > 0, null, 8000);
+  const after = await page.evaluate(() => ({ full: window.__tank.slots.find(Boolean).fullness, lines: [...document.querySelectorAll(".jt-away li")].map((l) => l.textContent) }));
+  await page.screenshot({ path: "shots/e2e-hidden-away.png" });
+  check("hidden tab: an hour hidden leaves the jelly hungrier", after.full < before.full - 0.05, `${before.full.toFixed(3)} -> ${after.full.toFixed(3)}`);
+  check("hidden tab: the away note shows, as after a reload", !before.note && noted, JSON.stringify(after.lines));
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("jellytank:v5")));
+  check("hidden tab: the caught-up tank is saved", saved && Math.abs(saved.slots.find(Boolean).fullness - after.full) < 0.02, JSON.stringify(saved?.slots?.find(Boolean)?.fullness));
   await page.click("#jt-away-ok");
-  await as("u_a");
-  await sleep(3000);
-  check("sync: a gift is claimed only once", !(await page.evaluate(() => /shell/.test(document.querySelector(".jt-away:not([hidden])")?.textContent ?? ""))));
-  check("sync: no page errors", errors.length === 0, errors.join(" | "));
+  check("hidden tab: the tank runs again", await framesOn(page, 3).then(() => page.evaluate(() => window.__tank.t > 1)));
+  check("hidden tab: no page errors", errors.length === 0, errors.join(" | "));
   await ctx.close();
 }
 
@@ -459,8 +388,19 @@ async function keyboardFlow(browser) {
   await hears("jt-a11y-focus", /Blue blubber/);
   check("kb: arrows walk the cards", /Fried egg/.test(right) && /Blue blubber/.test(await live("jt-a11y-focus")), right);
   await page.screenshot({ path: "shots/e2e-14-kb-shop.png" });
+  // the jelly bought here must come plain: a rare colour (10%, plus the 8% seasonal ghost in October) earns the
+  // "Spot a rare colour" keepsake, whose note takes focus, and the Escape below would (rightly) close the note
+  // rather than the shop. That was the old "Escape closes the shop" flake. Its morph rolls see 0.5 (no morph).
+  await page.evaluate(() => {
+    const t = window.__tank;
+    const r = t.rand;
+    t.rand = () => 0.5;
+    window.__restoreRand = () => (t.rand = r);
+  });
   await key("Enter");
   await until(page, () => window.__tank.slots.filter(Boolean).length === 2, null, 5000);
+  await page.evaluate(() => window.__restoreRand());
+  check("kb: the bought jelly came plain (no keepsake note over the shop)", await page.evaluate(() => window.__tank.slots.filter(Boolean).every((j) => j.morph === 0) && !!document.querySelector(".jt-keep-note")?.hidden));
   await hears("jt-a11y-focus", /Bought Blue blubber/);
   const bought = await page.evaluate(() => ({ n: window.__tank.slots.filter(Boolean).length, dollars: window.__tank.dollars }));
   check("kb: Enter buys it", bought.n === 2 && bought.dollars === 260 && /Bought Blue blubber/.test(await live("jt-a11y-focus")), JSON.stringify(bought));
@@ -567,7 +507,11 @@ async function main() {
     const errors = [];
     page.on("pageerror", (e) => errors.push(String(e)));
     await page.goto(`http://localhost:${PORT}/?fast=1`);
-    await page.evaluate(() => { localStorage.clear(); indexedDB.deleteDatabase("jellytank-album"); }); // v14: and the photo album
+    await page.evaluate(() => new Promise((done) => { // v14: and the photo album (waited for, so a later open can't queue behind it)
+      localStorage.clear();
+      const del = indexedDB.deleteDatabase("jellytank-album");
+      del.onsuccess = del.onerror = del.onblocked = () => done();
+    }));
     await page.reload();
     await page.waitForFunction(() => window.__tank && window.__tank.t > 0.5, { timeout: 15000 });
 
@@ -950,7 +894,7 @@ async function main() {
     check("the menu stays open after a toggle", await page.evaluate(() => !document.querySelector(".jt-menu").hidden));
     check("music button toggles", m0 !== m1, `${m0} -> ${m1}`);
 
-    // photo mode: no window.claude here, so the PNG goes out through an <a download> link; catch its blob
+    // photo mode: the PNG goes out through an <a download> link; catch its blob
     await page.evaluate(() => {
       window.__photoHref = null;
       HTMLAnchorElement.prototype.click = function () {
@@ -1087,6 +1031,11 @@ async function main() {
     await click(...button("clean"));
 
     const j = s.slots.find((x) => x && x.g > 0) ?? s.slots[0];
+    // a jelly that has swum past the edge of the view can't be tapped: bring it back to the middle first
+    await page.evaluate(() => {
+      const t = window.__tank, x = t.slots[0], sx = x.x + t.cam.x;
+      if (sx < 80 || sx > 640) x.x = 360 - t.cam.x;
+    });
     const petScene = await scene();
     const petLog = [];
     for (let k = 0; k < 4; k++) {
@@ -1142,7 +1091,7 @@ async function main() {
     await keyboardFlow(browser);
     await roomFlow(browser);
     await keepsakeFlow(browser);
-    await friendsFlow(browser);
+    await hiddenFlow(browser);
     await batteryFlow(browser);
   } finally {
     await browser.close();

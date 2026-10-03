@@ -1,19 +1,17 @@
-// Screenshots of the built page at common device sizes (pub/jellytank.html + dist/assets).
-//   node tools/phones.mjs  -> shots/phone-<name>-{tank,menu,card}.png
-// Also checks that none of them shows or downloads the wide-screen room (src/roomfit.ts): exits 1 if one does.
+// Screenshots of the built game (dist/, as GitHub Pages serves it) at common device sizes.
+//   npm run build && node tools/phones.mjs  -> shots/phone-<name>-{tank,menu}.png
+// Also checks that none of them shows or downloads the wide-screen room (src/roomfit.ts), and that the settings
+// menu fits on screen (scrolling when it's taller, every item reachable): exits 1 if not.
 import { createServer } from "node:http";
 import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { extname, join } from "node:path";
 import puppeteer from "puppeteer-core";
 
 const PORT = Number(process.env.PHONES_PORT ?? 5195);
-const page = readFileSync("pub/jellytank.html", "utf8");
-const shell = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}</style></head><body>${page}</body></html>`;
-const types = { ".js": "text/javascript", ".wasm": "application/wasm" };
+const types = { ".js": "text/javascript", ".wasm": "application/wasm", ".html": "text/html", ".json": "application/json", ".png": "image/png", ".webmanifest": "application/manifest+json" };
 const server = createServer((req, res) => {
   const url = req.url.split("?")[0];
-  if (url === "/") return res.writeHead(200, { "content-type": "text/html" }).end(shell);
-  const f = join("dist", url);
+  const f = join("dist", url === "/" ? "index.html" : url);
   if (!existsSync(f)) return res.writeHead(404).end();
   res.writeHead(200, { "content-type": types[extname(f)] ?? "application/octet-stream" }).end(readFileSync(f));
 }).listen(PORT, "127.0.0.1");
@@ -32,6 +30,7 @@ const report = [];
 // the room's chunk and art (src/room.ts -> assets/room-*.js, sprites/room.json)
 const isRoom = (url) => /\/assets\/room-[^/]*\.js|\/sprites\/room\.json/.test(url);
 let roomFetched = 0;
+let menuBad = 0;
 for (const [name, vp] of Object.entries(devices)) {
   const p = await browser.newPage();
   const roomUrls = [];
@@ -58,6 +57,30 @@ for (const [name, vp] of Object.entries(devices)) {
   await p.tap(".jt-gear");
   await new Promise((r) => setTimeout(r, 300));
   await p.screenshot({ path: `shots/phone-${name}-menu.png` });
+  // v15: the menu (ten items) stays on screen; on a short one it scrolls, and End brings the last item into view
+  const menu = await p.evaluate(() => {
+    const m = document.querySelector(".jt-menu");
+    if (!m || m.hidden) return null;
+    const r = m.getBoundingClientRect();
+    return { bottom: Math.round(r.bottom), vh: innerHeight, scrolls: m.scrollHeight > m.clientHeight + 1, items: m.querySelectorAll("li:not([hidden]) button").length };
+  });
+  if (menu) {
+    await p.keyboard.press("End");
+    await new Promise((r) => setTimeout(r, 200));
+    const last = await p.evaluate(() => {
+      const items = [...document.querySelectorAll(".jt-menu li:not([hidden]) button")];
+      const b = items[items.length - 1];
+      const r = b.getBoundingClientRect();
+      const m = document.querySelector(".jt-menu").getBoundingClientRect();
+      return { focused: document.activeElement === b, inView: r.top >= m.top - 1 && r.bottom <= m.bottom + 1 && r.bottom <= innerHeight };
+    });
+    const ok = menu.bottom <= menu.vh && last.focused && last.inView;
+    report.push(`  menu: ${menu.items} items, bottom ${menu.bottom}/${menu.vh} px, ${menu.scrolls ? "scrolls" : "fits"}; End -> last item ${last.focused && last.inView ? "focused and in view" : "NOT REACHABLE"}`);
+    if (!ok) menuBad++;
+    if (menu.scrolls) await p.screenshot({ path: `shots/phone-${name}-menu-end.png` });
+  } else {
+    report.push("  menu: not open (the turn-upright screen covers the tank)");
+  }
   // the smallest HTML control showing (its box, before any invisible hit margin): WCAG 2.2 asks for 24 px
   const small = await p.evaluate(() =>
     [...document.querySelectorAll("button")]
@@ -74,5 +97,9 @@ await browser.close();
 server.close();
 if (roomFetched) {
   console.log("FAIL: a phone-sized screen fetched or showed the room");
+  process.exitCode = 1;
+}
+if (menuBad) {
+  console.log("FAIL: the settings menu ran off a screen or its last item couldn't be reached");
   process.exitCode = 1;
 }

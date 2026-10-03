@@ -28,7 +28,9 @@ export function lively(s: State): boolean {
     (s.focus.e > 0 && s.focus.e < 1) || // the card's close-up easing in or out
     s.wall !== null || // the tank widening after an upgrade
     s.wipe !== null ||
-    s.lifted >= 0 // a decoration being moved
+    s.lifted >= 0 || // a decoration being moved
+    (s.drawer.e > 0 && s.drawer.e < 1) // v15: the put-away drawer sliding (after a drop too)
+    // night visitors are s.visit too; the journal, album and room are HTML/CSS and need no Rive frames
   );
 }
 

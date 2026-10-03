@@ -45,7 +45,7 @@ const jelly = (k: Species, g: Stage, extra: Partial<SaveJelly> = {}): SaveJelly 
   k, g, gp: [0, 4, 12, 30][g]!, care: 0, fullness: 0.7, affection: 0.4, anchor: -1, spot: -1, name: "Mochi", born: 0, content: 0, morph: 0, trait: 1, ...extra,
 });
 const tank = (slots: (SaveJelly | null)[], extra: Partial<Save> = {}): Save => ({
-  v: 11, foods: [true, false, false], themes: [true, false, false, false], theme: 0,
+  v: 12, foods: [true, false, false], themes: [true, false, false, false], theme: 0,
   slots: Array.from({ length: 7 }, (_, i) => slots[i] ?? null),
   dollars: 0, murk: 0, spots: [], night: false, lamp: null, owned: [false, false, false, false, false], helpers: [false, false, false],
   decorX: DECOR.map((d) => d.x), pearlDay: "", lastSeen: 0, tier: 0, cam: 0, journal: journalFrom(slots, 0), ...extra,
@@ -160,7 +160,7 @@ describe("v12: morph ids in saves (v7..v9 wrote booleans)", () => {
     slots[1]!.morph = false;
     slots[2]!.morph = 2;
     const save = loadSave(JSON.stringify(raw), 0);
-    expect(save.v).toBe(11);
+    expect(save.v).toBe(12);
     expect(save.slots.slice(0, 3).map((j) => j!.morph)).toEqual([1, 0, 2]);
     // journal: the old true became the classic bit; what's in the tank is noted too
     expect(save.journal[2]!.morphSeen).toBe(1);
@@ -173,15 +173,15 @@ describe("v12: morph ids in saves (v7..v9 wrote booleans)", () => {
     expect(back.journal).toEqual(save.journal);
   });
 
-  it("every save version from v2 to v11 loads (v6 never existed: it changed no save fields)", () => {
+  it("every save version from v2 to v12 loads (v6 never existed: it changed no save fields)", () => {
     const base = tank([jelly(0, 3, { morph: 2 })]);
-    for (const v of [2, 3, 4, 5, 7, 8, 9, 10, 11]) {
+    for (const v of [2, 3, 4, 5, 7, 8, 9, 10, 11, 12]) {
       const { save } = loadGame(JSON.stringify({ ...base, v }), 0);
-      expect(save.v).toBe(11);
+      expect(save.v).toBe(12);
       expect([save.slots[0]!.g, save.slots[0]!.morph], `v${v}`).toEqual([3, 2]);
     }
     // a newer game's save isn't guessed at: a fresh tank (one plain moon polyp)
-    for (const v of [6, 12]) {
+    for (const v of [6, 13]) {
       const { save } = loadGame(JSON.stringify({ ...base, v }), 0);
       expect([save.slots[0]!.g, save.slots[0]!.morph], `v${v}`).toEqual([0, 0]);
     }

@@ -44,7 +44,7 @@ export default defineConfig({
   test: { include: ["src/**/*.test.ts"], environment: "node" },
   plugins: [
     {
-      // the loading screen markup is shared with tools/page.mjs
+      // the loading screen markup (src/loader.html) goes into index.html
       name: "jellytank-loader",
       transformIndexHtml: (html) => html.replace("<!--loader-->", readFileSync("src/loader.html", "utf8")),
     },

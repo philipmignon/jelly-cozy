@@ -150,6 +150,17 @@ describe("what keeps the tank lively", () => {
     expect(lively(u)).toBe(false); // closed in and holding
   });
 
+  it("v15: lively while the put-away drawer slides back down after a drop", () => {
+    const s = tank();
+    settle(s, 1);
+    s.drawer.e = 0.6; // easing out, nothing carried
+    expect(s.lifted).toBe(-1);
+    expect(lively(s)).toBe(true);
+    settle(s, 2);
+    expect(s.drawer.e).toBe(0);
+    expect(lively(s)).toBe(false);
+  });
+
   it("only the bells' steady pulses don't count as something happening", () => {
     expect(wakes({ type: "pulse" })).toBe(false);
     expect(wakes({ type: "ate" })).toBe(true);

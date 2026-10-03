@@ -1,7 +1,6 @@
 /**
  * Photo mode: a PNG of the tank, cropped to the glass (no hood HUD, no cabinet shelf), with a thin
- * caption strip, saved through the artifact's `downloads` capability or, where there is none
- * (GitHub Pages, local dev), an ordinary download link.
+ * caption strip, saved with an ordinary download link.
  *
  * The canvas is WebGL without preserveDrawingBuffer, so its pixels are only readable in the same
  * task that drew them. capture() stops Rive's loop, has it draw one frame synchronously
@@ -105,47 +104,10 @@ export const toPng = (c: HTMLCanvasElement) =>
     }
   });
 
-interface DownloadsLike {
-  save(req: { filename: string; data: Blob }): Promise<unknown>;
-}
-interface ClaudeLike {
-  use(name: string): Promise<unknown>;
-}
+export type SaveResult = "saved" | "failed";
 
-let downloads: Promise<DownloadsLike | null> | null = null;
-/** The artifact's downloads namespace, asked for once (null off claude.ai or when not granted). */
-export function downloadsCapability(): Promise<DownloadsLike | null> {
-  downloads ??= (async () => {
-    const claude = (window as unknown as { claude?: ClaudeLike }).claude;
-    if (!claude?.use) return null;
-    try {
-      return ((await claude.use("downloads")) as DownloadsLike | null) ?? null;
-    } catch {
-      return null;
-    }
-  })();
-  return downloads;
-}
-
-export type SaveResult = "saved" | "declined" | "failed";
-
-/**
- * Offer the PNG. On claude.ai the viewer confirms the save (and may decline); elsewhere a plain
- * <a download> link does it.
- */
+/** Offer the PNG: a plain <a download> link. */
 export async function savePng(blob: Blob, filename: string): Promise<SaveResult> {
-  const dl = await downloadsCapability();
-  if (dl) {
-    try {
-      await dl.save({ filename, data: blob });
-      return "saved";
-    } catch (e) {
-      const code = (e as { code?: unknown } | null)?.code;
-      if (code === "declined") return "declined";
-      if (code !== "unavailable" && code !== "not_granted" && code !== "capability_disabled" && code !== "capability_removed") return "failed";
-      // the capability can't run here after all: fall through to a plain link
-    }
-  }
   try {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

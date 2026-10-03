@@ -12,6 +12,7 @@ import {
   decorBaseY,
   journalFrom,
   loadGame,
+  putAway,
   rightGlass,
   setReducedMotion,
   step,
@@ -63,7 +64,7 @@ const jelly = (k: Species, g: Stage, extra: Partial<SaveJelly> = {}): SaveJelly 
 });
 const owned = (...ns: number[]) => Array.from({ length: DECOR.length }, (_, i) => ns.includes(i));
 const tank = (slots: (SaveJelly | null)[], extra: Partial<Save> = {}): Save => ({
-  v: 11, foods: [true, false, false], themes: [true, false, false, false], theme: 0,
+  v: 12, foods: [true, false, false], themes: [true, false, false, false], theme: 0,
   slots: Array.from({ length: 7 }, (_, i) => slots[i] ?? null),
   dollars: 10, murk: 0, spots: [], night: true, lamp: null, owned: owned(), helpers: [false, false, false],
   decorX: DECOR.map((d) => d.x), pearlDay: "", lastSeen: NIGHT, tier: 0, cam: 0, journal: journalFrom(slots, 0), ...extra,
@@ -216,6 +217,27 @@ describe("v14: night visitors", () => {
     run(t, 4);
     expect(Math.abs(w.x - x0)).toBeGreaterThan(20);
     expect(w.f).toBeLessThan(2);
+  });
+
+  it("v15: a helmet put away is no home: the crab heading for it scuttles off, and the next one wanders the sand", () => {
+    const s = createState(tank([jelly(0, 3)], { owned: owned(2) }), seeded(10));
+    const v = visit(s, HERMIT, { x: s.decorX[2]!, y: decorBaseY(s, 2) });
+    expect(v.home).toBe(true);
+    expect(putAway(s, 2)).toBe(true);
+    step(s, 1 / 60);
+    expect(v.home).toBe(false);
+    expect(v.leaveAt).toBeLessThanOrEqual(v.age);
+    run(s, 10);
+    expect(s.visit).toBe(null);
+    // the sim plans the next hermit with no home while the helmet stays in the drawer
+    s.lastVisitor = MANTA;
+    for (let i = 0; i < 4000 && s.visit?.kind !== HERMIT; i++) {
+      s.visit = null;
+      s.nextVisit = 0;
+      step(s, 1 / 60);
+    }
+    expect(s.visit?.kind).toBe(HERMIT);
+    expect(s.visit!.home).toBe(false);
   });
 
   it("they leave when the light comes on", () => {

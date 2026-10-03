@@ -51,7 +51,7 @@ const run = (s: State, seconds: number, dt = 1 / 60) => {
 const moon: SaveJelly = { k: 0, g: 3, gp: 30, care: 0, fullness: 0.7, affection: 0.4, anchor: -1, spot: -1, name: "Mochi", born: 0, content: 0, morph: 0, trait: 0 };
 const owned = (...ds: number[]) => Array.from({ length: DECOR_N }, (_, d) => ds.includes(d));
 const tank = (extra: Partial<Save> = {}): Save => ({
-  v: 11, foods: [true, false, false], themes: [true, false, false, false, false], theme: 0,
+  v: 12, foods: [true, false, false], themes: [true, false, false, false, false], theme: 0,
   slots: [moon, null, null, null, null, null, null],
   dollars: 0, murk: 0, spots: [], night: false, lamp: null,
   owned: owned(), helpers: [false, false, false], decorX: DECOR.map((d) => d.x),
@@ -206,7 +206,7 @@ describe("put away: saves and share codes", () => {
     expect("stored" in toSave(s, NOON)).toBe(false);
     putAway(s, 1);
     const save = toSave(s, NOON);
-    expect(save.v).toBe(11);
+    expect(save.v).toBe(12);
     expect(save.stored).toEqual(owned(1));
     const back = createState(loadSave(JSON.stringify(save), NOON), seeded());
     expect(placed(back, 0)).toBe(true);
@@ -222,6 +222,23 @@ describe("put away: saves and share codes", () => {
     expect(s.stored[0]).toBe(true);
     expect(s.stored[1]).toBe(false);
     expect(loadSave(JSON.stringify({ ...tank(), stored: "yes" }), NOON).stored).toBeUndefined();
+  });
+
+  it("v12: a v11 save (no stored, no visitorsSeen) loads with everything placed and an empty visitor log", () => {
+    const v11 = { ...tank({ owned: owned(0, CLAM), dollars: 42 }), v: 11 } as Record<string, unknown>;
+    const save = loadSave(JSON.stringify(v11), NOON);
+    expect(save.v).toBe(12);
+    expect(save.dollars).toBe(42);
+    expect(save.owned).toEqual(owned(0, CLAM));
+    expect("stored" in save).toBe(false);
+    expect("visitorsSeen" in save).toBe(false);
+    const s = createState(save, seeded());
+    expect(placed(s, 0) && placed(s, CLAM)).toBe(true);
+    expect(storedDecor(s)).toEqual([]);
+    expect(s.visitorsSeen).toEqual({});
+    // every version from 2 to 12 loads except 6 (never written); 6 and 13 are a new game
+    for (const v of [2, 3, 4, 5, 7, 8, 9, 10, 11, 12]) expect(loadSave(JSON.stringify({ ...tank({ dollars: 42 }), v }), NOON).dollars, `v${v}`).toBe(42);
+    for (const v of [6, 13]) expect(loadSave(JSON.stringify({ ...tank({ dollars: 42 }), v }), NOON).dollars, `v${v}`).not.toBe(42);
   });
 
   it("share codes leave put-away decorations out", () => {

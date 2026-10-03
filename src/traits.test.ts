@@ -312,18 +312,18 @@ describe("every trait still eats and can be petted", () => {
 describe("the bubbler", () => {
   const bubbled = (trait = CURIOUS, extra: Partial<Save> = {}) => one(trait, 200, 700, { owned: owned(BUBBLER), ...extra });
 
-  it("is shop item 24 on the DECOR tab, decoration 5, about 80 dollars; it shows when bought", () => {
+  it("is shop item 24 on the DECOR tab, decoration 10 (after the keepsakes), about 80 dollars; it shows when bought", () => {
     const item = SHOP_ITEMS[24]!;
     expect(item).toMatchObject({ name: "BUBBLER", kind: "decor", d: BUBBLER });
     expect(item.price).toBeGreaterThanOrEqual(70);
     expect(item.price).toBeLessThanOrEqual(90);
     expect(TAB_ITEMS[1]).toContain(24);
     const s = createState(tank([jelly(0, 3)], { dollars: 100 }), seeded());
-    expect(view(s).dec5).toBe(0);
+    expect(view(s)[`dec${BUBBLER}`]).toBe(0);
     expect(bubbleColumn(s)).toBeNull();
     expect(buy(s, 24)).toBe("bought");
     expect(s.dollars).toBe(100 - item.price);
-    expect(view(s).dec5).toBe(1);
+    expect(view(s)[`dec${BUBBLER}`]).toBe(1);
     expect(buy(s, 24)).toBe("owned");
     expect(toSave(s, NOON).owned[BUBBLER]).toBe(true);
   });
@@ -336,7 +336,7 @@ describe("the bubbler", () => {
     moveDecor(s, BUBBLER, 300);
     dropDecor(s);
     expect(bubbleColumn(s)!.x).toBe(300);
-    expect(view(s).dec5x).toBe(300);
+    expect(view(s)[`dec${BUBBLER}x`]).toBe(300);
   });
 
   it("the column pushes a swimmer in it up (gently), and nothing outside it", () => {

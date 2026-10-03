@@ -4,7 +4,7 @@ import { FLING_TAU } from "./camera";
 import { DIVER, VISITOR_PROP, boxFacing, planVisit, visitsDuring } from "./visitors";
 import { PULSE_OVERSHOOT, PULSE_PEAK, PULSE_REST, PULSE_SWELL, SWELL_AT, TENT_WAVES_PER_PULSE, TILT, newTilt, pulseFrame, stepTilt, tiltTarget } from "./motion";
 import { SPOT_R, murkOf } from "./dirt";
-import { OPEN_SAND, OPEN_SANDS, TIERS, glassRightOf, openSandsOf, SNAIL_FLOOR, BABY_SECONDS, CRAB_SIZE, GLIDE_TRAIL, PULSE_TRAIL, SHRIMP_SIZE, SNAIL_SIZE, TRAIL_FAN, TRAIL_L, TRAIL_N, TRAIL_NEUTRAL, TRAIL_R, TRAIL_STREAM, decorY } from "./species";
+import { DECOR_N, OPEN_SAND, OPEN_SANDS, TIERS, glassRightOf, openSandsOf, SNAIL_FLOOR, BABY_SECONDS, CRAB_SIZE, GLIDE_TRAIL, PULSE_TRAIL, SHRIMP_SIZE, SNAIL_SIZE, TRAIL_FAN, TRAIL_L, TRAIL_N, TRAIL_NEUTRAL, TRAIL_R, TRAIL_STREAM, decorY } from "./species";
 import {
   BELL_H,
   SHOP_SCROLL,
@@ -114,6 +114,8 @@ const P = K.P;
 const at = (h: number, m = 0, day = 1) => new Date(2026, 9, day, h, m).getTime();
 const NOON = at(12);
 const snap = (v: number) => Math.round(v / P) * P;
+/** v13: an owned-decor list as long as DECOR_N (keepsake decorations 5..9 not owned) */
+const decor = (...first: boolean[]) => Array.from({ length: DECOR_N }, (_, i) => first[i] === true);
 
 function seeded(seed = 1) {
   let s = seed;
@@ -698,7 +700,7 @@ describe("saves", () => {
     const s2 = createState(loaded, seeded());
     expect(s2.slots.map((j) => j && [j.k, j.g, j.anchor, j.spot])).toEqual(s.slots.map((j) => j && [j.k, j.g, j.anchor, j.spot]));
     expect(s2.dollars).toBe(321);
-    expect(s2.owned).toEqual([true, false, true, false, false, false]);
+    expect(s2.owned).toEqual(decor(true, false, true));
   });
 
   it("repairs a damaged v2 save", () => {
@@ -950,7 +952,8 @@ describe("shop v3", () => {
     run(s, 0.5);
     openShop(s);
     expect(s.tab).toBe(0);
-    expect([...TAB_ITEMS.flat()].sort((a, b) => a - b)).toEqual(Array.from({ length: SHOP_ITEMS.length }, (_, i) => i)); // every item on exactly one tab
+    // every item on exactly one tab
+    expect([...TAB_ITEMS.flat()].sort((a, b) => a - b)).toEqual(SHOP_ITEMS.map((_, i) => i));
   });
 });
 
@@ -1243,7 +1246,7 @@ describe("saves v3", () => {
       lastSeen: now,
     };
     const save = loadSave(JSON.stringify(v2), now);
-    expect(save).toMatchObject({ v: 10, dollars: 77, helpers: [false, false, false], pearlDay: "", owned: [true, false, false, true, false, false], tier: 0, cam: 0 });
+    expect(save).toMatchObject({ v: 10, dollars: 77, helpers: [false, false, false], pearlDay: "", owned: decor(true, false, false, true), tier: 0, cam: 0 });
     expect(save.decorX).toEqual(DECOR.map((d) => d.x));
     const [a, b] = [save.slots[0]!, save.slots[1]!];
     expect(a).toMatchObject({ k: 0, g: 3, born: now, content: 0, fullness: 0.8 });
@@ -1772,7 +1775,7 @@ describe("demo save", () => {
     expect(s.lamp!.until).toBe(at(19));
     expect(view(s).nightShade).toBe(1);
     expect(s.dollars).toBe(200);
-    expect(s.owned).toEqual([true, false, false, false, false, false]);
+    expect(s.owned).toEqual(decor(true));
     expect(s.helpers).toEqual([false, false, false]);
     expect(s.murk).toBe(0);
     expect(pearlShowing(s)).toBe(false);
@@ -2410,7 +2413,7 @@ describe("v5: view", () => {
     for (let j = 0; j < 7; j++) want.push(`j${j}on`, `j${j}x`, `j${j}y`, `j${j}k3`, `j${j}g3`, `j${j}bf3`, `j${j}tf3`, `j${j}tr4`, `j${j}glow`);
     for (const name of want) expect(props.has(name), name).toBe(true);
     expect(props.has("j7on")).toBe(false);
-    expect(props.has("own25")).toBe(false); // v6 adds items 13-17; v11 adds 18-19 (foods) and 20-23 (themes); v13 24 (the bubbler), no new tab
+    expect(props.has("own31")).toBe(false); // v6 adds items 13-17; v11 adds 18-19 (foods) and 20-23 (themes); v13 24 (the bubbler) and 25-30 (keepsakes), no new tab
     expect(props.has("shopTab5")).toBe(false);
   });
 
@@ -3610,12 +3613,13 @@ describe("v11: tank themes", () => {
     s.nextVisit = Infinity;
     return s;
   };
-  const themeHot = (s: State) => [0, 1, 2, 3].map((t) => view(s)[`theme${t}`]);
+  // v13: theme 4 (Moonlit Lagoon) is a keepsake, not sold
+  const themeHot = (s: State) => [0, 1, 2, 3, 4].map((t) => view(s)[`theme${t}`]);
 
-  it("starts on the Reef, theme0..3 one-hot", () => {
+  it("starts on the Reef, theme0..4 one-hot", () => {
     const s = rich();
     expect(s.theme).toBe(0);
-    expect(themeHot(s)).toEqual([1, 0, 0, 0]);
+    expect(themeHot(s)).toEqual([1, 0, 0, 0, 0]);
     const v = view(s);
     expect([v.use20, v.own20, v.lock20]).toEqual([1, 0, 0]);
     for (const i of [21, 22, 23]) expect([v[`use${i}`], v[`own${i}`], v[`lock${i}`]]).toEqual([0, 0, 0]);
@@ -3634,11 +3638,11 @@ describe("v11: tank themes", () => {
     expect(isShopOpen(s)).toBe(false);
     const events = run(s, 1);
     expect(events.filter((e) => e.type === "themed").map((e) => e.theme)).toEqual([2]);
-    expect(themeHot(s)).toEqual([0, 0, 1, 0]);
+    expect(themeHot(s)).toEqual([0, 0, 1, 0, 0]);
     const v = view(s);
     expect([v.use22, v.own22, v.lock22]).toEqual([1, 0, 0]);
     expect([v.use20, v.own20]).toEqual([0, 1]);
-    expect(themeInfo(s)).toEqual({ theme: 2, name: "Coral Garden", owned: [true, false, true, false] });
+    expect(themeInfo(s)).toEqual({ theme: 2, name: "Coral Garden", owned: [true, false, true, false, false] });
   });
 
   it("owned themes are picked again by tapping their card (no charge); the one in use does nothing", () => {
@@ -3680,13 +3684,13 @@ describe("v11: tank themes", () => {
     openShop(s);
     buy(s, 19);
     const saved = toSave(s, 5000);
-    expect(saved).toMatchObject({ v: 10, theme: 3, themes: [true, false, false, true], foods: [true, false, true] });
+    expect(saved).toMatchObject({ v: 10, theme: 3, themes: [true, false, false, true, false], foods: [true, false, true] });
     const back = createState(loadSave(JSON.stringify(saved), 5000), seeded());
-    expect([back.theme, back.themes, back.foods]).toEqual([3, [true, false, false, true], [true, false, true]]);
-    expect(themeHot(back)).toEqual([0, 0, 0, 1]);
+    expect([back.theme, back.themes, back.foods]).toEqual([3, [true, false, false, true, false], [true, false, true]]);
+    expect(themeHot(back)).toEqual([0, 0, 0, 1, 0]);
     // a theme that isn't owned (or nonsense) loads as the Reef; flakes and the Reef are always owned
     const bad = loadSave(JSON.stringify({ ...saved, theme: 2, themes: [false, "x"], foods: null }), 5000);
-    expect([bad.theme, bad.themes, bad.foods]).toEqual([0, [true, false, false, false], [true, false, false]]);
+    expect([bad.theme, bad.themes, bad.foods]).toEqual([0, [true, false, false, false, false], [true, false, false]]);
   });
 
   it("older saves migrate to v9 with only flakes and the Reef", () => {
@@ -3695,9 +3699,9 @@ describe("v11: tank themes", () => {
     delete v8.themes;
     delete v8.theme;
     const m = loadSave(JSON.stringify(v8), 2000);
-    expect(m).toMatchObject({ v: 10, theme: 0, themes: [true, false, false, false], foods: [true, false, false] });
+    expect(m).toMatchObject({ v: 10, theme: 0, themes: [true, false, false, false, false], foods: [true, false, false] });
     const v1 = loadSave(JSON.stringify({ v: 1, fullness: 0.5, murk: 0.2, affection: 0.5, night: false, lastSeen: 1000 }), 2000);
-    expect(v1).toMatchObject({ v: 10, theme: 0, themes: [true, false, false, false], foods: [true, false, false] });
+    expect(v1).toMatchObject({ v: 10, theme: 0, themes: [true, false, false, false, false], foods: [true, false, false] });
     expect(defaultSave(0)).toMatchObject({ v: 10, theme: 0, foods: [true, false, false] });
   });
 

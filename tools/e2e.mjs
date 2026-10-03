@@ -98,6 +98,127 @@ function fakeClaude() {
 /** Navigations here wait for the DOM only (window.__tank says when the tank is up), not for web fonts. */
 const DCL = { waitUntil: "domcontentloaded" };
 
+/**
+ * v13 keepsakes: a save one step short of a milestone (two kinds raised, a blubber juvenile one meal from adult),
+ * the step completed in the tank (feed it), the note, the reward, the journal's Keepsakes page, no second unlock
+ * on reload; then an older save that already reached four milestones gets them in one summary note; then the
+ * shop's DECOR tab scrolls to the keepsake cards and a locked one says how it's earned.
+ */
+async function keepsakeFlow(browser) {
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  page.setDefaultNavigationTimeout(90_000);
+  await page.setViewport({ ...VIEW, deviceScaleFactor: 1 });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  const app = `http://localhost:${PORT}/`;
+  /** write a save without the tank running (its pagehide save would overwrite it), then open the tank */
+  const inject = async (save) => {
+    await page.goto(`${app}src/contract.json`, DCL);
+    await page.evaluate((json) => {
+      localStorage.setItem("jellytank:tips", "1");
+      localStorage.setItem("jellytank:v5", json);
+    }, JSON.stringify(save));
+    await page.goto(app, DCL);
+    await page.waitForFunction(() => window.__tank && window.__tank.t > 0.5, { timeout: 20000 });
+  };
+  const now = Date.now();
+  const day = (t) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+  const jelly = (k, g, extra = {}) => ({ k, g, gp: [0, 4, 12, 30][g], care: 0, fullness: 0.8, affection: 0.5, anchor: -1, spot: -1, name: ["Mochi", "Tofu", "Bloop"][k % 3], born: now, content: 0, morph: 0, ...extra });
+  const entry = (raised) => ({ seen: true, raised, firstAdultAt: raised ? now : null, firstName: raised ? "Mochi" : null, morphSeen: 0 });
+  const blank = { seen: false, raised: 0, firstAdultAt: null, firstName: null, morphSeen: 0 };
+  const base = { v: 10, dollars: 0, murk: 0, spots: [], night: false, lamp: null, helpers: [false, false, false], pearlDay: "", lastSeen: now, tier: 0, cam: 0,
+                 foods: [true, false, false], themes: [true, false, false, false, false], theme: 0 };
+  const noteText = () => page.evaluate(() => { const n = document.querySelector(".jt-keep-note"); return n && !n.hidden ? n.textContent : ""; });
+
+  // one meal short of three kinds raised: the moon and the fried egg are raised, the blubber needs one more growth point
+  await inject({
+    ...base,
+    slots: [jelly(0, 3), jelly(4, 3), jelly(1, 2, { gp: 29, fullness: 0.4 }), null, null, null, null],
+    owned: [false, false, false, false, false, true, false, false, false, false],
+    journal: [entry(1), entry(0), blank, blank, entry(1), blank, blank, blank, blank],
+    keep: { earned: 1, days: 1, lastDay: day(now), requests: 0 },
+  });
+  await sleep(1500);
+  check("keepsakes: nothing new at load, nothing shown", (await noteText()) === "" && (await page.evaluate(() => window.__tank.owned[6] === false)));
+  const S1 = Math.min(VIEW.width / K.W, VIEW.height / K.H);
+  const ox = (VIEW.width - K.W * S1) / 2;
+  const oy = (VIEW.height - K.H * S1) / 2;
+  const btn = K.buttons.find((b) => b.name === "feed");
+  await page.mouse.click(ox + (btn.x + btn.w / 2) * S1, oy + (btn.y + btn.h / 2) * S1);
+  await page.waitForFunction(() => window.__tank.tool === "food", { timeout: 3000 }).catch(() => {});
+  let grew = false;
+  for (let i = 0; i < 12 && !grew; i++) {
+    const j = await page.evaluate(() => ({ x: window.__tank.slots[2].x + window.__tank.cam.x, y: window.__tank.slots[2].y }));
+    await page.mouse.click(ox + (j.x + (i % 2 ? 15 : -15)) * S1, oy + (j.y - 70) * S1);
+    grew = await page.waitForFunction(() => window.__tank.slots[2]?.g === 3, { timeout: 1500 }).then(() => true, () => false);
+  }
+  check("keepsakes: feeding the blubber raises a third kind", grew);
+  const shown = await page.waitForSelector(".jt-keep-note:not([hidden])", { timeout: 8000 }).then(() => true, () => false);
+  const text = await noteText();
+  const state = await page.evaluate(() => ({ owned: window.__tank.owned[6], earned: window.__tank.keep.earned }));
+  check("keepsakes: the unlock note says a lighthouse washed up, and it's in the tank", shown && /lighthouse/i.test(text) && state.owned && state.earned === 3, `${text} ${JSON.stringify(state)}`);
+  await page.screenshot({ path: "shots/e2e-keep-note.png" });
+  const saved = await page.waitForFunction(() => (JSON.parse(localStorage.getItem("jellytank:v5") || "{}").keep?.earned ?? 0) === 3, { timeout: 3000 }).then(() => true, () => false);
+  check("keepsakes: the unlock is saved", saved);
+  // "See journal" opens the book on the Keepsakes page: two done, the rest with their progress
+  if (shown) await page.click(".jt-keep-note button:not(.ok)");
+  await sleep(300);
+  const page_ = await page.evaluate(() => ({
+    open: !document.querySelector(".jt-book").hidden && !document.querySelector(".jt-keep-page").hidden,
+    done: document.querySelectorAll(".jt-keep-row.done").length,
+    counts: [...document.querySelectorAll(".jt-keep-count")].map((e) => e.textContent),
+  }));
+  check("keepsakes: the journal's Keepsakes page shows each milestone's progress", page_.open && page_.done === 2 && page_.counts.join(" ") === "✓ ✓ 0/1 1/7 0/10 3/9", JSON.stringify(page_));
+  await page.screenshot({ path: "shots/e2e-keep-journal.png" });
+  await page.keyboard.press("Escape");
+  // a reload doesn't unlock it again
+  await page.reload(DCL);
+  await page.waitForFunction(() => window.__tank && window.__tank.t > 0.5, { timeout: 20000 });
+  await sleep(1500);
+  check("keepsakes: no second unlock after a reload", (await noteText()) === "" && (await page.evaluate(() => window.__tank.owned[6] && window.__tank.keep.earned === 3)));
+
+  // an older save (no keep field) that already reached four milestones: one summary note, every reward in
+  await inject({
+    ...base,
+    slots: [jelly(0, 3, { morph: 1 }), null, null, null, null, null, null],
+    owned: [true, false, false, false, false],
+    journal: Array.from({ length: 9 }, (_, k) => ({ ...entry(1), morphSeen: k === 0 ? 1 : 0 })),
+  });
+  const sum = await page.waitForSelector(".jt-keep-note:not([hidden])", { timeout: 8000 }).then(() => true, () => false);
+  const rows = await page.evaluate(() => document.querySelectorAll(".jt-keep-note .jt-keep-sum li").length);
+  const got = await page.evaluate(() => ({ decor: window.__tank.owned.slice(5, 8).every(Boolean), lagoon: window.__tank.themes[4] }));
+  check("keepsakes: an older save gets one summary note for all it had reached", sum && rows === 4 && /keepsakes for you/i.test(await noteText()) && got.decor && got.lagoon, `${rows} ${JSON.stringify(got)}`);
+  await page.screenshot({ path: "shots/e2e-keep-summary.png" });
+  if (sum) await page.click(".jt-keep-note .ok");
+  await sleep(200);
+  check("keepsakes: just the one note", (await noteText()) === "");
+
+  // the shop: DECOR scrolls down to the keepsakes; a locked one says how it's earned
+  const shopBtn = K.buttons.find((b) => b.name === "shop");
+  await page.mouse.click(ox + (shopBtn.x + shopBtn.w / 2) * S1, oy + (shopBtn.y + shopBtn.h / 2) * S1);
+  await page.waitForFunction(() => { const t = window.__tank; return t.shop.open && t.t - t.shop.t0 > 0.45; }, { timeout: 8000 }).catch(() => {});
+  const tab = K.shopTabs[1];
+  await page.mouse.click(ox + (tab.x + tab.w / 2) * S1, oy + (tab.y + tab.h / 2) * S1);
+  await page.waitForFunction(() => window.__tank.tab === 1, { timeout: 3000 }).then(() => sleep(400), () => {});
+  await page.mouse.move(ox + 360 * S1, oy + 600 * S1);
+  for (let i = 0; i < 6; i++) {
+    await page.mouse.wheel({ deltaY: 200 });
+    await sleep(60);
+  }
+  const scroll = await page.evaluate(() => window.__tank.shopScroll);
+  check("keepsakes: the DECOR tab scrolls to them", scroll > 0, `scroll=${scroll}`);
+  await sleep(300);
+  const card = K.shopCards[29];
+  await page.mouse.click(ox + (card.x + card.w / 2) * S1, oy + (card.y + card.h / 2 - scroll) * S1);
+  await sleep(300);
+  const tag = await page.evaluate(() => [...document.querySelectorAll(".jt-tag")].map((t) => t.textContent).join(" "));
+  check("keepsakes: a locked keepsake card says how it's earned, and isn't sold", /keepsake: finish 10 daily requests/i.test(tag) && (await page.evaluate(() => !window.__tank.owned[9])), tag);
+  await page.screenshot({ path: "shots/e2e-keep-shop.png" });
+  check("keepsakes: no page errors", errors.length === 0, errors.join(" | "));
+  await ctx.close();
+}
+
 /** Live visits and gifts on the synced copy: A publishes, B visits A's live tank and leaves a shell, A claims it. */
 async function friendsFlow(browser) {
   const ctx = await browser.createBrowserContext();
@@ -396,6 +517,18 @@ async function main() {
     check("polyp grew past polyp stage (fast mode)", (s.slots[0]?.g ?? 0) >= 1, `stage=${s.slots[0]?.g}`);
     check("care earned dollars", s.dollars > 0, `dollars=${s.dollars}`);
     await shot("3-fed");
+    // v13: the first adult leaves a keepsake (the message in a bottle): a note, and the bottle in the tank
+    const grown = await page.waitForFunction(() => window.__tank.slots[0]?.g === 3, { timeout: 20000 }).then(() => true, () => false);
+    const keptNote = grown && (await page.waitForSelector(".jt-keep-note:not([hidden])", { timeout: 8000 }).then(() => true, () => false));
+    const keptText = keptNote ? await page.evaluate(() => document.querySelector(".jt-keep-note").textContent) : "";
+    const kept = await page.evaluate(() => window.__tank.owned[5] === true && (window.__tank.keep.earned & 1) === 1);
+    check("the first adult leaves a keepsake: a note and the bottle", keptNote && /bottle/i.test(keptText) && kept, `${grown} ${kept} ${keptText}`);
+    await shot("3b-keepsake");
+    if (keptNote) await page.click(".jt-keep-note .ok");
+    await sleep(200);
+    // the rest of this run reaches more milestones (the journal check gives a jelly a ghost colour); a player would
+    // close those notes, so this page closes them as they come (keepsakeFlow checks them one by one)
+    await page.evaluate(() => setInterval(() => document.querySelector(".jt-keep-note:not([hidden]) .ok")?.click(), 150));
 
     await page.evaluate(() => { window.__tank.dollars = 300; });
     await click(...button("shop"));
@@ -734,6 +867,7 @@ async function main() {
 
     await page.close(); // one swiftshader tank at a time
     await keyboardFlow(browser);
+    await keepsakeFlow(browser);
     await friendsFlow(browser);
   } finally {
     await browser.close();

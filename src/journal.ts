@@ -1,7 +1,8 @@
 /**
  * The jelly journal: an HTML book over the tank, one spread per species.
  * Portraits come from src/journal-art.json (written by tools/gen.py);
- * the facts live here.
+ * the facts live here. v13: after the species, a Keepsakes page: each milestone, how far along it is,
+ * and the keepsake it leaves (art "keep{m}").
  */
 import { focusReturn } from "./a11y";
 import { SPECIES_NAMES } from "./species";
@@ -17,6 +18,17 @@ export interface JournalPage {
   morphSeen: number;
   /** v13: a bitmask of the personalities met (bit = trait) */
   traitSeen?: number;
+}
+
+/** v13: one milestone on the Keepsakes page (sim's keepsakes(s)). */
+export interface KeepsakeRow {
+  m: number;
+  title: string;
+  progress: number;
+  n: number;
+  earned: boolean;
+  /** "a little lighthouse" */
+  reward: string;
 }
 
 /** One real fact per species, plain and short. */
@@ -101,15 +113,41 @@ const CSS = `
 .jt-book-dots i.seen { background: #a78560; }
 .jt-book-dots i.here { background: #e09a28; }
 .jt-book-count { color: #8e5632; font-size: 11px; text-align: center; }
+.jt-book-dots i.jt-keep-dot { border-radius: 50%; background: #e3cfa6; box-shadow: inset 0 0 0 2px #e09a28; }
+.jt-book-dots i.jt-keep-dot.here { background: #e09a28; }
+.jt-keep-page { display: grid; gap: 6px; }
+.jt-pages > [hidden] { display: none; } /* v13: the keepsakes page hides the species parts, whatever their display */
+.jt-keep-intro { margin: 0; color: #45261a; }
+.jt-keep-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.jt-keep-row {
+  display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 8px;
+  padding: 4px 8px 4px 4px; border: 2px dashed #d9bf94; border-radius: 6px;
+}
+.jt-keep-row.done { border-style: solid; border-color: #e09a28; background: #fff2c8; }
+.jt-keep-art {
+  display: grid; place-items: center; width: 44px; height: 40px; border-radius: 4px;
+  background: linear-gradient(#3ab4e0, #125fa6); box-shadow: inset 0 0 0 2px #45261a;
+}
+.jt-keep-art img { image-rendering: pixelated; filter: grayscale(1) brightness(0.55); opacity: 0.7; }
+.jt-keep-row.done .jt-keep-art img { filter: none; opacity: 1; }
+.jt-keep-text { display: grid; gap: 3px; min-width: 0; font-size: 11px; text-transform: uppercase; }
+.jt-keep-text b { font-weight: normal; color: #2b1712; }
+.jt-keep-text i { font-style: normal; color: #8e5632; font-size: 10px; }
+.jt-keep-bar { height: 6px; background: #e3cfa6; border-radius: 3px; overflow: hidden; }
+.jt-keep-bar > i { display: block; height: 100%; background: #e09a28; }
+.jt-keep-count { color: #693c24; font-size: 11px; min-width: 28px; text-align: right; }
+.jt-keep-row.done .jt-keep-count { color: #2a8a4a; }
 `;
 
 export interface Journal {
-  open(): void;
+  /** opens where it was left; v13: "keepsakes" opens on the Keepsakes page */
+  open(at?: "keepsakes"): void;
   close(): void;
   readonly isOpen: boolean;
 }
 
-export function createJournal(pages: () => JournalPage[]): Journal {
+/** `keepsakes` (v13), when given, adds the Keepsakes page after the species. */
+export function createJournal(pages: () => JournalPage[], keepsakes?: () => KeepsakeRow[]): Journal {
   const style = document.createElement("style");
   style.textContent = CSS;
   document.head.append(style);
@@ -126,6 +164,8 @@ export function createJournal(pages: () => JournalPage[]): Journal {
     <p class="jt-book-fact"></p>
     <dl class="jt-book-stats"></dl>
     <div class="jt-book-morphs">${MORPH_ROWS.map((m) => `<div class="jt-book-morph${m.id === MORPH_GHOST ? " ghost" : ""}"><img alt=""><span><b>${m.label}:</b> <i></i></span></div>`).join("")}</div>
+    <div class="jt-keep-page" hidden><h3 class="jt-book-name">Keepsakes</h3>
+      <p class="jt-keep-intro">Reach a milestone and a keepsake turns up in your tank.</p><ul class="jt-keep-list"></ul></div>
     <div class="jt-book-nav"><button type="button" class="prev" aria-label="Previous page">&lt;</button>
       <div><div class="jt-book-dots"></div><div class="jt-book-count"></div></div>
       <button type="button" class="next" aria-label="Next page">&gt;</button></div>
@@ -144,8 +184,43 @@ export function createJournal(pages: () => JournalPage[]): Journal {
   fit($<HTMLImageElement>(".jt-book-plate img"), 260, 156);
   book.querySelectorAll<HTMLImageElement>(".jt-book-morph img").forEach((img) => fit(img, 60, 40));
 
+  /** the species' pages, then the keepsakes page (if any) */
+  const pageCount = () => (pages().length || SPECIES_NAMES.length) + (keepsakes ? 1 : 0);
+  const keepPage = book.querySelector(".jt-keep-page") as HTMLElement;
+  const species = [".jt-book-plate", ".jt-book-name", ".jt-book-fact", ".jt-book-stats"].map((sel) => $<HTMLElement>(sel));
+  /** v13: the keepsakes page: one row per milestone, its reward's portrait, a bar and n/total */
+  const renderKeepsakes = (rows: KeepsakeRow[]) => {
+    $<HTMLElement>(".jt-keep-list").replaceChildren(
+      ...rows.map((r) => {
+        const li = document.createElement("li");
+        li.className = `jt-keep-row${r.earned ? " done" : ""}`;
+        li.innerHTML = `<span class="jt-keep-art"><img alt=""></span><span class="jt-keep-text"><b></b><i></i><span class="jt-keep-bar"><i></i></span></span><span class="jt-keep-count"></span>`;
+        const img = li.querySelector("img") as HTMLImageElement;
+        fit(img, 40, 36);
+        img.src = ART[`keep${r.m}`] ?? "";
+        img.alt = r.reward;
+        (li.querySelector("b") as HTMLElement).textContent = r.title;
+        (li.querySelector(".jt-keep-text > i") as HTMLElement).textContent = r.earned ? `Earned: ${r.reward}` : `Leaves ${r.reward}`;
+        (li.querySelector(".jt-keep-bar > i") as HTMLElement).style.width = `${Math.round((100 * r.progress) / Math.max(1, r.n))}%`;
+        (li.querySelector(".jt-keep-count") as HTMLElement).textContent = r.earned ? "✓" : `${r.progress}/${r.n}`;
+        return li;
+      }),
+    );
+  };
+
   const render = () => {
     const all = pages();
+    const onKeep = !!keepsakes && page === (all.length || SPECIES_NAMES.length);
+    keepPage.hidden = !onKeep;
+    for (const el of species) el.hidden = onKeep;
+    if (onKeep) {
+      const rows = keepsakes!();
+      renderKeepsakes(rows);
+      $<HTMLElement>(".jt-book-morphs").hidden = true;
+      renderDots(all);
+      $<HTMLElement>(".jt-book-count").textContent = `${rows.filter((r) => r.earned).length} of ${rows.length} keepsakes`;
+      return;
+    }
     const p = all[page] ?? { seen: false, raised: 0, firstAdultAt: null, firstName: null, morphSeen: 0 };
     const known = p.seen;
     const plate = $<HTMLElement>(".jt-book-plate");
@@ -179,18 +254,25 @@ export function createJournal(pages: () => JournalPage[]): Journal {
       mimg.src = found && art ? art : "";
       (row.querySelector("i") as HTMLElement).textContent = found ? m.names[page] ?? "" : "???";
     });
-    $<HTMLElement>(".jt-book-dots").replaceChildren(
-      ...all.map((q, i) => {
-        const d = document.createElement("i");
-        if (q.seen) d.className = "seen";
-        if (i === page) d.className = "here";
-        return d;
-      }),
-    );
+    renderDots(all);
     $<HTMLElement>(".jt-book-count").textContent = `${all.filter((q) => q.seen).length} of ${all.length} found`;
   };
+  const renderDots = (all: JournalPage[]) => {
+    const dots = all.map((q, i) => {
+      const d = document.createElement("i");
+      if (q.seen) d.className = "seen";
+      if (i === page) d.className = "here";
+      return d;
+    });
+    if (keepsakes) {
+      const d = document.createElement("i");
+      d.className = `jt-keep-dot${page === all.length ? " here" : ""}`;
+      dots.push(d);
+    }
+    $<HTMLElement>(".jt-book-dots").replaceChildren(...dots);
+  };
   const turn = (d: number) => {
-    const n = pages().length || SPECIES_NAMES.length;
+    const n = pageCount();
     page = (page + d + n) % n;
     render();
   };
@@ -211,7 +293,8 @@ export function createJournal(pages: () => JournalPage[]): Journal {
   });
 
   return {
-    open() {
+    open(at?: "keepsakes") {
+      if (at === "keepsakes" && keepsakes) page = pageCount() - 1;
       render();
       if (book.hidden) back.opened();
       book.hidden = false;

@@ -492,17 +492,17 @@ export const FAV_CHASE = 0.4;
 
 // ---------------------------------------------------------------- v11: tank themes
 
-/** 0 Reef (the default, always owned), 1 Kelp Forest, 2 Coral Garden, 3 Arctic. */
-export const THEME_N = 4;
-export const THEME_NAMES = ["Reef", "Kelp Forest", "Coral Garden", "Arctic"] as const;
+/** 0 Reef (the default, always owned), 1 Kelp Forest, 2 Coral Garden, 3 Arctic; v13: 4 Moonlit Lagoon (a keepsake). */
+export const THEME_N = 5;
+export const THEME_NAMES = ["Reef", "Kelp Forest", "Coral Garden", "Arctic", "Moonlit Lagoon"] as const;
 
 export type ShopItem =
   | { name: string; price: number; kind: "polyp"; k: Species; needTier?: number }
-  | { name: string; price: number; kind: "decor"; d: number }
+  | { name: string; price: number; kind: "decor"; d: number; keepsake?: number }
   | { name: string; price: number; kind: "helper"; h: number }
   | { name: string; price: number; kind: "tank"; tier: number }
   | { name: string; price: number; kind: "food"; f: FoodKind }
-  | { name: string; price: number; kind: "theme"; theme: number };
+  | { name: string; price: number; kind: "theme"; theme: number; keepsake?: number };
 export const SHOP_ITEMS: readonly ShopItem[] = [
   { name: "BLUE BLUBBER", price: 40, kind: "polyp", k: BLUBBER },
   { name: "UPSIDE-DOWN", price: 70, kind: "polyp", k: UPSIDE },
@@ -529,18 +529,29 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
   { name: "KELP FOREST", price: 140, kind: "theme", theme: 1 },
   { name: "CORAL GARDEN", price: 170, kind: "theme", theme: 2 },
   { name: "ARCTIC", price: 200, kind: "theme", theme: 3 },
-  // v13: the bubbler (decoration 5): a column of bubbles the jellies ride
-  { name: "BUBBLER", price: 80, kind: "decor", d: 5 },
+  // v13: the bubbler (decoration 10, after the keepsakes): a column of bubbles the jellies ride
+  { name: "BUBBLER", price: 80, kind: "decor", d: 10 },
+  // v13 keepsakes (./keepsakes.ts): earned from the journal's milestones, never sold; `keepsake` = the milestone
+  { name: "MESSAGE IN A BOTTLE", price: 0, kind: "decor", d: 5, keepsake: 0 },
+  { name: "LIGHTHOUSE", price: 0, kind: "decor", d: 6, keepsake: 1 },
+  { name: "JELLY LANTERN", price: 0, kind: "decor", d: 7, keepsake: 2 },
+  { name: "SHIP'S WHEEL", price: 0, kind: "decor", d: 8, keepsake: 3 },
+  { name: "POSTBOX", price: 0, kind: "decor", d: 9, keepsake: 4 },
+  { name: "MOONLIT LAGOON", price: 0, kind: "theme", theme: 4, keepsake: 5 },
 ];
+/** v13: the milestone that earns shop item `it` (./keepsakes.ts), or -1 for anything the shop sells. */
+export const keepsakeOf = (it: ShopItem | undefined): number => (it && (it.kind === "decor" || it.kind === "theme") ? it.keepsake ?? -1 : -1);
 /** The shop item that sells food kind f (18 BRINE SHRIMP, 19 PLANKTON), -1 for flakes. */
 export const foodItem = (f: number) => SHOP_ITEMS.findIndex((it) => it.kind === "food" && it.f === f);
 /** The shop item for theme n (20 REEF .. 23 ARCTIC). */
 export const themeItem = (n: number) => SHOP_ITEMS.findIndex((it) => it.kind === "theme" && it.theme === n);
 /** The shop item that upgrades to tier t (11 MEDIUM, 12 LARGE). */
 export const tankItem = (t: number) => SHOP_ITEMS.findIndex((it) => it.kind === "tank" && it.tier === t);
-export const DECOR_N = 6;
+/** v13: decorations 0..4 are sold, 5..9 are keepsakes (from KEEP_DECOR0), 10 is the bubbler (sold, shop item 24) */
+export const DECOR_N = 11;
+export const KEEP_DECOR0 = 5;
 /** v13: the bubbler's decoration index (shop item 24) */
-export const BUBBLER = 5;
+export const BUBBLER = 10;
 export const HELPER_N = 3;
 export const SNAIL = 0;
 export const SHRIMP = 1;
@@ -548,9 +559,9 @@ export const CRAB = 2;
 /** Shop tabs: JELLIES, DECOR, SUPPLIES (helpers + v11 foods), TANK (sizes + v11 themes), as item index ranges. */
 export const TAB_ITEMS: readonly (readonly number[])[] = [
   [0, 13, 1, 14, 2, 15, 16, 17], // JELLIES scrolls (contract.shopScroll)
-  [3, 4, 5, 6, 7, 24],
+  [3, 4, 5, 6, 7, 24, 25, 26, 27, 28, 29], // v13: the bubbler, then the keepsakes; DECOR and TANK scroll too (contract.shopScrollTabs)
   [8, 9, 10, 18, 19],
-  [11, 12, 20, 21, 22, 23],
+  [11, 12, 20, 21, 22, 23, 30],
 ];
 export const TAB_N = TAB_ITEMS.length;
 /** A tab's card group sits at y 0 when active and this far away when not (so hidden cards can't be hit). */
@@ -678,9 +689,15 @@ const DECOR_FALLBACK: Rect[] = [
   { x: 591, y: 1047, w: 96, h: 69 }, // dive helmet
   { x: 348, y: 1047, w: 108, h: 72 }, // giant clam
   { x: 210, y: 1047, w: 90, h: 39 }, // glow coral
-  { x: 456, y: 1047, w: 84, h: 60 }, // v13: bubbler
+  // v13 keepsakes (gen.py's keepsakes block)
+  { x: 282, y: 1047, w: 114, h: 39 }, // message in a bottle
+  { x: 666, y: 1047, w: 78, h: 162 }, // lighthouse
+  { x: 420, y: 1047, w: 60, h: 96 }, // jelly lantern
+  { x: 138, y: 1047, w: 108, h: 78 }, // ship's wheel
+  { x: 564, y: 1047, w: 54, h: 81 }, // postbox
+  { x: 420, y: 1047, w: 138, h: 66 }, // v13: bubbler (decor 10)
 ];
-const DECOR_NAMES = ["Castle", "Anchor", "Helmet", "Clam", "GlowCoral", "Bubbler"];
+const DECOR_NAMES = ["Castle", "Anchor", "Helmet", "Clam", "GlowCoral", "Bottle", "Lighthouse", "Lantern", "Wheel", "Postbox", "Bubbler"];
 
 export const DECOR: DecorGeom[] = DECOR_FALLBACK.map((fb, n) => {
   const raw: unknown = Array.isArray(K.decor) ? K.decor[n] : null;
@@ -783,7 +800,7 @@ export function specProps(foodN = K.foodN): string[] {
   out.push("fxX", "fxY", "fxS", "fxO");
   for (let p = 0; p < 4; p++) for (let d = 0; d < 10; d++) out.push(`cd${p}n${d}`);
   out.push("shopY");
-  for (let i = 0; i < SHOP_ITEMS.length; i++) out.push(`own${i}`, `lock${i}`);
+  SHOP_ITEMS.forEach((_, i) => out.push(`own${i}`, `lock${i}`));
   // v11: the "IN USE" badge on the active theme's card
   SHOP_ITEMS.forEach((it, i) => it.kind === "theme" && out.push(`use${i}`));
   for (let t = 0; t < TAB_N; t++) out.push(`shopTab${t}`, `tab${t}Y`);

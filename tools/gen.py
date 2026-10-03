@@ -2986,7 +2986,7 @@ def mushroom_glow_art():
 
 
 # ---- bubbler ----
-# v13: the bubbler (decoration 5, shop item 24): a little stone volcano with an airstone in its crater, the kind
+# v13: the bubbler (decoration 10, shop item 24): a little stone volcano with an airstone in its crater, the kind
 # every aquarium shop sells. A column of bubbles rises from the crater to the surface, each bubble on its own
 # timeline (BubblerBub0..11, looping at different lengths), with a soft screen-blended shimmer of moving water
 # behind them on a timeline of its own (BubblerShimmer). The logic (src/currents.ts) lifts jellies and food in it.
@@ -2995,6 +2995,7 @@ R_GLAZE = ramp("4a1006", "962a0c", "d8541a", "f8923a", "ffd27a")  # painted lava
 BUB_LIP = 21         # logical px from the base point up to the crater's lip
 BUB_TOP = WATER_TOP + 8  # where the bubbles pop (world y, logical): just under the surface line
 BUB_BASE = SAND_BASE + 31  # its default base y (logical), as in DECOR
+BUB_X = 140  # its default base x (logical): open sand clear of the chest, cauldron, clam, castle and keepsakes
 
 
 def bubbler_art():
@@ -5252,7 +5253,7 @@ def theme_sand(t):
     """The floor for theme t (1 rocky kelp floor, 2 white coral sand, 3 grey pebbles): the same shape as the reef's
     sand (the walkers and decor stand on sand_top), its own colour and texture, and the cave mouth's shadow."""
     px = Px()
-    base = {1: R_KFLOOR, 2: R_SAND_W, 3: R_PEBBLE}[t]
+    base = {1: R_KFLOOR, 2: R_SAND_W, 3: R_PEBBLE, 4: R_LSAND}[t]  # 4: keepsakes' Moonlit Lagoon
     r2 = random.Random(100 + t)
     for x in range(GLASS_L, WLW):
         top = sand_top(x)
@@ -5291,6 +5292,16 @@ def theme_sand(t):
             x = r2.randint(GLASS_L + 4, WORLD_R - 4)
             y = r2.randint(sand_top(x) + 3, WATER_BOT - 3)
             blob(px, x, y, r2.choice([1.5, 2]), 1.2, ramp("8a6a70", "c4a0a0", "f0d0c8", "fff0ea"), seed=r2.random() * 9)
+    elif t == 4:  # ---- keepsakes ---- moonlit sand: ripple marks catching the light, glints, a few pale shells
+        for (x, y), c in list(px.d.items()):
+            if y > sand_top(x) + 1 and math.sin(x * 0.5 + 1.8 * math.sin(y * 0.35)) > 0.82:
+                px.put(x, y, base[4])
+        for _ in range(60):
+            x = r2.randint(GLASS_L, WORLD_R)
+            px.put(x, r2.randint(sand_top(x) + 1, WATER_BOT - 1), r2.choice([base[5], hx("bfe8ff"), base[1]]))
+        for _ in range(12):
+            x = r2.randint(GLASS_L + 4, WORLD_R - 4)
+            blob(px, x, r2.randint(sand_top(x) + 3, WATER_BOT - 3), 1.6, 1.1, ramp("5a5a7a", "a0a0c4", "d8d8f0", "f6f6ff"), seed=r2.random() * 9)
     else:  # grey pebbles: lots of little stones, lit on top, a dusting of snow
         for _ in range(240):
             x = r2.randint(GLASS_L + 1, WORLD_R - 1)
@@ -5338,7 +5349,7 @@ def theme_icon(t):
         for y in range(stand_top, 0):
             px.put(x, y, R_WOOD[0] if y == -1 or x in (x0 + 1, x0 + w - 2) else R_WOOD[4] if y == stand_top else R_WOOD[2 if (x + y) % 4 else 3])
     stops = THEME_WATER[t]
-    floor = {0: R_SAND, 1: R_KFLOOR, 2: R_SAND_W, 3: R_PEBBLE}[t]
+    floor = {0: R_SAND, 1: R_KFLOOR, 2: R_SAND_W, 3: R_PEBBLE, 4: R_LSAND}[t]
 
     def water(u):
         for (p0, c0), (p1, c1) in zip(stops, stops[1:]):
@@ -5390,6 +5401,8 @@ def theme_icon(t):
             for x in range(x0 + w - 8, x0 + w - 3):
                 if (x + y) % 2 == 0 and ((x - (x0 + w - 5.5)) / 3) ** 2 + ((y - (sb - 5)) / 4.5) ** 2 <= 1:
                     put(x, y, R_FAN[3])
+    elif t == 4:  # ---- keepsakes ---- the moon and a mangrove root
+        keep_lagoon_icon(put, x0, y0, w, sb)
     else:  # the ice shelf above, snow falling, grey stones
         for x in range(x0 + 1, x0 + w - 1):
             bot = y0 + 4 + round(2 * math.sin(x * 0.7)) + (4 if abs(x - (x0 + 12)) < 4 else 0) + (3 if abs(x - (x0 + 26)) < 3 else 0)
@@ -5402,6 +5415,465 @@ def theme_icon(t):
             put(cx + 1, sb - 1, R_AROCK[2])
             put(cx, sb - 2, R_AROCK[4])
     return px
+
+
+# ---- keepsakes ----
+# v13: rewards from the jelly journal's milestones (src/keepsakes.ts). Five decorations the shop doesn't sell
+# (decor 5..9, shop items 25..29) and one tank theme (Moonlit Lagoon, theme 4, shop item 30). Item 24 is the
+# bubbler (decor 10, after the keepsakes). Everything keepsake-specific lives here;
+# the scene, the shop and the contract pick it up through a few marked lines.
+
+KEEP_ITEM0 = 25  # the first keepsake's shop item
+R_SEAGLASS = [hx("0a2a30", 240), hx("145058", 210), hx("23787e", 185), hx("43a8a8", 170), hx("9ce6dc", 190), hx("eafffa", 230)]
+R_PAPER = ramp("6a4a2a", "b89a6a", "e6d2a6", "fff4d8")
+R_LH_RED = ramp("3e0c14", "7a1a22", "b8302e", "e2584a", "ff9a7a")
+R_LH_WHITE = ramp("3a3858", "7a7a9e", "bcbcd4", "e8e8f2", "ffffff")
+R_LAMP = ramp("a8641a", "ffcf4a", "fff2a0", "fffbe0")
+R_LANT = ramp("5a1a3a", "a83a6a", "e06a9a", "ffa6c8", "ffe0ee")
+R_POST = ramp("3a080c", "761418", "b8242a", "e44a3e", "ff8a6e")
+
+
+def keep_cyl(px, x0, x1, y0, y1, rmp, lit=0.9, outline=True):
+    """A vertical cylinder band x0..x1 (inclusive), rows y0..y1: lit from the left, outlined on the shadow side."""
+    w = x1 - x0 + 1
+    for y in range(y0, y1 + 1):
+        for x in range(x0, x1 + 1):
+            u = (x - x0 + 0.5) / w  # 0 left .. 1 right
+            t = lit - 0.8 * u + 0.25 * math.sin(u * math.pi) - 0.2
+            c = rmp[1 + shade_index(t, len(rmp) - 1, x, y, 0.5)] if len(rmp) > 2 else rmp[-1]
+            if outline and x == x1:
+                c = rmp[0]
+            elif x == x0 and len(rmp) > 3:
+                c = rmp[-2]
+            px.put(x, y, c)
+
+
+def keep_bottle_art():
+    """Message in a bottle: a sea-glass bottle lying in the sand with its neck tipped up, a letter rolled up inside
+    and tied with red, a cork in the neck."""
+    px = Px()
+    th = math.radians(13)  # the neck end raised
+    ca, sa = math.cos(th), math.sin(th)
+    S = 1.35  # drawn from a 1x design, scaled up
+    cx, cy = -2, -6.2
+
+    def half(u):  # the bottle's half width along its length (u toward the neck), design units
+        if u < -11 or u > 15:
+            return -1
+        if u < -9.6:
+            return 4.4 - (-9.6 - u) * 1.6
+        if u < 4:
+            return 4.4
+        if u < 7.5:
+            return 1.8 + 2.6 * (1 - smoothstep((u - 4) / 3.5))
+        if u < 11.4:
+            return 1.8
+        if u < 12.4:
+            return 2.3
+        return 1.5
+
+    for y in range(-20, 2):
+        for x in range(-19, 21):
+            dx, dy = x + 0.5 - cx, y + 0.5 - cy
+            u, v = (dx * ca - dy * sa) / S, (dx * sa + dy * ca) / S
+            w = half(u)
+            if w < 0 or abs(v) > w:
+                continue
+            if u >= 12.4:  # the cork
+                px.put(x, y, R_CORK[0] if v > w - 0.7 or u > 14.5 else R_CORK[4] if v < -0.7 else R_CORK[2] if v > 0.3 else R_CORK[3])
+                continue
+            edge = abs(v) > w - 0.75
+            if edge:
+                c = R_SEAGLASS[0] if v > 0 else R_SEAGLASS[4]
+            else:
+                c = R_SEAGLASS[1] if v > 0.55 * w else R_SEAGLASS[2] if v > -0.1 * w else R_SEAGLASS[3]
+                if -8.2 <= u <= 2.8 and abs(v) <= 2.5:  # the letter, seen through the glass
+                    pc = R_PAPER[1] if v > 1.3 else R_PAPER[3] if v < -0.9 else R_PAPER[2]
+                    if u < -7.2:
+                        pc = R_PAPER[0] if abs(v) < 0.7 else R_PAPER[2]  # the curl at its end
+                    if -3.2 <= u <= -2.0:
+                        pc = hx("ff6a5a") if v < -0.3 else hx("c8323a")  # the ribbon
+                    c = mix(pc, R_SEAGLASS[3], 0.18)[:3] + (255,)
+                if -w + 0.75 < v < -w + 1.6 and -9.4 < u < 4.5:  # the long highlight along the top
+                    c = R_SEAGLASS[5]
+            px.put(x, y, c)
+    for x, y in ((-10, -13), (11, -13)):  # glints
+        if px.has(x, y):
+            px.put(x, y, hx("ffffff"))
+    sand_mound(px, -19, 18, 2, seed=21)
+    for x, y in ((15, -1), (16, -1), (16, -2)):  # a little shell beside it
+        px.put(x, y, R_SHELL[4] if y == -2 else R_SHELL[2])
+    return px
+
+
+def keep_lighthouse_art():
+    """A little lighthouse on a heap of rocks: a red and white striped tower, a door, a window, the gallery's railing,
+    a lantern room glowing yellow and a red dome."""
+    px = Px()
+    for bx, by, rx, ry, s in ((-6, -1, 7, 4.5, 1), (6, -1, 6, 3.6, 2), (0, -4, 7, 3.2, 3)):  # the rock heap
+        blob(px, bx, by, rx, ry, R_STONE, flat=0, rough=1, seed=s)
+    top, bot = -38, -6
+    for y in range(top, bot + 1):  # the tower: tapering, striped, lit from the left
+        hw = round(4 + 2.4 * (y - top) / (bot - top))
+        band = ((bot - y) // 6) % 2
+        keep_cyl(px, -hw, hw - 1, y, y, R_LH_RED if band == 0 else R_LH_WHITE)
+    for y in range(-12, -5):  # the door, arched
+        for x in (-2, -1, 0):
+            if y > -11 or x == -1:
+                px.put(x, y, hx("2b1712") if x < 0 else hx("45261a"))
+    px.put(1, -9, R_GOLD[3])
+    for y in (-26, -25):  # a window
+        px.put(-1, y, hx("16263a"))
+        px.put(0, y, hx("3a6a90") if y == -26 else hx("16263a"))
+    for x in range(-6, 6):  # the gallery: a deck, posts and a rail
+        px.put(x, top - 1, METAL[3] if x < 0 else METAL[2])
+        px.put(x, top, METAL[1])
+        if x % 2 == 0 or x in (-6, 5):
+            px.put(x, top - 2, METAL[1])
+            px.put(x, top - 3, METAL[1])
+        px.put(x, top - 4, METAL[3] if x < 0 else METAL[2])
+    for y in range(top - 10, top - 4):  # the lantern room: glass lit from inside, dark glazing bars
+        for x in range(-3, 3):
+            c = R_LAMP[3] if x in (-2, -1) and top - 8 <= y <= top - 6 else R_LAMP[2] if x < 1 else R_LAMP[1]
+            if x in (-3, 2):
+                c = METAL[1] if x == 2 else METAL[2]
+            if x == 0 and y != top - 7:
+                c = METAL[2]
+            px.put(x, y, c)
+    for k, y in enumerate(range(top - 11, top - 15, -1)):  # the dome and its finial
+        for x in range(-4 + k, 4 - k):
+            px.put(x, y, R_LH_RED[0] if x == 3 - k else R_LH_RED[4] if x < -2 + k else R_LH_RED[3] if x < 0 else R_LH_RED[2])
+    px.put(-1, top - 15, METAL[3])
+    px.put(-1, top - 16, METAL[4])
+    r2 = random.Random(17)
+    for _ in range(14):  # weed and barnacles low on the tower
+        x, y = r2.randint(-6, 5), r2.randint(-12, -6)
+        if px.has(x, y) and not (-2 <= x <= 0 and y > -12):
+            px.put(x, y, r2.choice([R_KELP[2], R_KELP[3], R_SHELL[3]]))
+    return px
+
+
+def keep_lighthouse_light():
+    """At night: the lantern room blazing (screen-blended over the art)."""
+    px = Px()
+    top = -38
+    for y in range(top - 10, top - 4):
+        for x in range(-3, 3):
+            px.put(x, y, hx("fff6c8", 230 if x in (-2, -1, 1) else 150))
+    for x in (-4, 3):
+        px.put(x, top - 7, hx("ffe080", 120))
+    return px
+
+
+def keep_lantern_art():
+    """A paper lantern shaped like a moon jelly, hanging from a little iron shepherd's hook: a ribbed pink bell
+    with a scalloped rim and ribbon tentacles tipped with beads."""
+    px = Px()
+    for y in range(-29, 1):  # the post
+        px.put(-4, y, METAL[3])
+        px.put(-3, y, METAL[1])
+    for x in range(-6, 0):  # its foot
+        px.put(x, 0, METAL[1] if x > -5 else METAL[2])
+    for a in range(0, 19):  # the hook, curling over to the right
+        t = math.pi - a / 18 * math.pi
+        px.put(round(-0.5 + 3.4 * math.cos(t)), round(-29 - 3.2 * math.sin(t)), METAL[2] if a < 9 else METAL[1])
+    for y in range(-27, -23):  # the cord
+        px.put(3, y, hx("4a2a18"))
+    bell = set()
+    for y in range(-24, -14):  # the bell: a dome, flat underneath
+        for x in range(-4, 11):
+            if ((x + 0.5 - 3) / 6.6) ** 2 + ((y + 0.5 + 15) / 9) ** 2 <= 1:
+                bell.add((x, y))
+    for x, y in bell:
+        u = (x + 0.5 - 3) / 6.6
+        rib = (x - 3) % 3 == 0 and y > -22
+        glow = 1 - abs(u) - (y + 15) * -0.03
+        c = R_LANT[4] if glow > 0.75 and y > -20 else R_LANT[3] if glow > 0.4 else R_LANT[2]
+        if rib:
+            c = R_LANT[2] if glow > 0.4 else R_LANT[1]
+        if (x + 1, y) not in bell or (x, y - 1) not in bell and x > 3:
+            c = R_LANT[1] if x > 3 else R_LANT[3]
+        if (x - 1, y) not in bell or ((x, y - 1) not in bell and x <= 3):
+            c = R_LANT[4]
+        px.put(x, y, c)
+    for x in range(-3, 10):  # the scalloped rim
+        px.put(x, -14, R_LANT[1] if x % 2 else R_LANT[2])
+        if x % 2 == 0:
+            px.put(x, -13, R_LANT[1])
+    for k, sx in enumerate((-1, 1, 3, 5, 7)):  # ribbon tentacles with a bead at the end
+        n = 6 + (k % 2) * 2
+        for i in range(n):
+            x = sx + round(math.sin(i * 0.9 + k) * 0.8)
+            px.put(x, -12 + i, R_LANT[3] if i % 2 else R_LANT[2])
+        px.put(sx + round(math.sin(n * 0.9 + k) * 0.8), -12 + n, R_GOLD[3])
+    sand_mound(px, -9, 2, 1, seed=23)
+    return px
+
+
+def keep_lantern_light():
+    """At night: the paper bell lit from inside (screen-blended over the art)."""
+    px = Px()
+    for y in range(-24, -13):
+        for x in range(-4, 11):
+            d = ((x + 0.5 - 3) / 6.6) ** 2 + ((y + 0.5 + 15) / 9) ** 2
+            if d <= 1:
+                px.put(x, y, hx("ffd0e4", round(80 + 150 * (1 - d))))
+    return px
+
+
+def keep_wheel_art():
+    """A ship's wheel, half sunk in the sand: a wooden rim, eight spokes running out to turned handles, a brass hub."""
+    px = Px()
+    cx, cy, rot = 0.5, -11.5, math.radians(11)
+    m = set()
+    for y in range(-28, 1):
+        for x in range(-16, 17):
+            if 6.6 <= math.hypot(x + 0.5 - cx, y + 0.5 - cy) <= 9.6:
+                m.add((x, y))
+    for k in range(8):
+        a = rot + k * math.pi / 4
+        ux, uy = math.cos(a), math.sin(a)
+        m |= stroke_mask([(cx + ux * 2.5, cy + uy * 2.5), (cx + ux * 11.2, cy + uy * 11.2)], 0.95)
+        m |= stroke_mask([(cx + ux * 11.8, cy + uy * 11.8), (cx + ux * 13.0, cy + uy * 13.0)], 1.45)  # the handle's knob
+    m = {(x, y) for x, y in m if y <= 0}  # the lower handles are in the sand
+    shade_mask(px, m, (R_WOOD[0], R_WOOD[1], R_WOOD[3], R_WOOD[4], R_WOOD[5]))
+    for x, y in m:  # grain along the rim, a brass band round its middle
+        r = math.hypot(x + 0.5 - cx, y + 0.5 - cy)
+        if 7.9 < r < 8.5 and px.get(x, y) in (R_WOOD[3], R_WOOD[4]):
+            px.put(x, y, R_BRASS[3] if y + 0.5 < cy else R_BRASS[2])
+        elif 7.0 < r < 7.8 and px.get(x, y) == R_WOOD[3] and (x * 3 + y) % 4 == 0:
+            px.put(x, y, R_WOOD[2])
+    disc(px, cx, cy, 3.2, (R_BRASS[1], R_BRASS[2], R_BRASS[4], R_BRASS[5]))
+    px.put(round(cx - 0.5), round(cy - 0.5), R_BRASS[0])
+    r2 = random.Random(25)
+    for _ in range(16):  # barnacles and a little weed
+        x, y = r2.randint(-14, 14), r2.randint(-26, -2)
+        if px.has(x, y) and px.get(x, y) in (R_WOOD[1], R_WOOD[3]):
+            px.put(x, y, r2.choice([R_SHELL[3], R_SHELL[4], R_KELP[3], R_PATINA[1]]))
+    sand_mound(px, -17, 17, 3, seed=26)
+    return px
+
+
+def keep_postbox_art():
+    """A red pillar postbox, its letter slot and plate: barnacled, a little weed round its foot."""
+    px = Px()
+    keep_cyl(px, -6, 5, -4, -2, R_POST, lit=0.75)   # the plinth
+    keep_cyl(px, -5, 4, -21, -5, R_POST)             # the pillar
+    for x in range(-6, 6):  # the cap's lip
+        px.put(x, -22, R_POST[4] if x < -3 else R_POST[3] if x < 1 else R_POST[2] if x < 5 else R_POST[0])
+    for k, y in enumerate(range(-23, -27, -1)):  # the dome
+        for x in range(-5 + k, 5 - k):
+            px.put(x, y, R_POST[0] if x == 4 - k else R_POST[4] if x < -3 + k else R_POST[3] if x < 1 else R_POST[2])
+    px.put(-1, -27, R_GOLD[3])  # a knob
+    for x in range(-3, 3):  # the slot, with a lip above it
+        px.put(x, -18, R_POST[4] if x < 0 else R_POST[3])
+        px.put(x, -17, hx("1a0608"))
+    for y in range(-13, -10):  # the plate
+        for x in range(-2, 2):
+            px.put(x, y, R_GOLD[3] if y == -13 or x == -2 else R_GOLD[2] if x < 1 else R_GOLD[1])
+    r2 = random.Random(27)
+    for _ in range(12):
+        x, y = r2.randint(-6, 5), r2.randint(-9, -2)
+        if px.has(x, y):
+            px.put(x, y, r2.choice([R_SHELL[3], R_SHELL[4], R_KELP[2], R_KELP[3]]))
+    for x, h in ((-7, 3), (-6, 5), (6, 4), (7, 2)):  # weed round its foot
+        for y in range(1, h + 1):
+            px.put(x + (y // 3), -y, R_KELP[3] if y % 2 else R_KELP[4])
+    sand_mound(px, -9, 8, 2, seed=28)
+    return px
+
+
+# name, x, base y (logical), art: appended to the scene's DECOR as decor 5..9 (item 25 + n - 5)
+KEEP_DECOR = [
+    ("Bottle", 94, 349, keep_bottle_art),
+    ("Lighthouse", 222, 349, keep_lighthouse_art),
+    ("Lantern", 140, 349, keep_lantern_art),
+    ("Wheel", 46, 349, keep_wheel_art),
+    ("Postbox", 188, 349, keep_postbox_art),
+]
+# shop cards: name, how to earn it (card lines, | between), 0 = never priced. The theme is item 30.
+KEEP_ITEMS = [("BOTTLE", "RAISE YOUR|FIRST|ADULT"), ("LIGHTHOUSE", "RAISE 3|KINDS OF|JELLY"),
+              ("JELLY LANTERN", "SPOT A|RARE|COLOUR"), ("SHIP'S WHEEL", "KEEP YOUR|TANK 7|DAYS"),
+              ("POSTBOX", "FINISH 10|REQUESTS"), ("MOONLIT LAGOON", "THEME|RAISE ALL|9 KINDS")]
+KEEP_THEME_ITEM = KEEP_ITEM0 + len(KEEP_DECOR)  # 30
+KEEP_ITEM_IDS = tuple(range(KEEP_ITEM0, KEEP_ITEM0 + len(KEEP_ITEMS)))
+
+
+def keep_card_plate(px):
+    """The keepsake card's plate where a price would be: a gold-edged ribbon with a star and KEEPSAKE."""
+    pm = round_rect_mask(46, 14, 3)
+    for x, y in pm:
+        px.put(50 + x, 48 + y, R_GOLD[1] if edge4(pm, x, y) else R_GOLD[4] if y <= 1 else R_GOLD[2] if y >= 11 else R_GOLD[3])
+    for dx, dy in ((0, -2), (0, -1), (-2, 0), (-1, 0), (0, 0), (1, 0), (2, 0), (-1, 1), (1, 1), (-1, 2), (1, 2), (0, 1)):
+        px.put(55 + dx, 54 + dy, hx("fffbe0"))
+    draw_text(px, "KEEPSAKE", 60, 53, R_WOOD[0], shadow=R_GOLD[4])
+
+
+def keep_lock_overlay():
+    """A not-yet-earned keepsake: a light wash over the picture only, so the card still says how to earn it."""
+    px = Px()
+    for x, y in round_rect_mask(40, CARD_H - 10, 3):
+        px.put(5 + x, 5 + y, hx("2a1a2a", 120))
+    for x in range(11, 15):  # a little padlock in the window's corner
+        for y in range(11, 15):
+            px.put(x, y, R_GOLD[3] if y == 11 else R_GOLD[2] if x < 14 else R_GOLD[1])
+    for y in range(8, 11):
+        px.put(11, y, R_IRON[4])
+        px.put(14, y, R_IRON[4])
+    px.put(12, 7, R_IRON[4])
+    px.put(13, 7, R_IRON[4])
+    px.put(12, 13, R_WOOD[0])
+    return px
+
+
+# ---- Moonlit Lagoon (theme 4): a shallow lagoon at night-blue, the moon wobbling through the surface, mangrove
+# roots reaching down into silver sand. Backdrop only, like the other themes.
+THEMES.append("Lagoon")
+THEME_TITLES.append("MOONLIT LAGOON")
+THEME_WATER[4] = [(0, "e6ecff"), (0.05, "9aa8e6"), (0.3, "3c56a6"), (0.68, "1e2c72"), (1, "0e1440")]
+THEME_HAZE[4] = "2e3f8a"
+THEME_FOG_FAR[4] = ("3c56a6", "34489a", "26357e", 150)
+THEME_FOG_MID[4] = ("3c56a6", "34489a", "283a82", 95)
+THEME_SHAFT[4] = (("eef2ff", 115), ("c8d4ff", 45))
+KEEP_SHAFTS = [(30, 26, 54, 300), (104, 16, 44, 250), (170, 30, 62, 310), (252, 18, 48, 260), (318, 28, 58, 300), (402, 16, 40, 150)]
+R_LFAR = ramp("1e2a66", "26357a", "30428a", "3c5298")
+R_MROOT = ramp("120e26", "221a3c", "382c56", "52466e", "706488")
+R_LSAND = ramp("23264a", "3c4272", "626a9a", "929cc4", "c4ccea", "eef2ff")
+R_LGRASS = ramp("10243a", "183a4a", "245258", "346c66", "4c8a74")
+R_LROCK = ramp("161a3a", "242a52", "343e6c", "4a5888", "6a7aa6")
+
+
+def keep_far_lagoon():
+    px = Px()
+    for cx, cy, rx, ry in [(36, 330, 46, 22), (130, 338, 52, 16), (218, 326, 44, 28), (304, 334, 40, 20)]:  # far sandbanks
+        for y in range(int(cy - ry), WATER_BOT + 1):
+            for x in range(int(cx - rx), int(cx + rx) + 1):
+                if GLASS_L <= x <= FAR_R and ((x + 0.5 - cx) / rx) ** 2 + (min(0, y + 0.5 - cy) / ry) ** 2 <= 1 + 0.05 * math.sin(x * 0.4):
+                    px.put(x, y, R_LFAR[1] if (x + y) % 6 else R_LFAR[2])
+    r2 = random.Random(41)
+    tops = {}
+    for (x, y) in px.d:
+        tops[x] = min(tops.get(x, 999), y)
+    for x in range(GLASS_L, FAR_R + 1):  # a seagrass meadow along the banks
+        if x in tops and r2.random() < 0.55:
+            for k in range(r2.randint(3, 9)):
+                px.put(x + (k // 4) * (1 if x % 2 else -1), tops[x] - 1 - k, R_LFAR[2] if k % 3 else R_LFAR[3])
+    for bx, by, r in [(84, 316, 10), (262, 312, 12), (176, 322, 7)]:  # coral heads
+        for y in range(by - r, by + r):
+            for x in range(bx - r - 2, bx + r + 3):
+                if ((x + 0.5 - bx) / (r + 2)) ** 2 + ((y + 0.5 - by) / r) ** 2 <= 1:
+                    px.put(x, y, R_LFAR[0] if x > bx + r // 2 else R_LFAR[1])
+    px = soften(px, hx(THEME_HAZE[4]), 1.0)
+    # the moon through the surface (after the softening: it stays crisp), with its light rippling around it
+    mx, my, mr = 70, WATER_TOP + 14, 7.5
+    for y in range(WATER_TOP, WATER_TOP + 34):
+        for x in range(mx - 30, mx + 31):
+            d = math.hypot((x + 0.5 - mx) / 1.25, y + 0.5 - my)
+            wob = 0.8 * math.sin(y * 1.3 + x * 0.2)
+            if d + wob <= mr:
+                px.put(x, y, hx("fbfcff") if d < mr - 2 else hx("dfe6ff"))
+            elif d + wob <= mr + 2:
+                px.over(x, y, hx("c8d4ff", 150))
+            elif d < 28 and (round(d + wob * 2) % 5 == 0) and (x + y) % 2 == 0:
+                px.over(x, y, hx("d6e0ff", round(120 * (1 - d / 28))))
+    return quantize(px)
+
+
+def keep_mangrove(px, x0, y_end, span, seed):
+    """A clump of mangrove prop roots: arching down from the surface into the sand, lit on the moon side."""
+    r2 = random.Random(seed)
+    for k in range(9):
+        # each root leaves the trunk (above the surface) heading outward, then turns down into the sand: an arch
+        side = -1 if k % 2 else 1
+        sx = x0 + r2.randint(-5, 5)
+        ex = sx + side * span * (0.2 + 0.8 * (k // 2) / 4) + r2.randint(-3, 3)
+        pts = bez((sx, WATER_TOP), (ex, WATER_TOP + (y_end - WATER_TOP) * r2.uniform(0.1, 0.35)), (ex + side * 2, y_end + r2.randint(-3, 2)), 60)
+        m = set()
+        for i in range(len(pts) - 1):  # tapering: thick under the surface, thin where it roots
+            m |= stroke_mask(pts[i:i + 2], 3.2 - 1.6 * i / len(pts))
+        for x, y in m:
+            lit = (x - 1, y) not in m
+            c = R_MROOT[3] if lit else R_MROOT[0] if (x + 1, y) not in m else R_MROOT[2 if (y // 3 + x) % 4 == 0 else 1]
+            if not lit and (x + 1, y) in m and (x - 2, y) not in m:
+                c = R_MROOT[4] if y < WATER_TOP + 60 else R_MROOT[3]  # moonlight along the near edge, brighter up top
+            px.put(x, y, c)
+        for _ in range(5):  # oysters and sponges clinging to it
+            x, y = pts[r2.randint(30, 56)]
+            px.put(round(x), round(y), r2.choice([hx("8a88b0"), hx("b0a8c8"), hx("6a9a9a")]))
+            px.put(round(x) + 1, round(y), hx("4a4a6a"))
+
+
+def keep_mid_lagoon():
+    px = Px()
+    keep_mangrove(px, 6, 334, 40, 51)      # thickets at the lagoon's edges, one each side of the view
+    keep_mangrove(px, 384, 330, 36, 54)
+    r2 = random.Random(55)
+    for cx, cy, rx, ry, seed in [(104, 330, 22, 16, 1), (244, 326, 26, 22, 2), (330, 334, 18, 12, 3)]:  # coral heads
+        blob(px, cx, cy, rx, ry, R_LROCK, flat=WATER_BOT, rough=1, seed=seed, outline=False)
+        brain_coral(px, cx - rx // 3, cy - ry + 3, 5, 3)
+    for cx in range(GLASS_L + 2, MID_R, 5):  # a seagrass meadow: ribbon blades swaying a little
+        if r2.random() < 0.7:
+            for b in range(r2.randint(2, 4)):
+                L = r2.randint(10, 24)
+                lean = r2.uniform(-0.6, 0.6)
+                for i in range(L):
+                    x = cx + b * 2 + round(lean * i * 0.5 + math.sin(i * 0.3 + cx) * 0.8)
+                    hi = i > L * 0.6
+                    px.put(x, 344 - i, R_LGRASS[3 + hi] if b % 2 else R_LGRASS[2 + hi])
+                    px.put(x + 1, 344 - i, R_LGRASS[1])
+    for _ in range(26):  # a few glowing plankton motes
+        x, y = r2.randint(GLASS_L, MID_R), r2.randint(WATER_TOP + 30, 300)
+        px.put(x, y, hx("9ef8ff", 200))
+        px.over(x + 1, y, hx("9ef8ff", 70))
+    return quantize(soften(px, hx(THEME_HAZE[4]), 0.5))
+
+
+def keep_lagoon_icon(put, x0, y0, w, sb):
+    """Theme 4's shop icon touches (theme_icon): the moon at the surface and a mangrove root."""
+    for dy in range(-2, 3):
+        for dx in range(-3, 3):
+            if dx * dx + dy * dy <= 6:
+                put(x0 + 9 + dx, y0 + 5 + dy, hx("fbfcff") if dx < 1 else hx("dfe6ff"))
+    for t_ in range(sb - (y0 + 2)):
+        x = x0 + w - 6 - round(4 * math.sin(t_ / (sb - y0) * math.pi))
+        put(x, y0 + 2 + t_, R_MROOT[3])
+        put(x + 1, y0 + 2 + t_, R_MROOT[1])
+    for x in (x0 + 5, x0 + 14, x0 + 20):
+        for k in range(3):
+            put(x + k % 2, sb - 1 - k, R_LGRASS[3])
+
+
+def keep_icon(i):
+    """Shop icon (and journal portrait) for keepsake item i."""
+    if i == KEEP_THEME_ITEM:
+        return theme_icon(4)
+    return KEEP_DECOR[i - KEEP_ITEM0][3]()
+
+
+def keep_glow_node(n, name, light, halo_y, halo_w, halo_h, halo_c, beam=False):
+    """WorldMid, over the Night layer: decoration n's night light, following it (dec{n}, dec{n}x/y, dec{n}lift)."""
+    _, x, y, _ = DECOR[n]
+    kids = [ellipse_shape(f"{name}Halo", 0, halo_y * P, halo_w * P, halo_h * P,
+                          rad_grad(0, 0, halo_w // 2 * P, [(0, hx(halo_c, 150)), (0.4, hx(halo_c, 60)), (1, hx(halo_c, 0))]), blend="screen"),
+            image(f"{name}Light", light, blend="screen")]
+    if beam:  # the lighthouse's beam sweeping round: a soft wedge whose width swings through zero
+        bid = nid()
+        pts = [(0, -2 * P), (0, 2 * P), (60 * P, 12 * P), (60 * P, -12 * P)]
+        kids.append(node(f"{name}Beam", [poly_shape(f"{name}BeamWedge", pts, lin_grad(0, 0, 60 * P, 0, [(0, hx("fff4c0", 120)), (1, hx("fff4c0", 0))]),
+                                                    blend="screen")], y=halo_y * P, node_id=bid))
+        add_anim(f"{name}Beam", 360, [keys(bid, 16, [(0, 1), (90, 0.05), (180, -1), (270, -0.05), (360, 1)], "cubic"),
+                                      keys(bid, 18, [(0, 1), (90, 0.2), (180, 1), (270, 0.2), (360, 1)], "cubic")])
+    inner = node(f"{name}Night", list(reversed(kids)), opacity=0, binds=[bind(prop("nightShade"), 18)])
+    return node(f"Dec{n}Glow", [node("Lift", [inner], binds=[bind(prop(f"dec{n}lift"), 14, LIFT_CONV)])], x=x * P, y=y * P, opacity=0,
+                binds=[bind(prop(f"dec{n}"), 18), bind(prop(f"dec{n}x", default=x * P), 13), bind(prop(f"dec{n}y", default=y * P), 14)])
+
+
+def keep_contract(c):
+    """Keepsake entries in contract.json: which shop items and decorations they are."""
+    c["keepsakes"] = {"items": list(KEEP_ITEM_IDS), "decor": list(range(KEEP_DECOR0, KEEP_DECOR0 + len(KEEP_DECOR))), "theme": len(THEMES) - 1}
+
+
+# ---- end keepsakes ----
 
 
 # ---------------------------------------------------------------- build the scene (back to front)
@@ -5443,7 +5915,8 @@ def theme_rects(name, stops_of):
 world.append(theme_rects("Water", lambda t: [(p_, hx(c)) for p_, c in THEME_WATER[t]]))
 
 far_kids = [node("FarThemes", list(reversed([image("Far", far_layer(), **themed(0)), image("FarKelp", far_kelp(), **themed(1)),
-                                             image("FarCoral", far_coral(), **themed(2)), image("FarArctic", far_arctic(), **themed(3))])))]
+                                             image("FarCoral", far_coral(), **themed(2)), image("FarArctic", far_arctic(), **themed(3)),
+                                             image("FarLagoon", keep_far_lagoon(), **themed(4))])))]  # ---- keepsakes ----
 # fish schools swim the far depth (its visible span is 0..324 at f = 0.35); `phase` starts each one part-way
 for school, (y0, flip, dur, n, x_from, x_to, phase) in enumerate([(160, False, 3100, 6, -40, 360, 0.0), (225, True, 2700, 4, 360, -40, 0.4),
                                                                    (96, True, 3700, 5, 360, -40, 0.75), (272, False, 2400, 3, -40, 360, 0.55)]):
@@ -5502,6 +5975,7 @@ world.append(depth("Mid", [node("MidThemes", list(reversed([
     node("MidKelp", list(reversed(kelp_mid)), **themed(1)),
     image("MidCoral", mid_coral(), **themed(2)),
     image("MidArctic", mid_arctic(), **themed(3)),
+    image("MidLagoon", keep_mid_lagoon(), **themed(4)),  # ---- keepsakes ----
 ])))]))
 world.append(theme_rects("FogMid", lambda t: [(0, hx(THEME_FOG_MID[t][0], 0)), (0.6, hx(THEME_FOG_MID[t][1], 0)),
                                               (1, hx(THEME_FOG_MID[t][2], THEME_FOG_MID[t][3]))]))
@@ -5517,6 +5991,7 @@ SHAFT_SETS = {
         (360, 14, 60, 240), (408, 18, 50, 140)],
     3: [(30, 12, 40, 220), (88, 20, 52, 260), (150, 10, 36, 200), (206, 18, 50, 250), (262, 12, 40, 230), (318, 20, 52, 260),
         (372, 10, 34, 200), (412, 14, 40, 130)],
+    4: KEEP_SHAFTS,  # ---- keepsakes ---- Moonlit Lagoon
 }
 shaft_groups = []
 for t, specs in SHAFT_SETS.items():
@@ -5549,7 +6024,7 @@ world.append(depth("Shafts", [node("Shafts", list(reversed(shaft_groups)), binds
 
 world.append(image("CaveBack", cave_back_art()))
 world.append(node("Floor", list(reversed([image("Sand", sand(), **themed(0))]
-                                          + [image(f"Sand{THEMES[t]}", theme_sand(t), **themed(t)) for t in (1, 2, 3)]))))
+                                          + [image(f"Sand{THEMES[t]}", theme_sand(t), **themed(t)) for t in (1, 2, 3, 4)]))))
 c_ids = [nid() for _ in range(4)]
 world.append(node("Caustics", [image(f"Caustic{f}", caustics(f), opacity=1 if f == 0 else 0, node_id=c_ids[f], blend="screen") for f in range(4)],
                   binds=[bind(prop("daylight", default=1), 18)]))
@@ -5575,8 +6050,11 @@ DECOR = [  # name, x, base y, art
     ("Helmet", 197, 349, helmet_art),
     ("Clam", 116, 349, None),
     ("GlowCoral", 70, 349, mushroom_art),
-    ("Bubbler", 140, BUB_BASE, bubbler_art),  # ---- bubbler ---- (v13)
 ]
+KEEP_DECOR0 = len(DECOR)  # 5
+DECOR += KEEP_DECOR  # ---- keepsakes ---- decor 5..9
+BUBBLER_D = len(DECOR)  # 10
+DECOR.append(("Bubbler", BUB_X, BUB_BASE, bubbler_art))  # ---- bubbler ---- (v13) decor 10
 
 
 LIFT = 6  # logical px a picked-up decoration rises (18 artboard units)
@@ -5766,7 +6244,9 @@ world.append(kelp_clump("KelpFrontM", 324, 347, [70, 94], R_KELP, 5.2, 14))
 world.append(visitor_node("horse", "Seahorse", seahorse_art, 87 * P, 320 * P))
 for n in (1, 2, 3, 4):
     world.append(decor_node(n))
-world.append(decor_node(5))  # ---- bubbler ---- in front of the other decorations, behind the jellies
+for n in range(KEEP_DECOR0, KEEP_DECOR0 + len(KEEP_DECOR)):  # ---- keepsakes ----
+    world.append(decor_node(n))
+world.append(decor_node(BUBBLER_D))  # ---- bubbler ---- in front of the other decorations, behind the jellies
 # the sea turtle swims across at mid depth: in front of the scenery, behind the jellies (WorldMid)
 world.append(visitor_node("turtle", "Turtle", turtle_art, 120 * P, 170 * P))
 
@@ -5890,6 +6370,9 @@ mid.append(node("Dec3PearlNight", [node("Lift", [node("PearlOn", [node("PearlNig
     binds=[bind(prop("dec3lift"), 14, LIFT_CONV)])],
     x=cx3_ * P, y=cy3_ * P, opacity=0, binds=[bind(prop("dec3"), 18), bind(prop("dec3x", default=cx3_ * P), 13), bind(prop("dec3y", default=cy3_ * P), 14)]))
 add_anim("CoralGlow", 300, [keys(gpulse, 18, [(0, 0.6), (150, 1), (300, 0.6)], "cubic")])
+# ---- keepsakes ---- the lighthouse's lamp and beam, and the jelly lantern, light up at night
+mid.append(keep_glow_node(6, "Lighthouse", keep_lighthouse_light(), -45, 40, 32, "ffe080", beam=True))
+mid.append(keep_glow_node(7, "Lantern", keep_lantern_light(), -19, 46, 40, "ff9ac8"))
 
 # the cave's light: over the Night layer, screen-blended. Always on softly; at night (nightShade) it comes
 # up to full through a range mapper (0.45 -> 1). Dots twinkle in three groups; the heart of the cave breathes.
@@ -6204,20 +6687,21 @@ ITEMS = [("BLUE BLUBBER", "POLYP", 40), ("UPSIDE-DOWN", "POLYP", 70), ("COMB JEL
          ("BRINE SHRIMP", "FOOD|5 KINDS|LOVE IT", 40), ("PLANKTON", "FOOD|4 KINDS|LOVE IT", 70),
          ("REEF", "THEME|THE CLASSIC", 0), ("KELP FOREST", "THEME|GOLDEN|KELP", 140),
          ("CORAL GARDEN", "THEME|TROPICAL|CORALS", 170), ("ARCTIC", "THEME|ICE AND|SNOW", 200),
-         ("BUBBLER", "BUBBLES|TO RIDE", 80)]  # ---- bubbler ---- (v13: item 24, decoration 5)
+         ("BUBBLER", "BUBBLES|TO RIDE", 80)]  # ---- bubbler ---- (v13: item 24, decoration 10)
+ITEMS += [(nm, how, 0) for nm, how in KEEP_ITEMS]  # ---- keepsakes ---- 25..30
 # shop item -> the species it sells (polyps)
 JELLY_ITEM = {0: 1, 1: 2, 2: 3, 13: 4, 14: 5, 15: 6, 16: 7, 17: 8}
 TANK_ITEMS, HELPER_ITEMS = (11, 12), (8, 9, 10)
 FOOD_ITEM = {1: 18, 2: 19}            # v11: food kind -> the shop item that sells it
 THEME_ITEM0 = 20                      # v11: theme n is shop item 20 + n (0 Reef, free and owned)
 FOOD_ITEMS = tuple(FOOD_ITEM.values())
-THEME_ITEMS = tuple(range(THEME_ITEM0, THEME_ITEM0 + len(THEMES)))
+THEME_ITEMS = tuple(range(THEME_ITEM0, THEME_ITEM0 + 4)) + (KEEP_THEME_ITEM,)  # v13: and the keepsake theme
 # a card locked because of the tank size: (item, prop, note lines)
 NEEDS = [(12, "needs12", ["NEEDS", "MEDIUM"]), (15, "needs15", ["NEEDS", "MEDIUM"]), (17, "needs17", ["NEEDS", "LARGE"])]
 TABS = [("JELLIES", [0, 13, 1, 14, 2, 15, 16, 17], "DRAG TO SEE MORE JELLIES"),
-        ("DECOR", [3, 4, 5, 6, 7, 24], "HOLD A DECORATION TO MOVE IT"),
+        ("DECOR", [3, 4, 5, 6, 7, 24] + list(KEEP_ITEM_IDS[:-1]), "HOLD A DECORATION TO MOVE IT"),
         ("SUPPLIES", [8, 9, 10, 18, 19], "NEW FOOD WAITS ON THE SHELF"),
-        ("TANK", [11, 12, 20, 21, 22, 23], "TAP AN OWNED THEME TO USE IT")]
+        ("TANK", [11, 12, 20, 21, 22, 23, KEEP_THEME_ITEM], "TAP AN OWNED THEME TO USE IT")]
 TAB_W, TAB_H, TAB_GAP, TAB_Y, TAB_LIFT = 50, 15, 4, 55, 3
 TAB_X = [14 + t * (TAB_W + TAB_GAP) for t in range(len(TABS))]
 RULE_Y = TAB_Y + TAB_H  # the shelf line the tabs stand on
@@ -6232,8 +6716,9 @@ for _t, (_, _items, _) in enumerate(TABS):
 HINT_Y = PANEL[1] + PANEL[3] - 18
 # the JELLIES tab scrolls: its cards live in a group clipped to this window (logical px) and moved by shopScroll
 VIEW_TOP, VIEW_BOT = RULE_Y + 2, HINT_Y - 5
-_last = max(CARD_POS[i][2] for i in TABS[0][1]) + CARD_H + 2
-SCROLL_MAX = max(0, _last + 3 - VIEW_BOT)
+# v13: any tab whose cards overflow scrolls the same way (DECOR and TANK, once the keepsakes joined them)
+TAB_SCROLL = [max(0, max(CARD_POS[i][2] for i in items) + CARD_H + 5 - VIEW_BOT) for _, items, _ in TABS]
+SCROLL_MAX = TAB_SCROLL[0]
 TRACK_X, TRACK_W = PANEL[0] + PANEL[2] - 8, 3
 CLOSE = (PANEL[0] + PANEL[2] - 25, PANEL[1] + 8, 17, 17)
 shop_hits = []
@@ -6263,6 +6748,8 @@ def wrap(text, width):
 
 def item_icon(i):
     """Mini sprite for shop item i, origin = where it sits in its window (centre x, y)."""
+    if i in KEEP_ITEM_IDS:  # ---- keepsakes ----
+        return keep_icon(i), 14
     if i in TANK_ITEMS:
         return tank_icon(i - 10), 14
     if i in THEME_ITEMS:
@@ -6455,6 +6942,9 @@ def card_art(i):
     pm2 = round_rect_mask(46, 14, 3)  # price plate
     for x, y in pm2:
         px.put(50 + x, 48 + y, R_CREAM[1] if edge4(pm2, x, y) else R_CREAM[2])
+    if i in KEEP_ITEM_IDS:  # ---- keepsakes ---- never priced: a ribbon instead
+        keep_card_plate(px)
+        return px
     if price == 0:  # the Reef theme
         draw_text(px, "FREE", 50 + (46 - text_width("FREE")) // 2, 53, INK, shadow=R_CREAM[3])
         return px
@@ -6552,7 +7042,10 @@ def shop_node():
         for i in items:
             _, x0, y0 = CARD_POS[i]
             g.append(image(f"Card{i}", card_art(i), lx=x0, ly=y0))
-            g.append(image("CardLock", lock_overlay(), lx=x0, ly=y0, node_name=f"Lock{i}", opacity=0, binds=[bind(prop(f"lock{i}"), 18)]))
+            lock = (image("KeepLock", keep_lock_overlay(), lx=x0, ly=y0, node_name=f"Lock{i}", opacity=0, binds=[bind(prop(f"lock{i}"), 18)])
+                    if i in KEEP_ITEM_IDS else  # ---- keepsakes ---- a lighter lock: the card says how to earn it
+                    image("CardLock", lock_overlay(), lx=x0, ly=y0, node_name=f"Lock{i}", opacity=0, binds=[bind(prop(f"lock{i}"), 18)]))
+            g.append(lock)
             g.append(image("OwnBadge", own_badge(), lx=x0 + 50, ly=y0 + 48, node_name=f"Own{i}", opacity=0, binds=[bind(prop(f"own{i}"), 18)]))
             if i in THEME_ITEMS:  # v11: the theme in use
                 g.append(image("InUseBadge", in_use_badge(), lx=x0 + 50, ly=y0 + 48, node_name=f"Use{i}", opacity=0,
@@ -6565,16 +7058,17 @@ def shop_node():
             shop_hits.append((hid, f"buy{i}"))
             g.append(rect_shape(f"Buy{i}Hit", x0 * P, y0 * P, CARD_W * P, CARD_H * P, solid(hx("ffffff", 1)), sid=hid))
         d = 0 if t == 0 else TAB_AWAY
-        if t == 0 and SCROLL_MAX > 0:
+        if TAB_SCROLL[t] > 0:
             # cards scroll (shopScroll, ≤ 0) inside a clip window; the hint and the scrollbar stay put
             hint, cards = g[0], g[1:]
             clip_id = nid()
-            view = (f'<Shape name="JelliesView" id="{clip_id}"><Rectangle x="{PANEL[0] * P}" y="{VIEW_TOP * P}" '
+            label = "Jellies" if t == 0 else f"Tab{t}"
+            view = (f'<Shape name="{label}View" id="{clip_id}"><Rectangle x="{PANEL[0] * P}" y="{VIEW_TOP * P}" '
                     f'width="{PANEL[2] * P}" height="{(VIEW_BOT - VIEW_TOP) * P}" originX="0" originY="0" name="r"/></Shape>')
-            scroll = node("JelliesScroll", [f'<ClippingShape sourceId="{clip_id}" name="Clip"/>'] + list(reversed(cards)),
+            scroll = node(f"{label}Scroll", [f'<ClippingShape sourceId="{clip_id}" name="Clip"/>'] + list(reversed(cards)),
                           binds=[bind(prop("shopScroll"), 14)])
             track_h = (VIEW_BOT - VIEW_TOP) * P
-            thumb_h = round(track_h * (VIEW_BOT - VIEW_TOP) / (VIEW_BOT - VIEW_TOP + SCROLL_MAX))
+            thumb_h = round(track_h * (VIEW_BOT - VIEW_TOP) / (VIEW_BOT - VIEW_TOP + TAB_SCROLL[t]))
             bar = [rect_shape("ScrollTrack", TRACK_X * P, VIEW_TOP * P, TRACK_W * P, track_h, solid(hx("d9bf94"))),
                    rect_shape("ScrollThumb", TRACK_X * P, VIEW_TOP * P, TRACK_W * P, thumb_h, solid(R_WOOD[2]),
                               binds=[bind(prop("shopScrollBar"), 14)])]
@@ -7060,9 +7554,12 @@ contract = {
                + [{"name": "lamp", "x": (SWITCH[0] - 3) * P, "y": (SWITCH[1] - 3) * P, "w": (SWITCH[2] + 6) * P, "h": (SWITCH[3] + 6) * P}]
                + [{"name": "shop", "x": BTN_X[SHOP_BTN] * P, "y": BTN_Y * P, "w": BTN_W * P, "h": (BTN_H + 2) * P}],
     "shopCards": [{"x": CARD_POS[i][1] * P, "y": CARD_POS[i][2] * P, "w": CARD_W * P, "h": CARD_H * P, "tab": CARD_POS[i][0]}
-                  for i in range(len(ITEMS))],
+                  if i in CARD_POS else None for i in range(len(ITEMS))],
     "shopScroll": {"max": SCROLL_MAX * P, "viewTop": VIEW_TOP * P, "viewBottom": VIEW_BOT * P,
                    "trackTop": VIEW_TOP * P, "trackH": (VIEW_BOT - VIEW_TOP) * P},
+    # v13: every tab's scroll window (null: its cards fit); the JELLIES entry repeats shopScroll
+    "shopScrollTabs": [{"max": TAB_SCROLL[t] * P, "viewTop": VIEW_TOP * P, "viewBottom": VIEW_BOT * P, "trackTop": VIEW_TOP * P,
+                        "trackH": (VIEW_BOT - VIEW_TOP) * P} if TAB_SCROLL[t] > 0 else None for t in range(len(TABS))],
     "shopTabs": [{"name": TABS[t][0], "x": TAB_X[t] * P, "y": (TAB_Y - TAB_LIFT) * P, "w": TAB_W * P, "h": (TAB_H + TAB_LIFT + 2) * P}
                  for t in range(len(TABS))],
     "tabAwayY": TAB_AWAY,
@@ -7095,6 +7592,7 @@ contract = {
     "nested": {"pattern": "^j([0-6])(.+)$", "path": "j{s}/{key}", "viewModel": "Jelly", "keys": list(_jorder)},
 }
 hw_contract(contract)  # ---- Halloween event ----
+keep_contract(contract)  # ---- keepsakes ----
 # ---- asset groups: each group's PNGs packed into one file (base64 in JSON, a type every host serves and
 # compresses); the contract lists them with a content hash the host adds to the URL so a new build busts caches
 SPRITE_DIR = ROOT / "public" / "sprites"
@@ -7152,6 +7650,8 @@ for k in range(len(SPECIES)):
     for (x, y), c in port.d.items():
         sil.put(x, y, hx("141a33", 255 if body.has(x, y) or c[3] >= 110 else round(70 + c[3])))
     journal_art[f"{k}s"] = data_url(sil)
+for m, i in enumerate(KEEP_ITEM_IDS):  # ---- keepsakes ---- the journal's keepsakes page: milestone m's reward
+    journal_art[f"keep{m}"] = data_url(keep_icon(i))
 (ROOT / "src" / "journal-art.json").write_text(json.dumps(journal_art, indent=1))
 
 

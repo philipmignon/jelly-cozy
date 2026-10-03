@@ -7,6 +7,7 @@ import { attachKeyboard, type ButtonName, type Keyboard } from "./keyboard";
 import { readReducedMotion, writeReducedMotion } from "./a11y";
 import { createSettings } from "./hud";
 import { createJournal } from "./journal";
+import { createKeepNote } from "./keepnote";
 import { connectCloud, savedAt, type CloudSync } from "./cloud";
 import { SHELL_DOLLARS, connectFriends, giftLines, liveId, type Friends, type Gift } from "./friends";
 import { captionDate, capture, downloadsCapability, flash, photoFilename, savePng, toPng } from "./photo";
@@ -15,7 +16,7 @@ import { createOverlay, type JellyCardInfo } from "./overlay";
 import { registerOffline } from "./offline";
 import { activeSeason, readSeasonDecor, seasonalMorph, writeSeasonDecor } from "./season";
 import { createRequestNote, type RequestNote } from "./requestnote";
-import { SPECIES_NAMES, TAB_N } from "./species";
+import { SPECIES_NAMES, TAB_N, keepsakeOf } from "./species";
 import { createSpriteGroups, eventGroup, groupsFor, jellyGroups, speciesGroup, useSpriteGroups } from "./spritegroups";
 import {
   K,
@@ -42,6 +43,9 @@ import {
   feed,
   importTank,
   journal,
+  keepsakes,
+  keepsakesAtLoad,
+  MILESTONES,
   flingCam,
   inShopView,
   scrollShop,
@@ -240,11 +244,38 @@ async function main() {
   const state = createState(loaded.save, Math.random, {
     growthMultiplier: DEMO ? 1 : growthMultiplier,
     requests: !READ_ONLY,
+    keepsakes: !READ_ONLY, // v13: milestones only count (and keepsakes only unlock) in the player's own tank
     ...(READ_ONLY ? {} : { seasonalMorph: (now: number) => seasonalMorph(now, location.search) }),
   });
   const audio = createTankAudio();
   const overlay = createOverlay();
-  const book = createJournal(() => journal(state));
+  const book = createJournal(() => journal(state), () => keepsakes(state));
+  // v13: keepsake notes wait their turn: after the away note, never over a tip or another note.
+  // Milestones an older save already reached on load arrive as one summary (one entry in the queue).
+  const keepNote = createKeepNote(() => book.open("keepsakes"));
+  const keepQueue: number[][] = [];
+  let keepReady = false;
+  let keepShowing = false;
+  const showKeeps = async () => {
+    if (keepShowing || !keepReady) return;
+    keepShowing = true;
+    while (keepQueue.length) {
+      if (overlay.busy || book.isOpen || sharePanel.isOpen) {
+        await new Promise((r) => setTimeout(r, 400));
+        continue;
+      }
+      const ms = keepQueue.shift()!;
+      audio.play("unlock");
+      buzz([20, 40, 20]);
+      await keepNote.show(ms.flatMap((m) => (MILESTONES[m] ? [{ m, note: MILESTONES[m].note, title: MILESTONES[m].title, reward: MILESTONES[m].reward }] : [])));
+    }
+    keepShowing = false;
+  };
+  const loadedKeeps = keepsakesAtLoad(state);
+  if (loadedKeeps.length) {
+    keepQueue.push(loadedKeeps);
+    persist(state); // their rewards are in: keep them even if the page closes before the next autosave
+  }
   const sharePanel = createSharePanel(
     () => exportTank(state),
     (code) => importTank(code) !== null || (friends !== null && liveId(code) !== null),
@@ -423,6 +454,15 @@ async function main() {
     if (r === "bought") {
       audio.play("buy");
       persist(state);
+    } else if (r === "keepsake") {
+      // v13: not for sale: the card's tag says how it's earned
+      audio.play("ui");
+      const m = MILESTONES[keepsakeOf(SHOP_ITEMS[i])];
+      const c = (K.shopCards as unknown as ({ x: number; y: number; w: number } | null)[] | undefined)?.[i];
+      if (m && c) {
+        const at = client(c.x + c.w / 2, c.y + 30 - state.shopScroll);
+        overlay.nameTag(`Keepsake: ${m.title}`, at.x, at.y);
+      }
     } else if (r === "selected") {
       audio.play("ui"); // an owned theme picked again
       persist(state);
@@ -447,7 +487,7 @@ async function main() {
   let menuWasOpen = false; // the press that closes the menu (or the requests note) shouldn't also pet, pour or pan
   canvas.addEventListener("pointerdown", () => (menuWasOpen = !!settings?.isOpen || !!reqNote?.isOpen), true);
   const inTank = (y: number) =>
-    y < K.cabTop && !isShopOpen(state) && !overlay.busy && overlay.cardSlot === null && !book.isOpen && !sharePanel.isOpen && !backupOpen() && !reqNote?.isOpen && !menuWasOpen;
+    y < K.cabTop && !isShopOpen(state) && !overlay.busy && overlay.cardSlot === null && !book.isOpen && !sharePanel.isOpen && !backupOpen() && !reqNote?.isOpen && !keepNote.isOpen && !menuWasOpen;
   // the held tool: a press in the water sprinkles or scrubs instead of petting/panning
   const SPRINKLE_MS = 110;
   let lastPour = 0;
@@ -512,7 +552,7 @@ async function main() {
       },
     });
   };
-  const toolWater = (y: number) => y < K.cabTop && !isShopOpen(state) && !overlay.busy && !book.isOpen && !sharePanel.isOpen && !backupOpen() && !reqNote?.isOpen && !menuWasOpen;
+  const toolWater = (y: number) => y < K.cabTop && !isShopOpen(state) && !overlay.busy && !book.isOpen && !sharePanel.isOpen && !backupOpen() && !reqNote?.isOpen && !keepNote.isOpen && !menuWasOpen;
 
   attachGestures(canvas, (cx, cy) => toArtboard(canvas, cx, cy), {
     toolDown(x, y) {
@@ -738,6 +778,8 @@ async function main() {
     const lines = [...(loaded.away?.lines ?? []), ...(gift?.lines ?? [])];
     if (lines.length) await overlay.awayNote(lines);
     if (gift) serveSnacks(gift.snacks);
+    keepReady = true;
+    await showKeeps();
     await tips();
     if (early === null) {
       const late = await giftsReady;
@@ -851,6 +893,12 @@ async function main() {
         case "themed":
           audio.play("unlock");
           persist(state);
+          break;
+        case "keepsake":
+          // v13: a milestone reached in play: its keepsake is already in (with a sparkle); a note says so
+          if (e.keepsake !== undefined) keepQueue.push([e.keepsake]);
+          persist(state);
+          void showKeeps();
           break;
         case "requestDone":
           // v12: a daily request finished: a chime, the note bobs, and its "+N" (the next event) floats under it

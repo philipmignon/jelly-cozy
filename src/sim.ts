@@ -42,6 +42,9 @@
  *                       the shop slides shut so the new look shows
  *   "requestDone" request, amount  (v12) a daily request was finished (index into requests(s).items); its "earned"
  *                       (no slot, no x/y) comes straight after it. Daily requests run only with SimOptions.requests
+ *   "keepsake" keepsake (v13) a journal milestone was reached in play (index into MILESTONES, ./keepsakes.ts); its
+ *                       reward is already granted (a decoration placed at its spot with a sparkle, or a theme owned).
+ *                       Milestones reached at load are granted quietly: keepsakesAtLoad(s). Only with SimOptions.keepsakes
  *   "ate" also carries `fav: true` (v11) when the pellet was the jelly's favourite food: double growth,
  *                       a little more fullness and a bigger happy flush
  *   "rode"    slot, x, y, seen  (v13) a jelly rode the bubbler's column to the top (x: the column, y: the jelly);
@@ -51,7 +54,7 @@
  * the name). Shy ones hide by the rocks when the glass is tapped near them or a held item is swept past fast;
  * curious ones come to look at a held item in the water and greet visitors; sleepy ones pulse slower, keep low
  * and settle an hour before night; social ones gather round the others by day too.
- * v13 BUBBLER (decoration 5, shop item 24; ./currents.ts): its column lifts swimmers and fresh food; now and then a
+ * v13 BUBBLER (decoration 10, shop item 24; ./currents.ts): its column lifts swimmers and fresh food; now and then a
  * wander becomes a ride up it (targetKind "ride"), most often for curious and social jellies.
  *
  * v11 FOODS: flakes (the can, always owned), brine shrimp (a jar) and plankton (a bottle) are bought in the
@@ -83,6 +86,7 @@ import {
   favouriteFood,
   foodItem,
   themeItem,
+  keepsakeOf,
   SPECIES_N,
   AWAY_GROWTH_CAP,
   AWAY_LINES_MAX,
@@ -254,6 +258,7 @@ import {
 import { COLUMN_HALF, CURRENT_HALF, CURRENT_PUSH, CURRENT_TOP_GAP, GLIDE_SHARE, RIDE_AWAY, RIDE_GIVE_UP, RIDE_KICK, RIDE_PUSH, RIDE_TOP, currentAt, foodLift } from "./currents";
 import { SEASONS, type SeasonId } from "./season";
 import { SPRINKLE_NEAR, advance, copyRequests, planRequests, requestText, requestsOf, rewardOf, type DailyRequests, type Deed, type Request, type RequestKind } from "./requests";
+import { MILESTONES, copyKeep, countDay, isEarned, keepFacts, keepOf, newlyReached, progressOf, seedKeep, type KeepSave } from "./keepsakes";
 
 export { K, clamp, sandAt, specProps, SHOP_ITEMS, POLYP_ANCHORS, SETTLE_SPOTS, DECOR, TAB_ITEMS, NAMES, OPEN_SAND, OPEN_SANDS, TIERS, MAX_SLOTS, geomOf };
 export type { Species, Stage, Snail, Walker, Cam, Visit, VisitorKind, Spot, SaveSpot, FoodKind };
@@ -261,7 +266,8 @@ export { favouriteFood, FOOD_NAMES, FOOD_KINDS, THEME_N, THEME_NAMES, foodItem, 
 export { SPOT_N, murkOf, spotsForMurk };
 export { VISITORS };
 export { MORPH_NONE, MORPH_CLASSIC, MORPH_GHOST, requestText, rewardOf };
-export type { DailyRequests, Request, RequestKind };
+export type { DailyRequests, Request, RequestKind, KeepSave };
+export { MILESTONES };
 export { TRAIT_NAMES, TRAIT_PHRASES, traitFromName };
 export type { Trait };
 
@@ -365,6 +371,8 @@ export interface Save {
   theme: number;
   /** v12 (optional): today's daily requests and how far along they are; absent until the first is planned */
   requests?: DailyRequests;
+  /** v13 (optional): keepsakes earned and the facts the journal can't tell (./keepsakes.ts); absent until first evaluated */
+  keep?: KeepSave;
 }
 
 // ---------------------------------------------------------------- state
@@ -436,7 +444,7 @@ export interface Jelly {
   ride: number;
 }
 
-export type SimEventType = "ate" | "pulse" | "cleaned" | "grew" | "adult" | "earned" | "baby" | "dug" | "shrimpAte" | "pearlReady" | "pearl" | "rehomed" | "upgraded" | "revealed" | "visitorArrived" | "visitorTapped" | "visitorLeft" | "spotCleaned" | "themed" | "requestDone" | "rode";
+export type SimEventType = "ate" | "pulse" | "cleaned" | "grew" | "adult" | "earned" | "baby" | "dug" | "shrimpAte" | "pearlReady" | "pearl" | "rehomed" | "upgraded" | "revealed" | "visitorArrived" | "visitorTapped" | "visitorLeft" | "spotCleaned" | "themed" | "requestDone" | "rode" | "keepsake";
 export interface SimEvent {
   type: SimEventType;
   slot?: number;
@@ -460,6 +468,8 @@ export interface SimEvent {
   request?: number;
   /** v13 "rode": the bubbler was on screen when the ride reached the top */
   seen?: boolean;
+  /** v13 "keepsake": which milestone (index into MILESTONES) */
+  keepsake?: number;
 }
 
 export interface State {
@@ -555,6 +565,11 @@ export interface State {
   /** v13: how far the held item moved since the last step, and its eased speed (artboard px/s): a fast one startles shy jellies */
   cursorTravel: number;
   cursorSpeed: number;
+  /** v13: keepsakes earned and the days/requests counts (null: an older save, kept as loaded while keepsakes are off),
+   *  whether milestones are evaluated, and the ones granted quietly while loading (for the host's one summary note) */
+  keep: KeepSave | null;
+  keepOn: boolean;
+  keepAtLoad: number[];
 }
 
 /** v8: what the player has in hand. v11: "shrimp" (the brine shrimp jar) and "plankton" (the bottle) are foods too. */
@@ -579,6 +594,8 @@ export interface SimOptions {
   seasonalMorph?: (now: number) => number | null;
   /** v12: run the daily requests (the host's own tank). Off by default: the demo, visits and tests don't get them. */
   requests?: boolean;
+  /** v13: evaluate the journal's milestones and grant keepsakes (the host's own tank). Off by default, like requests. */
+  keepsakes?: boolean;
 }
 
 /** v1 geometry, kept for reference: the moon adult. */
@@ -869,11 +886,14 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
     themes,
     theme: themeOf(raw.theme, themes),
     ...requestsField(requestsOf(raw.requests)),
+    ...keepField(keepOf(raw.keep)),
   };
 }
 
 /** v12: the optional `requests` save field: only there once a day has been planned. */
 const requestsField = (r: DailyRequests | null): { requests?: DailyRequests } => (r ? { requests: copyRequests(r) } : {});
+/** v13: the optional `keep` save field: only there once keepsakes have been evaluated. */
+const keepField = (k: KeepSave | null): { keep?: KeepSave } => (k ? { keep: copyKeep(k) } : {});
 
 // ---------------------------------------------------------------- day and night
 
@@ -1242,9 +1262,13 @@ export function createState(save: Save, rand: () => number = Math.random, opts: 
     traitRand: rng(Math.floor(clock / 1000) + 23),
     cursorTravel: 0,
     cursorSpeed: 0,
+    keep: keepOf(save.keep),
+    keepOn: opts.keepsakes === true,
+    keepAtLoad: [],
   };
   state.theme = themeOf(save.theme, state.themes);
   for (const j of jellies(state)) noteJelly(state, j);
+  if (state.keepOn) state.keepAtLoad = loadKeepsakes(state, save);
   // the hints start where they belong: no fade-in on load
   state.hints = { l: hintTarget(state, -1), r: hintTarget(state, 1) };
   return state;
@@ -1275,6 +1299,7 @@ export function toSave(s: State, now: number): Save {
     themes: [...s.themes],
     theme: s.theme,
     ...requestsField(s.requests),
+    ...keepField(s.keep),
   };
 }
 
@@ -1708,9 +1733,8 @@ export function openShop(s: State): void {
   s.shop = { open: true, from: shopY(s), to: SHOP_OPEN_Y, t0: s.t };
 }
 
-/** The JELLIES tab's scroll window (contract.shopScroll), artboard px. */
-export const SHOP_SCROLL = (() => {
-  const c = (K as unknown as { shopScroll?: { max?: number; viewTop?: number; viewBottom?: number; trackTop?: number; trackH?: number } }).shopScroll ?? {};
+type ScrollWindow = { max?: number; viewTop?: number; viewBottom?: number; trackTop?: number; trackH?: number };
+const scrollWindow = (c: ScrollWindow) => {
   const max = Math.max(0, c.max ?? 0);
   const trackH = c.trackH ?? 759;
   return {
@@ -1721,16 +1745,33 @@ export const SHOP_SCROLL = (() => {
     trackH,
     thumbH: Math.round((trackH * trackH) / (trackH + max)),
   };
-})();
+};
+/** The JELLIES tab's scroll window (contract.shopScroll), artboard px. */
+export const SHOP_SCROLL = scrollWindow((K as unknown as { shopScroll?: ScrollWindow }).shopScroll ?? {});
+/**
+ * v13: every tab's scroll window (contract.shopScrollTabs; null = its cards all fit). DECOR and TANK scroll too
+ * once the keepsakes join them. Contracts without the list: only the JELLIES tab scrolls.
+ */
+export const SHOP_SCROLLS: readonly (ReturnType<typeof scrollWindow> | null)[] = Array.from({ length: TAB_N }, (_, t) => {
+  const tabs = (K as unknown as { shopScrollTabs?: (ScrollWindow | null)[] }).shopScrollTabs;
+  const c = Array.isArray(tabs) ? tabs[t] : t === 0 ? {} : null;
+  return c ? (t === 0 && !Array.isArray(tabs) ? SHOP_SCROLL : scrollWindow(c)) : null;
+});
+/** The open tab's scroll window, or null when it doesn't scroll. */
+const tabScroll = (s: State) => SHOP_SCROLLS[s.tab] ?? null;
 
-/** Scroll the JELLIES tab by dy artboard px (a finger dragging up gives dy < 0 and scrolls down). */
+/** Scroll the open tab by dy artboard px (a finger dragging up gives dy < 0 and scrolls down). */
 export function scrollShop(s: State, dy: number): void {
-  if (!s.shop.open || s.tab !== 0) return;
-  s.shopScroll = clamp(s.shopScroll - dy, 0, SHOP_SCROLL.max);
+  const w = tabScroll(s);
+  if (!s.shop.open || !w) return;
+  s.shopScroll = clamp(s.shopScroll - dy, 0, w.max);
 }
 
-/** Is an artboard y inside the visible card window of the scrolling tab? (Hidden cards still hit-test in Rive.) */
-export const inShopView = (s: State, y: number) => s.tab !== 0 || (y >= SHOP_SCROLL.viewTop && y <= SHOP_SCROLL.viewBottom);
+/** Is an artboard y inside the visible card window of the open tab, if it scrolls? (Hidden cards still hit-test in Rive.) */
+export const inShopView = (s: State, y: number) => {
+  const w = tabScroll(s);
+  return !w || (y >= w.viewTop && y <= w.viewBottom);
+};
 
 /** Switch the shop tab (0 JELLIES, 1 DECOR, 2 HELPERS, 3 TANK); out-of-range is ignored. */
 export function setTab(s: State, t: number): void {
@@ -1750,7 +1791,7 @@ export function closeShop(s: State): void {
  * (no charge; the host should persist and play its "ui" sound); "owned": nothing to do (owned decor, helper,
  * food, a tank already that big, or the theme already in use).
  */
-export type BuyResult = "bought" | "cantAfford" | "tankFull" | "owned" | "needsMedium" | "needsLarge" | "selected";
+export type BuyResult = "bought" | "cantAfford" | "tankFull" | "owned" | "needsMedium" | "needsLarge" | "selected" | "keepsake";
 
 /** A unique name for a new jelly. */
 const newName = (s: State) => pickName(jellies(s).map((j) => j.name), s.rand());
@@ -1825,6 +1866,10 @@ export const themeInfo = (s: State) => ({ theme: s.theme, name: THEME_NAMES[s.th
 export function buy(s: State, i: number): BuyResult {
   const item = SHOP_ITEMS[i];
   if (!item) return "cantAfford";
+  // v13: a keepsake isn't sold: until its milestone is reached the card just says how to earn it ("keepsake");
+  // once earned it's owned like a bought one (a theme can be picked again, a decoration is already in)
+  const owns = item.kind === "theme" ? s.themes[item.theme] === true : item.kind === "decor" && s.owned[item.d] === true;
+  if (keepsakeOf(item) >= 0 && !owns) return "keepsake";
   if (item.kind === "theme") {
     if (s.themes[item.theme]) return item.theme === s.theme ? "owned" : setTheme(s, item.theme) ? "selected" : "owned";
     if (s.dollars < item.price) return "cantAfford";
@@ -2030,6 +2075,70 @@ export function requests(s: State): { day: string; items: (Request & { text: str
   if (!day) return null;
   return { day: day.day, items: copyRequests(day).items.map((r) => ({ ...r, text: requestText(r), reward: rewardOf(r) })) };
 }
+
+// ---------------------------------------------------------------- keepsakes (v13)
+
+/** Milestone m's reward: its decoration goes in where it was last arranged (its spot), or its theme is owned. Returns the decoration (-1: a theme). */
+function grantKeepsake(s: State, m: number): number {
+  const item = SHOP_ITEMS[MILESTONES[m]?.item ?? -1];
+  if (item?.kind === "decor") {
+    s.owned[item.d] = true;
+    return item.d;
+  }
+  if (item?.kind === "theme") s.themes[item.theme] = true;
+  return -1;
+}
+
+/** Local days a save from before keepsakes can show it was played: its jellies' births, its species' first adults, today. */
+function playedDays(save: Save, now: number): string[] {
+  const at = [now, ...save.slots.flatMap((j) => (j ? [j.born] : [])), ...(Array.isArray(save.journal) ? save.journal : []).map((e) => e?.firstAdultAt)];
+  return at.flatMap((t) => (typeof t === "number" && Number.isFinite(t) && t > 0 && t <= now ? [dayKey(t)] : []));
+}
+
+/**
+ * Keepsakes at load (SimOptions.keepsakes): an older save gets its first `keep` (seedKeep), today counts as a day
+ * played, rewards already earned are made sure of, and every milestone the save reaches now is granted quietly,
+ * all at once. Returns those, for the host's one summary note.
+ */
+function loadKeepsakes(s: State, save: Save): number[] {
+  const keep = s.keep ?? seedKeep(playedDays(save, s.clock), s.requests?.items.filter((r) => r.done).length ?? 0);
+  s.keep = keep;
+  countDay(keep, dayKey(s.clock));
+  MILESTONES.forEach((_, m) => isEarned(keep, m) && grantKeepsake(s, m));
+  const reached = newlyReached(keep, keepFacts(s.journal, keep));
+  for (const m of reached) {
+    keep.earned |= 1 << m;
+    grantKeepsake(s, m);
+  }
+  return reached;
+}
+
+/** Count the step's finished requests and a new day, then grant any milestone reached: "keepsake", with a sparkle on a decoration. */
+function stepKeepsakes(s: State, events: SimEvent[]): void {
+  const keep = s.keep;
+  if (!s.keepOn || !keep) return;
+  keep.requests += events.filter((e) => e.type === "requestDone").length;
+  countDay(keep, dayKey(s.clock));
+  for (const m of newlyReached(keep, keepFacts(s.journal, keep))) {
+    keep.earned |= 1 << m;
+    const d = grantKeepsake(s, m);
+    if (d >= 0) s.fx = { x: s.decorX[d] ?? DECOR[d]!.x, y: decorBaseY(s, d) - DECOR[d]!.h / 2, t0: s.t };
+    events.push({ type: "keepsake", keepsake: m });
+  }
+}
+
+/** v13: one row per milestone for the journal's keepsakes page: how far along (0..n), earned, and the shop item it leaves. */
+export function keepsakes(s: State): { m: number; title: string; progress: number; n: number; earned: boolean; item: number; reward: string }[] {
+  const keep = s.keep ?? seedKeep([], 0);
+  const f = keepFacts(s.journal, keep);
+  return MILESTONES.map((ms, m) => {
+    const earned = isEarned(keep, m);
+    return { m, title: ms.title, progress: earned ? ms.n : progressOf(m, f), n: ms.n, earned, item: ms.item, reward: ms.reward };
+  });
+}
+
+/** v13: the milestones granted quietly while loading (an older save that already reached them), for one summary note. */
+export const keepsakesAtLoad = (s: State): number[] => [...s.keepAtLoad];
 
 /** Where the pearl is (follows the clam). */
 export function pearlCentre(s: State): { x: number; y: number } {
@@ -2943,6 +3052,7 @@ export function step(s: State, dt: number): SimEvent[] {
   s.pearlWas = pearl;
   // v12: today's requests (planned on the first step of a day) count what just happened
   stepRequests(s, events);
+  stepKeepsakes(s, events);
 
   return events;
 }
@@ -3279,19 +3389,29 @@ export function view(s: State): View {
   // shop
   v.shopY = snap(shopY(s));
   if (K.props.includes("shopScroll")) {
+    // one scroll offset and thumb position for whichever tab is open (v13: each scrolling tab has its own thumb)
+    const w = tabScroll(s) ?? SHOP_SCROLL;
     v.shopScroll = -snap(s.shopScroll);
-    const frac = SHOP_SCROLL.max > 0 ? s.shopScroll / SHOP_SCROLL.max : 0;
-    v.shopScrollBar = snap(SHOP_SCROLL.trackTop + (SHOP_SCROLL.trackH - SHOP_SCROLL.thumbH) * frac);
+    const frac = w.max > 0 ? s.shopScroll / w.max : 0;
+    v.shopScrollBar = snap(w.trackTop + (w.trackH - w.thumbH) * frac);
   }
   const tankFull = !roomForPolyp(s);
   SHOP_ITEMS.forEach((item, i) => {
+    // v13: a keepsake's card is locked until its milestone is reached, whatever the dollars
+    const keep = keepsakeOf(item) >= 0;
     if (item.kind === "theme") {
       // v11: owned themes stay bright (tap to use one again): "IN USE" on the active one, "OWNED" on the rest
       const has = s.themes[item.theme] === true;
       const using = s.theme === item.theme;
       v[`own${i}`] = has && !using ? 1 : 0;
       v[`use${i}`] = using ? 1 : 0;
-      v[`lock${i}`] = !has && s.dollars < item.price ? 1 : 0;
+      v[`lock${i}`] = !has && (keep || s.dollars < item.price) ? 1 : 0;
+      return;
+    }
+    if (keep && item.kind === "decor") {
+      // an earned keepsake stays bright (no "can't afford" wash): it was never for sale
+      v[`own${i}`] = s.owned[item.d] ? 1 : 0;
+      v[`lock${i}`] = s.owned[item.d] ? 0 : 1;
       return;
     }
     const owned =

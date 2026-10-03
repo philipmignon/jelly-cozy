@@ -11,6 +11,12 @@
 export const LONG_MS = 450;
 export const SLOP_PX = 12;
 
+/** The pointer positions folded into one pointermove (oldest first; just the event where unsupported). */
+export function coalesced(e: Pick<PointerEvent, "clientX" | "clientY"> & { getCoalescedEvents?: () => { clientX: number; clientY: number }[] }): { clientX: number; clientY: number }[] {
+  const list = typeof e.getCoalescedEvents === "function" ? e.getCoalescedEvents() : [];
+  return list.length ? list : [e];
+}
+
 export interface GestureHandlers {
   tap(x: number, y: number): void;
   /** Return true to start dragging from here. */
@@ -38,6 +44,16 @@ export interface GestureHandlers {
   hover?(x: number, y: number, inside: boolean): void;
 }
 
+/** Run fn at the next animation frame (a macrotask where there are no frames, e.g. the unit tests). */
+function nextFrame(fn: () => void): { cancel(): void } {
+  if (typeof requestAnimationFrame === "function") {
+    const id = requestAnimationFrame(() => fn());
+    return { cancel: () => cancelAnimationFrame(id) };
+  }
+  const id = setTimeout(fn, 0);
+  return { cancel: () => clearTimeout(id) };
+}
+
 export function attachGestures(
   canvas: HTMLCanvasElement,
   toArtboard: (clientX: number, clientY: number) => { x: number; y: number },
@@ -51,9 +67,12 @@ export function attachGestures(
   let lastY = 0;
   let samples: { t: number; x: number }[] = [];
 
+  let frame: { cancel(): void } | null = null;
   const clear = () => {
     if (timer) clearTimeout(timer);
     timer = null;
+    frame?.cancel();
+    frame = null;
   };
   const end = () => {
     clear();
@@ -68,8 +87,12 @@ export function attachGestures(
     if (e.pointerId !== pointer) return;
     if (mode === "tooling") {
       e.preventDefault();
-      const p = toArtboard(e.clientX, e.clientY);
-      h.toolMove?.(p.x, p.y);
+      // the sponge scrubs by distance travelled: when frames are slow the browser delivers one move per frame,
+      // so walk every position it coalesced into this one, or a slow phone would scrub only the chords
+      for (const c of coalesced(e)) {
+        const p = toArtboard(c.clientX, c.clientY);
+        h.toolMove?.(p.x, p.y);
+      }
       return;
     }
     if (mode === "dragging") {
@@ -158,9 +181,15 @@ export function attachGestures(
     mode = "pressing";
     timer = setTimeout(() => {
       timer = null;
-      if (mode !== "pressing") return;
-      const p = toArtboard(start.cx, start.cy);
-      mode = h.longPress(p.x, p.y) ? "dragging" : "held";
+      // decided at the next frame, not now: when frames are slow, moves (delivered once a frame) or the lift the
+      // finger made well before LONG_MS can still be waiting, and they are handled before a frame's callbacks.
+      // Deciding here would turn a quick swipe or tap on a slow phone into a long-press.
+      frame = nextFrame(() => {
+        frame = null;
+        if (mode !== "pressing") return;
+        const p = toArtboard(start.cx, start.cy);
+        mode = h.longPress(p.x, p.y) ? "dragging" : "held";
+      });
     }, LONG_MS);
   }
 

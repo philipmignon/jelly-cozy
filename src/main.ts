@@ -10,6 +10,7 @@ import { SHELL_DOLLARS, connectFriends, giftLines, liveId, type Friends, type Gi
 import { captionDate, capture, downloadsCapability, flash, photoFilename, savePng, toPng } from "./photo";
 import { clearVisit, createBackupPanel, createSharePanel, noteAfterReload, pendingVisit, showNote, showVisitBar, takeNote } from "./share";
 import { createOverlay, type JellyCardInfo } from "./overlay";
+import { registerOffline } from "./offline";
 import { activeSeason, readSeasonDecor, seasonalMorph, writeSeasonDecor } from "./season";
 import { createRequestNote, type RequestNote } from "./requestnote";
 import { SPECIES_NAMES, TAB_N } from "./species";
@@ -740,6 +741,7 @@ async function main() {
       el?.classList.add("done");
       setTimeout(() => el?.remove(), 600);
       void intro();
+      registerOffline(() => client(K.W / 2, K.waterTop + 14)); // GitHub Pages only: offline play, instant repeat visits
     }
     overlay.placeTip();
     const now = performance.now();

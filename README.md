@@ -27,6 +27,8 @@ Each species' jelly sprites (and each event's, e.g. `hw_` Halloween art) are lef
 
 `.github/workflows/pages.yml` builds `dist/` and deploys it to GitHub Pages on every push to `main`. CI runs no Python or Rive CLI, so the generated files above must be committed. Pages has to be enabled in the repo settings (Source: GitHub Actions); on a private repo that needs a paid plan.
 
+The Pages build plays offline and opens instantly on repeat visits: `vite build` writes `dist/sw.js` from `src/sw.js` with the build's file list, and `src/offline.ts` registers it once the tank is on screen. Only `index.html` opts in (`<meta name="jellytank-sw">`), so the claude.ai pages and the dev server never run a service worker. The page itself is network-first, so a deploy shows up on the next load; a tank left open gets a small "Updated / Reload" chip. `node tools/offline.mjs` checks all of this end to end (after `npm run build && node tools/page.mjs`).
+
 ## Layout
 
 - `tools/gen.py`: sprites, layout and the art/logic contract (`src/contract.json`)
@@ -36,3 +38,4 @@ Each species' jelly sprites (and each event's, e.g. `hw_` Halloween art) are lef
 - `src/spritegroups.ts`: loads each species' sprites when the tank needs them
 - `tools/e2e.mjs`: headless click-through (puppeteer-core)
 - `tools/page.mjs`, `tools/loadtime.mjs`: the single-page build for claude.ai artifacts, and its load timing
+- `src/sw.js`, `src/offline.ts`, `tools/offline.mjs`: the Pages service worker, its registration, and its end-to-end check

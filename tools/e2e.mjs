@@ -7,6 +7,8 @@
  */
 import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import puppeteer from "puppeteer-core";
 
 const K = JSON.parse(readFileSync(new URL("../src/contract.json", import.meta.url)));
@@ -29,7 +31,9 @@ const button = (name) => centre(K.buttons.find((b) => b.name === name));
 
 function startServer() {
   return new Promise((resolve, reject) => {
-    const p = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], { stdio: ["ignore", "pipe", "pipe"] });
+    // a deps cache of its own (vite.config.ts): another worktree's dev server re-optimizing the shared one reloads this page
+    const env = { ...process.env, JT_VITE_CACHE_DIR: join(tmpdir(), `jellytank-vite-e2e-${PORT}`) };
+    const p = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], { stdio: ["ignore", "pipe", "pipe"], env });
     p.stdout.on("data", (d) => String(d).includes("Local") && resolve(p));
     p.on("exit", (c) => reject(new Error(`vite exited ${c}`)));
   });
@@ -185,9 +189,13 @@ async function main() {
         food: s.food.filter((f) => f.state !== "off").length, wipe: !!s.wipe,
       };
     });
+    // Rive takes a press on its next frame and fires the trigger as it advances, so after a click wait for a
+    // few frames (sim time moves at most 0.1 s a frame: 0.3 s of it is 3+ frames), not just a fixed time
+    const frames = (n) =>
+      page.evaluate(() => window.__tank.t).then((t0) => page.waitForFunction((t) => window.__tank.t >= t, { timeout: 15000 }, t0 + 0.1 * n)).catch(() => {});
     const click = async (ax, ay) => {
       await page.mouse.click(OX + ax * S, OY + ay * S);
-      await sleep(250);
+      await Promise.all([sleep(250), frames(3)]);
     };
     const tapWater = async (wx, wy) => {
       const cam = await page.evaluate(() => window.__tank.cam.x);
@@ -198,6 +206,13 @@ async function main() {
     // the shop has finished sliding up (sim time, so a slow frame rate doesn't leave the tabs mid-slide)
     const shopUp = () =>
       page.waitForFunction(() => { const t = window.__tank; return t.shop.open && t.t - t.shop.t0 > 0.45; }, { timeout: 8000 }).then(() => sleep(150), () => {});
+    // ...and has finished sliding away: taps in the water are ignored until it is out of the way (sim time again:
+    // under load a frame can be 300 ms, and the slide is 0.35 s of sim time at no more than 0.1 s a frame)
+    const shopDown = () =>
+      page.waitForFunction(() => { const t = window.__tank; return !t.shop.open && t.t - t.shop.t0 > 0.4; }, { timeout: 8000 }).then(() => true, () => false);
+    // a tab's cards are laid out (and hit-tested) a frame or two after the state flips: wait 3+ frames (sim time
+    // moves at most 0.1 s a frame, so 0.3 s of it is at least three) as well as 400 ms
+    const laidOut = () => Promise.all([sleep(400), frames(3)]);
 
     // first-run tips: four bubbles, each with a Next / Got it button
     await page.waitForSelector(".jt-tip:not([hidden])", { timeout: 8000 }).catch(() => {});
@@ -225,7 +240,7 @@ async function main() {
     check("lamp flips back", s.night === night0);
 
     // v12 daily requests: the note in the hood opens a short list; finishing one pays through earn
-    const reqShown = await page.waitForFunction(() => { const b = document.querySelector(".jt-req-btn"); return b && !b.hidden; }, { timeout: 3000 }).then(() => true, () => false);
+    const reqShown = await page.waitForFunction(() => { const b = document.querySelector(".jt-req-btn"); return b && !b.hidden; }, { timeout: 8000 }).then(() => true, () => false);
     check("the requests note is pinned in the hood", reqShown);
     await page.click(".jt-req-btn");
     await sleep(200);
@@ -250,8 +265,8 @@ async function main() {
       await tapWater(polypAt.x, polypAt.y - 30);
       await sleep(150);
     }
-    const reqDone = await page.waitForFunction(() => window.__tank.requests.items[0].done, { timeout: 3000 }).then(() => true, () => false);
-    await sleep(300);
+    const reqDone = await page.waitForFunction(() => window.__tank.requests.items[0].done, { timeout: 8000 }).then(() => true, () => false);
+    await page.waitForSelector(".jt-req-done", { timeout: 5000 }).catch(() => {}); // the bubble comes with the next frame's events
     const reqUi = await page.evaluate(() => ({ bubble: !!document.querySelector(".jt-req-done"), badge: document.querySelector(".jt-req-badge").textContent }));
     check("petting finishes a request: it pays +5 once, the note says so", reqDone && (await st()).dollars >= dReq + 5 && reqUi.bubble && reqUi.badge === "✓", `${dReq} -> ${(await st()).dollars} ${JSON.stringify(reqUi)}`);
     await page.click(".jt-req-btn");
@@ -266,7 +281,7 @@ async function main() {
 
     // Feed picks up the food can; taps in the water sprinkle flakes right there
     await click(...button("feed"));
-    const pickedUp = await page.waitForFunction(() => window.__tank.tool === "food", { timeout: 3000 }).then(() => true, () => false);
+    const pickedUp = await page.waitForFunction(() => window.__tank.tool === "food", { timeout: 8000 }).then(() => true, () => false);
     check("feed picks up the food can", pickedUp);
     const polyp = await page.evaluate(() => ({ x: window.__tank.slots[0].x, y: window.__tank.slots[0].y }));
     await tapWater(polyp.x, polyp.y - 120);
@@ -278,9 +293,10 @@ async function main() {
       await tapWater(polyp.x + (i % 2 ? 20 : -20), polyp.y - 120);
     }
     await click(...button("feed"));
-    const putDown = await page.waitForFunction(() => window.__tank.tool === "none", { timeout: 3000 }).then(() => true, () => false);
+    const putDown = await page.waitForFunction(() => window.__tank.tool === "none", { timeout: 8000 }).then(() => true, () => false);
     check("feed again puts the can down", putDown);
-    await sleep(4000);
+    // growth runs on sim time, which a slow frame rate stretches (at most 0.1 s a frame): wait for it, up to 20 s
+    await page.waitForFunction(() => window.__tank.slots[0]?.g >= 1 && window.__tank.dollars > 0, { timeout: 20000 }).catch(() => {});
     s = await st();
     check("polyp grew past polyp stage (fast mode)", (s.slots[0]?.g ?? 0) >= 1, `stage=${s.slots[0]?.g}`);
     check("care earned dollars", s.dollars > 0, `dollars=${s.dollars}`);
@@ -310,15 +326,15 @@ async function main() {
     await shot("4b-scrolled");
     check("a scroll-drag buys nothing", (await st()).dollars === d0s);
     await click(...tabBtn(1));
-    await page.waitForFunction(() => window.__tank.tab === 1, { timeout: 3000 }).then(() => sleep(400));
+    await page.waitForFunction(() => window.__tank.tab === 1, { timeout: 8000 }).then(laidOut);
     await click(...tabBtn(0));
-    await page.waitForFunction(() => window.__tank.tab === 0, { timeout: 3000 }).then(() => sleep(400));
+    await page.waitForFunction(() => window.__tank.tab === 0, { timeout: 8000 }).then(laidOut);
     check("tapping tabs while scrolled buys nothing", (await st()).dollars === d0s && (await st()).slots.filter(Boolean).length === 1);
     await click(...centre(K.shopCards[0]));
     s = await st();
     check("buy blue blubber polyp", s.slots.filter(Boolean).length === 2 && s.slots.some((j) => j && j.k === 1), JSON.stringify(s.slots));
     await click(...tabBtn(1));
-    await page.waitForFunction(() => window.__tank.tab === 1, { timeout: 3000 }).then(() => sleep(400)).catch(() => {});
+    await page.waitForFunction(() => window.__tank.tab === 1, { timeout: 8000 }).then(laidOut).catch(() => {});
     check("decor tab", (await page.evaluate(() => window.__tank.tab)) === 1);
     await click(...centre(K.shopCards[4]));
     s = await st();
@@ -332,7 +348,7 @@ async function main() {
     check("owned decor can't be bought twice", s.dollars === before);
     await shot("5-bought");
     await click(...tabBtn(2));
-    await page.waitForFunction(() => window.__tank.tab === 2, { timeout: 3000 }).then(() => sleep(400)).catch(() => {});
+    await page.waitForFunction(() => window.__tank.tab === 2, { timeout: 8000 }).then(laidOut).catch(() => {});
     for (const i of [8, 9, 10]) await click(...centre(K.shopCards[i]));
     check("buy snail, shrimp, crab", (await page.evaluate(() => window.__tank.helpers.slice())).every(Boolean));
     await shot("5a-helpers");
@@ -345,6 +361,8 @@ async function main() {
     await sleep(600);
     s = await st();
     check("the X closes the shop", s.shop === false);
+    await shopDown();
+    s = await st();
 
     // daily pearl in the clam
     const clam = K.decor[3];
@@ -366,7 +384,8 @@ async function main() {
     const ax0 = await page.evaluate(() => window.__tank.decorX[1]);
     await page.mouse.move(OX + anchor.x * S, OY + (anchor.y - anchor.h / 2) * S);
     await page.mouse.down();
-    await sleep(650);
+    // hold until it lifts (a long-press is decided on the frame after LONG_MS, so under load that is later)
+    await page.waitForFunction(() => window.__tank.lifted === 1, { timeout: 8000 }).catch(() => {});
     for (let k = 1; k <= 10; k++) {
       await page.mouse.move(OX + (anchor.x + k * 22) * S, OY + (anchor.y - anchor.h / 2) * S);
       await sleep(30);
@@ -382,7 +401,7 @@ async function main() {
     const jy = await page.evaluate(() => { const s = window.__tank; return s.slots[0].g === 0 ? -30 : -40; });
     await page.mouse.move(OX + jj.x * S, OY + (jj.y + jy) * S);
     await page.mouse.down();
-    await sleep(650);
+    await page.waitForFunction(() => !document.querySelector(".jt-card").hidden, { timeout: 8000 }).catch(() => {}); // hold until it opens
     await page.mouse.up();
     await sleep(200);
     const cardOpen = await page.evaluate(() => !document.querySelector(".jt-card").hidden);
@@ -403,7 +422,7 @@ async function main() {
     await click(...button("shop"));
     await shopUp();
     await click(...centre(K.shopTabs[3]));
-    await page.waitForFunction(() => window.__tank.tab === 3, { timeout: 3000 }).then(() => sleep(400)).catch(() => {});
+    await page.waitForFunction(() => window.__tank.tab === 3, { timeout: 8000 }).then(laidOut).catch(() => {});
     await click(...centre(K.shopCards[12]));
     check("large needs medium first", (await page.evaluate(() => window.__tank.tier)) === 0);
     await click(...centre(K.shopCards[11]));
@@ -417,20 +436,21 @@ async function main() {
     await click(...button("shop"));
     await shopUp();
     await click(...centre(K.shopTabs[2]));
-    await page.waitForFunction(() => window.__tank.tab === 2, { timeout: 3000 }).then(() => sleep(400)).catch(() => {});
+    await page.waitForFunction(() => window.__tank.tab === 2, { timeout: 8000 }).then(laidOut).catch(() => {});
     await click(...centre(K.shopCards[18]));
     check("buy brine shrimp", await page.evaluate(() => window.__tank.foods[1] === true));
     await click(...centre(K.shopTabs[3]));
-    await page.waitForFunction(() => window.__tank.tab === 3, { timeout: 3000 }).then(() => sleep(400)).catch(() => {});
+    await page.waitForFunction(() => window.__tank.tab === 3, { timeout: 8000 }).then(laidOut).catch(() => {});
     await click(...centre(K.shopCards[21]));
     const themed = await page.waitForFunction(() => window.__tank.theme === 1, { timeout: 4000 }).then(() => true, () => false);
     check("buying Kelp Forest applies it", themed, String(await page.evaluate(() => window.__tank.theme)));
     await sleep(1200);
     await shot("7b-kelp-theme");
     if (await page.evaluate(() => window.__tank.shop.open)) await click(...centre(K.shopClose));
-    await sleep(500);
+    await shopDown(); // the panel slides over the shelf on its way out
+    await sleep(150);
     await click(...button("shrimp"));
-    const jar = await page.waitForFunction(() => window.__tank.tool === "shrimp", { timeout: 3000 }).then(() => true, () => false);
+    const jar = await page.waitForFunction(() => window.__tank.tool === "shrimp", { timeout: 8000 }).then(() => true, () => false);
     check("the shrimp jar comes off the shelf", jar);
     await tapWater(360 - (await page.evaluate(() => window.__tank.cam.x)), 400);
     const shrimpIn = await page.evaluate(() => window.__tank.food.some((f) => f.state !== "off" && f.kind === 1));
@@ -490,7 +510,7 @@ async function main() {
       };
     });
     await page.click(".jt-menu-photo");
-    const gotPhoto = await page.waitForFunction(() => window.__photoHref, { timeout: 5000 }).then(() => true, () => false);
+    const gotPhoto = await page.waitForFunction(() => window.__photoHref, { timeout: 20000 }).then(() => true, () => false);
     const photo = gotPhoto
       ? await page.evaluate(async () => {
           const blob = await (await fetch(window.__photoHref)).blob();
@@ -539,38 +559,44 @@ async function main() {
       const cam = t.cam.x;
       const sp = { x: 360 - cam, y: 520, dirt: 1, v: 0, peak: 1 };
       t.spots[0] = sp;
+      window.__spot = sp; // checked by identity: once it's gone a new spot can take slot 0 (one appears every 90-150 s)
       return { x: sp.x, y: sp.y };
     });
+    const spotDirt = () => page.evaluate(() => (window.__tank.spots.includes(window.__spot) ? window.__spot.dirt : 0));
     const dSpot = (await st()).dollars;
     await click(...button("clean"));
-    check("clean picks up the sponge", (await page.evaluate(() => window.__tank.tool)) === "sponge");
+    check("clean picks up the sponge", await page.waitForFunction(() => window.__tank.tool === "sponge", { timeout: 8000 }).then(() => true, () => false));
     const cam2 = await page.evaluate(() => window.__tank.cam.x);
     const sx = OX + (spot.x + cam2) * S, sy = OY + spot.y * S;
     await page.mouse.move(sx, sy);
     await page.mouse.down();
-    // the sponge scrubs by distance per delivered pointer move; at headless swiftshader's ~11 fps the moves
-    // coalesce per frame, so keep rubbing (up to twice as long) until the spot is clean rather than a fixed count
+    // rub until the spot is clean (each move is ~25 px of rubbing; a full spot takes ~1050 px, so ~45 moves),
+    // checking as it goes: under load a move can take 200 ms, and rubbing on long after it's gone is pointless
     for (let k = 0; k < 440; k++) {
       await page.mouse.move(sx + Math.sin(k * 0.9) * 40 * S, sy + Math.cos(k * 0.7) * 16 * S);
       await sleep(16);
-      if (k >= 219 && k % 20 === 19 && (await page.evaluate(() => (window.__tank.spots[0]?.dirt ?? 0) < 0.05))) break;
+      if (k % 20 === 19 && (await spotDirt()) < 0.05) break;
     }
     await shot("6b-scrubbing");
     await page.mouse.up();
     await sleep(300);
-    const left = await page.evaluate(() => window.__tank.spots[0]?.dirt ?? 0);
+    const left = await spotDirt();
     check("scrubbing clears the spot", left < 0.05, `dirt=${left.toFixed(2)}`);
     check("a scrubbed spot pays +1", (await st()).dollars >= dSpot + 1, `${dSpot} -> ${(await st()).dollars}`);
     await click(...button("clean"));
 
     const j = s.slots.find((x) => x && x.g > 0) ?? s.slots[0];
     const petScene = await scene();
+    const petLog = [];
     for (let k = 0; k < 4; k++) {
-      const at = await page.evaluate(() => { const x = window.__tank.slots[0]; return { x: x.x, y: x.y }; });
-      await tapWater(at.x, at.y - 40); // the bell sits above the rim origin
+      // aim where the jelly is now (one round trip: it swims, and under load a round trip can span frames)
+      const at = await page.evaluate(() => { const x = window.__tank.slots[0]; return { x: x.x, y: x.y, g: x.g, w: x.wiggleT0, t: window.__tank.t, cam: window.__tank.cam.x }; });
+      await page.mouse.click(OX + (at.x + at.cam) * S, OY + (at.y - 40) * S); // the bell sits above the rim origin
+      await sleep(140);
+      petLog.push({ ...(await page.evaluate(() => { const x = window.__tank.slots[0]; return { x2: Math.round(x.x), y2: Math.round(x.y), w2: x.wiggleT0, t2: window.__tank.t, tags: document.querySelectorAll(".jt-tag").length, tool: window.__tank.tool, card: !document.querySelector(".jt-card").hidden, visit: window.__tank.visit && window.__tank.visit.kind }; })), x: Math.round(at.x), y: Math.round(at.y), g: at.g, w: at.w, t: at.t, cam: at.cam });
     }
     const tagsShown = await page.evaluate(() => document.querySelectorAll(".jt-tag").length);
-    check("petting again doesn't stack name tags", tagsShown === 1, `tags=${tagsShown}${tagsShown ? "" : ` ${JSON.stringify(petScene)}`}`);
+    check("petting again doesn't stack name tags", tagsShown === 1, `tags=${tagsShown}${tagsShown === 1 ? "" : ` ${JSON.stringify(petScene)} ${JSON.stringify(petLog)}`}`);
     await sleep(300);
     s = await st();
     await sleep(12000);

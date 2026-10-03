@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BABY_SECONDS, MORPH_CHANCE, MORPH_INHERIT, SEASON_MORPH_CHANCE } from "./species";
 import { decodeTank } from "./tankcode";
+import { traitFromName } from "./traits";
 import {
   DECOR,
   K,
@@ -41,7 +42,7 @@ const run = (s: State, seconds: number) => {
   return events;
 };
 const jelly = (k: Species, g: Stage, extra: Partial<SaveJelly> = {}): SaveJelly => ({
-  k, g, gp: [0, 4, 12, 30][g]!, care: 0, fullness: 0.7, affection: 0.4, anchor: -1, spot: -1, name: "Mochi", born: 0, content: 0, morph: 0, ...extra,
+  k, g, gp: [0, 4, 12, 30][g]!, care: 0, fullness: 0.7, affection: 0.4, anchor: -1, spot: -1, name: "Mochi", born: 0, content: 0, morph: 0, trait: 1, ...extra,
 });
 const tank = (slots: (SaveJelly | null)[], extra: Partial<Save> = {}): Save => ({
   v: 10, foods: [true, false, false], themes: [true, false, false, false], theme: 0,
@@ -210,9 +211,12 @@ describe("v12: the view writes one switch per morph", () => {
   });
 });
 
+/** v13: a jelly with the trait its name gives, so a code needs no version 5 for it */
+const named = (k: Species, g: Stage, extra: Partial<SaveJelly> = {}) => jelly(k, g, { ...extra, trait: traitFromName(extra.name ?? "Mochi", k) });
+
 describe("v12: share codes carry ghosts", () => {
   it("a tank with a ghost round-trips (version 3, or 4 themed); tanks without one keep their old codes", () => {
-    const plain = createState(tank([jelly(0, 3, { name: "Taffy", morph: MORPH_CLASSIC }), jelly(2, 3, { name: "Boba", spot: 1 })]), seeded());
+    const plain = createState(tank([named(0, 3, { name: "Taffy", morph: MORPH_CLASSIC }), named(2, 3, { name: "Boba", spot: 1 })]), seeded());
     const code = exportTank(plain);
     expect(decodeTank(code)!.jellies.map((j) => j.morph)).toEqual([1, 0]);
     // the first 4 bits are the version
@@ -220,7 +224,7 @@ describe("v12: share codes carry ghosts", () => {
     expect(version(code)).toBe(1);
     for (const theme of [0, 2]) {
       const s = createState(
-        tank([jelly(0, 3, { name: "Taffy", morph: MORPH_CLASSIC }), jelly(2, 3, { name: "Boba", spot: 1, morph: MORPH_GHOST }), jelly(1, 0, { name: "Pip", anchor: 1 })], {
+        tank([named(0, 3, { name: "Taffy", morph: MORPH_CLASSIC }), named(2, 3, { name: "Boba", spot: 1, morph: MORPH_GHOST }), named(1, 0, { name: "Pip", anchor: 1 })], {
           theme,
           themes: [true, true, true, true],
         }),

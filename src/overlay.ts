@@ -13,6 +13,8 @@ export interface JellyCardInfo {
   ageDays: number;
   fullness: number;
   mood: number;
+  /** v13: its personality as a short line ("Shy — hides by the rocks"); omitted = no line */
+  trait?: string;
   /** whether this jelly can be rehomed, what it pays, and why not */
   rehome: { allowed: boolean; reward: number; reason: string };
 }
@@ -87,6 +89,8 @@ const CSS = `
   background: #d04a46; border: 2px solid #5a1418; border-radius: 6px; box-shadow: 0 2px 0 #5a1418;
 }
 .jt-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; color: #693c24; text-transform: uppercase; }
+.jt-trait { margin-top: -4px; color: #8e5632; }
+.jt-trait[hidden] { display: none; }
 .jt-row { display: grid; grid-template-columns: 82px minmax(0, 1fr); align-items: center; gap: 8px; text-transform: uppercase; }
 .jt-bar { height: 10px; background: #2b1a12; border-radius: 3px; overflow: hidden; }
 .jt-bar > i { display: block; height: 100%; width: 50%; box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35); }
@@ -147,6 +151,7 @@ export function createOverlay(): Overlay {
       <button class="jt-close" type="button" aria-label="Close">X</button>
     </div>
     <div class="jt-meta"><span class="jt-species"></span><span class="jt-stage"></span><span class="jt-age"></span></div>
+    <div class="jt-trait" hidden></div>
     <div class="jt-row"><span>Fullness</span><div class="jt-bar jt-food"><i></i></div></div>
     <div class="jt-row"><span>Happy</span><div class="jt-bar jt-mood"><i></i></div></div>
     <div class="jt-hint">Tap the name to rename</div>
@@ -226,6 +231,9 @@ export function createOverlay(): Overlay {
     last = info;
     $<HTMLElement>(".jt-species").textContent = info.species;
     $<HTMLElement>(".jt-stage").textContent = info.stage;
+    const trait = $<HTMLElement>(".jt-trait");
+    trait.textContent = info.trait ?? "";
+    trait.hidden = !info.trait;
     const d = Math.floor(info.ageDays);
     $<HTMLElement>(".jt-age").textContent = d < 1 ? "Born today" : `${d} day${d === 1 ? "" : "s"} old`;
     $<HTMLElement>(".jt-food > i").style.width = `${Math.round(info.fullness * 100)}%`;

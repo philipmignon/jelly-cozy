@@ -140,6 +140,7 @@ const jelly = (k: Species, g: Stage, extra: Partial<SaveJelly> = {}): SaveJelly 
   born: 0,
   content: 0,
   morph: 0,
+  trait: 1, // v13: curious (the most even-tempered without a held item or a visitor); a trait test sets its own
   ...extra,
 });
 /** v8: a save's glass carries spots adding up to its murk (default 0.1) unless `spots` is given */
@@ -697,7 +698,7 @@ describe("saves", () => {
     const s2 = createState(loaded, seeded());
     expect(s2.slots.map((j) => j && [j.k, j.g, j.anchor, j.spot])).toEqual(s.slots.map((j) => j && [j.k, j.g, j.anchor, j.spot]));
     expect(s2.dollars).toBe(321);
-    expect(s2.owned).toEqual([true, false, true, false, false]);
+    expect(s2.owned).toEqual([true, false, true, false, false, false]);
   });
 
   it("repairs a damaged v2 save", () => {
@@ -1242,7 +1243,7 @@ describe("saves v3", () => {
       lastSeen: now,
     };
     const save = loadSave(JSON.stringify(v2), now);
-    expect(save).toMatchObject({ v: 10, dollars: 77, helpers: [false, false, false], pearlDay: "", owned: [true, false, false, true, false], tier: 0, cam: 0 });
+    expect(save).toMatchObject({ v: 10, dollars: 77, helpers: [false, false, false], pearlDay: "", owned: [true, false, false, true, false, false], tier: 0, cam: 0 });
     expect(save.decorX).toEqual(DECOR.map((d) => d.x));
     const [a, b] = [save.slots[0]!, save.slots[1]!];
     expect(a).toMatchObject({ k: 0, g: 3, born: now, content: 0, fullness: 0.8 });
@@ -1771,7 +1772,7 @@ describe("demo save", () => {
     expect(s.lamp!.until).toBe(at(19));
     expect(view(s).nightShade).toBe(1);
     expect(s.dollars).toBe(200);
-    expect(s.owned).toEqual([true, false, false, false, false]);
+    expect(s.owned).toEqual([true, false, false, false, false, false]);
     expect(s.helpers).toEqual([false, false, false]);
     expect(s.murk).toBe(0);
     expect(pearlShowing(s)).toBe(false);
@@ -2409,7 +2410,7 @@ describe("v5: view", () => {
     for (let j = 0; j < 7; j++) want.push(`j${j}on`, `j${j}x`, `j${j}y`, `j${j}k3`, `j${j}g3`, `j${j}bf3`, `j${j}tf3`, `j${j}tr4`, `j${j}glow`);
     for (const name of want) expect(props.has(name), name).toBe(true);
     expect(props.has("j7on")).toBe(false);
-    expect(props.has("own24")).toBe(false); // v6 adds items 13-17; v11 adds 18-19 (foods) and 20-23 (themes), no new tab
+    expect(props.has("own25")).toBe(false); // v6 adds items 13-17; v11 adds 18-19 (foods) and 20-23 (themes); v13 24 (the bubbler), no new tab
     expect(props.has("shopTab5")).toBe(false);
   });
 
@@ -2592,7 +2593,7 @@ describe("v7: the jelly journal", () => {
     let jn = journal(s);
     expect(jn.length).toBe(9);
     expect(jn[0]).toMatchObject({ seen: true, morphSeen: 0 });
-    expect(jn[1]).toEqual({ seen: false, raised: 0, firstAdultAt: null, firstName: null, morphSeen: 0 });
+    expect(jn[1]).toEqual({ seen: false, raised: 0, firstAdultAt: null, firstName: null, morphSeen: 0, traitSeen: 0 });
     buy(s, 0); // a blubber polyp
     expect(journal(s)[1]!.seen).toBe(true);
     const b = s.slots.findIndex((j) => j?.k === 1);
@@ -2631,8 +2632,8 @@ describe("v7: the jelly journal", () => {
     } as Record<string, unknown>;
     delete old.journal;
     const save = loadSave(JSON.stringify(old), NOW);
-    expect(save.journal[0]).toEqual({ seen: true, raised: 2, firstAdultAt: NOW, firstName: "Taffy", morphSeen: 0 });
-    expect(save.journal[1]).toEqual({ seen: true, raised: 0, firstAdultAt: null, firstName: null, morphSeen: 0 });
+    expect(save.journal[0]).toEqual({ seen: true, raised: 2, firstAdultAt: NOW, firstName: "Taffy", morphSeen: 0, traitSeen: 2 });
+    expect(save.journal[1]).toEqual({ seen: true, raised: 0, firstAdultAt: null, firstName: null, morphSeen: 0, traitSeen: 2 });
     expect(save.journal.slice(2).every((e) => !e.seen && e.raised === 0)).toBe(true);
     // a v1 save's adult moon is in it too
     const v1 = loadSave(JSON.stringify({ v: 1, fullness: 0.5, murk: 0.2, affection: 0.3, night: false, lastSeen: NOW }), NOW);
@@ -2646,7 +2647,7 @@ describe("v7: the jelly journal", () => {
     const bad = { ...saved, journal: [{ seen: "yes", raised: -3, firstAdultAt: "x", firstName: 7, morphSeen: "1" }, null, 5] };
     const save = loadSave(JSON.stringify(bad), 0);
     expect(save.journal.length).toBe(9);
-    expect(save.journal[0]).toEqual({ seen: false, raised: 0, firstAdultAt: null, firstName: null, morphSeen: 0 });
+    expect(save.journal[0]).toEqual({ seen: false, raised: 0, firstAdultAt: null, firstName: null, morphSeen: 0, traitSeen: 0 });
     expect(save.journal[4]!.seen).toBe(true);
   });
 });
@@ -3618,8 +3619,8 @@ describe("v11: tank themes", () => {
     const v = view(s);
     expect([v.use20, v.own20, v.lock20]).toEqual([1, 0, 0]);
     for (const i of [21, 22, 23]) expect([v[`use${i}`], v[`own${i}`], v[`lock${i}`]]).toEqual([0, 0, 0]);
-    expect(SHOP_ITEMS.slice(20).map((it) => [it.name, it.kind])).toEqual([["REEF", "theme"], ["KELP FOREST", "theme"], ["CORAL GARDEN", "theme"], ["ARCTIC", "theme"]]);
-    for (const it of SHOP_ITEMS.slice(21)) expect(it.price >= 120 && it.price <= 200).toBe(true);
+    expect(SHOP_ITEMS.slice(20, 24).map((it) => [it.name, it.kind])).toEqual([["REEF", "theme"], ["KELP FOREST", "theme"], ["CORAL GARDEN", "theme"], ["ARCTIC", "theme"]]);
+    for (const it of SHOP_ITEMS.slice(21, 24)) expect(it.price >= 120 && it.price <= 200).toBe(true);
   });
 
   it("buying a theme applies it: the shop slides shut, 'themed' comes out, a sparkle once it's down", () => {

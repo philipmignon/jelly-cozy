@@ -529,6 +529,8 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
   { name: "KELP FOREST", price: 140, kind: "theme", theme: 1 },
   { name: "CORAL GARDEN", price: 170, kind: "theme", theme: 2 },
   { name: "ARCTIC", price: 200, kind: "theme", theme: 3 },
+  // v13: the bubbler (decoration 5): a column of bubbles the jellies ride
+  { name: "BUBBLER", price: 80, kind: "decor", d: 5 },
 ];
 /** The shop item that sells food kind f (18 BRINE SHRIMP, 19 PLANKTON), -1 for flakes. */
 export const foodItem = (f: number) => SHOP_ITEMS.findIndex((it) => it.kind === "food" && it.f === f);
@@ -536,7 +538,9 @@ export const foodItem = (f: number) => SHOP_ITEMS.findIndex((it) => it.kind === 
 export const themeItem = (n: number) => SHOP_ITEMS.findIndex((it) => it.kind === "theme" && it.theme === n);
 /** The shop item that upgrades to tier t (11 MEDIUM, 12 LARGE). */
 export const tankItem = (t: number) => SHOP_ITEMS.findIndex((it) => it.kind === "tank" && it.tier === t);
-export const DECOR_N = 5;
+export const DECOR_N = 6;
+/** v13: the bubbler's decoration index (shop item 24) */
+export const BUBBLER = 5;
 export const HELPER_N = 3;
 export const SNAIL = 0;
 export const SHRIMP = 1;
@@ -544,7 +548,7 @@ export const CRAB = 2;
 /** Shop tabs: JELLIES, DECOR, SUPPLIES (helpers + v11 foods), TANK (sizes + v11 themes), as item index ranges. */
 export const TAB_ITEMS: readonly (readonly number[])[] = [
   [0, 13, 1, 14, 2, 15, 16, 17], // JELLIES scrolls (contract.shopScroll)
-  [3, 4, 5, 6, 7],
+  [3, 4, 5, 6, 7, 24],
   [8, 9, 10, 18, 19],
   [11, 12, 20, 21, 22, 23],
 ];
@@ -674,8 +678,9 @@ const DECOR_FALLBACK: Rect[] = [
   { x: 591, y: 1047, w: 96, h: 69 }, // dive helmet
   { x: 348, y: 1047, w: 108, h: 72 }, // giant clam
   { x: 210, y: 1047, w: 90, h: 39 }, // glow coral
+  { x: 456, y: 1047, w: 84, h: 60 }, // v13: bubbler
 ];
-const DECOR_NAMES = ["Castle", "Anchor", "Helmet", "Clam", "GlowCoral"];
+const DECOR_NAMES = ["Castle", "Anchor", "Helmet", "Clam", "GlowCoral", "Bubbler"];
 
 export const DECOR: DecorGeom[] = DECOR_FALLBACK.map((fb, n) => {
   const raw: unknown = Array.isArray(K.decor) ? K.decor[n] : null;

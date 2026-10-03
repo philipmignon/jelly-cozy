@@ -6,6 +6,7 @@
 import { focusReturn } from "./a11y";
 import { SPECIES_NAMES } from "./species";
 import { FOOD_NAMES, MORPH_CLASSIC, MORPH_GHOST, favouriteFood, morphSeen, type Species } from "./sim";
+import { traitsIn } from "./traits";
 
 export interface JournalPage {
   seen: boolean;
@@ -14,6 +15,8 @@ export interface JournalPage {
   firstName: string | null;
   /** v12: a bitmask of the morph ids raised (morphSeen(page, id)) */
   morphSeen: number;
+  /** v13: a bitmask of the personalities met (bit = trait) */
+  traitSeen?: number;
 }
 
 /** One real fact per species, plain and short. */
@@ -158,6 +161,7 @@ export function createJournal(pages: () => JournalPage[]): Journal {
           ["Favourite food", FOOD_NAMES[favouriteFood(page as Species)] ?? "Flakes"],
           ["First adult", p.firstAdultAt ? new Date(p.firstAdultAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "Not yet"],
           ["First name", p.firstName ?? "Not yet"],
+          ["Personalities", traitsIn(p.traitSeen ?? 0).join(", ") || "Not met yet"],
         ]
       : [];
     $<HTMLElement>(".jt-book-stats").replaceChildren(

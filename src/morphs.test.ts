@@ -48,7 +48,8 @@ const tank = (slots: (SaveJelly | null)[], extra: Partial<Save> = {}): Save => (
   v: 12, foods: [true, false, false], themes: [true, false, false, false], theme: 0,
   slots: Array.from({ length: 7 }, (_, i) => slots[i] ?? null),
   dollars: 0, murk: 0, spots: [], night: false, lamp: null, owned: [false, false, false, false, false], helpers: [false, false, false],
-  decorX: DECOR.map((d) => d.x), pearlDay: "", lastSeen: 0, tier: 0, cam: 0, journal: journalFrom(slots, 0), ...extra,
+  // local noon, so day or night doesn't depend on the machine's time zone (CI runs in UTC)
+  decorX: DECOR.map((d) => d.x), pearlDay: "", lastSeen: new Date(2026, 9, 1, 12).getTime(), tier: 0, cam: 0, journal: journalFrom(slots, 0), ...extra,
 });
 
 /** A happy adult of `morph` about to release a baby: the baby's morph (one birth). */

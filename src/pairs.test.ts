@@ -344,10 +344,10 @@ describe("v16 pairs: saves", () => {
     const ev = together(s, 0, 1, 0.1);
     expect(ev.find((e) => e.type === "baby")?.mate).toBeUndefined();
   });
-  it("morph ids 4 and 5 load; the reserved 3 loads as none; morphSeen keeps the bits of known ids", () => {
-    expect([4, 5, 3, 6].map(morphOf)).toEqual([4, 5, 0, 0]);
-    const raw = { ...tank([]), journal: tank([]).journal.map((e, k) => ({ ...e, morphSeen: [31, 8, 16, 4][k] ?? 0 })) };
-    expect(loadSave(JSON.stringify(raw), 0).journal.slice(0, 4).map((e) => e.morphSeen)).toEqual([27, 8, 16, 0]);
+  it("morph ids 4 and 5 load, and winter's frost 3; 6 loads as none; morphSeen keeps the bits of known ids", () => {
+    expect([4, 5, 3, 6].map(morphOf)).toEqual([4, 5, 3, 0]);
+    const raw = { ...tank([]), journal: tank([]).journal.map((e, k) => ({ ...e, morphSeen: [63, 8, 16, 32][k] ?? 0 })) };
+    expect(loadSave(JSON.stringify(raw), 0).journal.slice(0, 4).map((e) => e.morphSeen)).toEqual([31, 8, 16, 0]);
     const jn = journalFrom([jelly(0, 3, { morph: MORPH_PEARL }), jelly(1, 3, { morph: MORPH_DUSK })], 0);
     expect(morphSeen(jn[0]!, MORPH_PEARL) && morphSeen(jn[1]!, MORPH_DUSK)).toBe(true);
   });
@@ -412,18 +412,22 @@ describe("v16 pairs: share codes (version 6)", () => {
     s.slots[1]!.morph = MORPH_NONE;
     expect(Buffer.from(exportTank(s), "base64url")[0]! >> 4).toBe(3);
   });
-  it("one spelling: a version 6 code whose morphs all fit 2 bits, or one with the reserved id 3, is not a code", () => {
+  it("one spelling: a version 6 code whose morphs all fit 2 bits, or one with an unknown id (6, 7), is not a code", () => {
     const t: TankCode = { tier: 0, helpers: [false, false, false], decor: Array.from({ length: DECOR.length }, () => null), jellies: [{ slot: 0, k: 0, g: 1, morph: MORPH_PEARL, place: -1, name: "Pip" }] };
     expect(needsV6(t)).toBe(true);
     const code = encodeTank(t);
     expect(decodeTank(code)).toEqual(t.jellies[0] && { ...t, jellies: [{ ...t.jellies[0], trait: traitFromName("Pip", 0) }] });
-    expect(() => encodeTank({ ...t, jellies: [{ ...t.jellies[0]!, morph: 3 }] })).toThrow();
-    // hand-built: the same bits with morph 1 (fits versions 1..5) and with morph 3 (reserved)
+    expect(() => encodeTank({ ...t, jellies: [{ ...t.jellies[0]!, morph: 6 }] })).toThrow();
+    // winter's frost (3) goes out as version 6 and comes back
+    const frost = encodeTank({ ...t, jellies: [{ ...t.jellies[0]!, morph: 3 }] });
+    expect(Buffer.from(frost, "base64url")[0]! >> 4).toBe(6);
+    expect(decodeTank(frost)!.jellies[0]!.morph).toBe(3);
+    // hand-built: the same bits with morph 1 (fits versions 1..5) and with morphs 6, 7 (unknown)
     const bytes = [...Buffer.from(code, "base64url")].slice(0, -2);
     const bits = bytes.map((b) => b.toString(2).padStart(8, "0")).join("");
     // version 4 | tier 2 | theme 3 | helpers 3 | D 4 | jelly count 3 | slot 3 | k 4 | g 2 | morph 3 ...
     const at = 4 + 2 + 3 + 3 + 4 + 3 + 3 + 4 + 2;
-    for (const m of [1, 3, 6, 7]) {
+    for (const m of [1, 6, 7]) {
       const b2 = bits.slice(0, at) + m.toString(2).padStart(3, "0") + bits.slice(at + 3);
       const out = (b2.match(/.{8}/g) ?? []).map((x) => parseInt(x, 2));
       let a = 0;

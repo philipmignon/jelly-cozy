@@ -54,7 +54,7 @@
       "unit": "B"
     },
     "bytes.js.room": {
-      "budget": 3244,
+      "budget": 4148,
       "tol": 0.1,
       "unit": "B"
     },
@@ -79,7 +79,7 @@
       "unit": "B"
     },
     "bytes.sprites.all": {
-      "budget": 784394,
+      "budget": 896046,
       "tol": 0.1,
       "unit": "B"
     },

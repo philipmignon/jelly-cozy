@@ -1,6 +1,6 @@
 // Jelly Tank sound: everything is synthesised with the Web Audio API (no files).
 // Graph:  sfx ─────────────────────────┐
-//         ambience beds/pad/bubbles → murk lowpass → amb ─┤
+//         ambience beds/pad/bubbles → murk lowpass → amb ─┤   (rain on the window: hiss + patter + drips → rain → amb)
 //         music: keys/bass/drums → tape-wow delay → tone LP → murk LP → duck → night level → fade → bus (0.18) ─┴→ compressor → master (0.35) → out
 // Nothing touches window/AudioContext at module load, so this imports cleanly in Node/Vitest.
 
@@ -12,8 +12,13 @@ export type SoundName =
 export interface TankAudio {
   /** Call from the first user gesture (pointerdown). Creates/resumes the AudioContext, starts ambience. Idempotent. */
   unlock(): void;
-  /** One-shots. Cheap to call many times per second: rate-limited and voice-capped internally. */
-  play(name: SoundName): void;
+  /**
+   * One-shots. Cheap to call many times per second: rate-limited and voice-capped internally. `species` (pet only):
+   * the petted jelly's species, which plays its own motif (SPECIES_MOTIFS) over the purr.
+   */
+  play(name: SoundName, species?: number): void;
+  /** Rain on the window: a soft hiss with the odd drip under the music, fading in (~4 s) and out (~3 s). */
+  setRain(on: boolean): void;
   /** 0..1 eased by the caller; crossfades ambience between day and night character. */
   setNight(amount: number): void;
   /** 0..1, how murky the water is: muffles ambience (lowpass) as it rises. */
@@ -196,6 +201,40 @@ export function drumMix(night: number): number {
   return clamp01((0.6 - clamp01(night)) / 0.4);
 }
 
+// ---------------------------------------------------------------- pet motifs and rain (unit-tested)
+
+/**
+ * Each species' motif when it's petted, 2-4 notes in the music's key (C major, the notes the melody uses: the C
+ * major pentatonic), played soft and short so it sits under (or over) the lo-fi bed. Timbre: "soft" a lowpassed
+ * triangle (the old pet sound's), "bell" a little glassy bell (the comb's shimmer, the crystal's glow). `gap` s apart.
+ */
+export const SPECIES_MOTIFS: readonly { notes: readonly string[]; gap: number; timbre: "soft" | "bell" }[] = [
+  { notes: ["C5", "E5", "G5"], gap: 0.13, timbre: "soft" }, // moon: the plain rising triad, the classic
+  { notes: ["G4", "C5", "G4"], gap: 0.12, timbre: "soft" }, // blue blubber: a chunky bounce
+  { notes: ["A5", "E5", "C5"], gap: 0.16, timbre: "soft" }, // upside-down: settling down onto the sand
+  { notes: ["E5", "G5", "A5", "C6"], gap: 0.07, timbre: "bell" }, // comb: a quick rainbow shimmer up
+  { notes: ["C5", "C5", "G5"], gap: 0.12, timbre: "soft" }, // fried egg: sunny side up, ding-ding-dong
+  { notes: ["D5", "A4", "D5"], gap: 0.17, timbre: "soft" }, // sea nettle: trailing down and back
+  { notes: ["G5", "D6", "G6"], gap: 0.14, timbre: "bell" }, // crystal: glassy fifths, glowing
+  { notes: ["A5", "G5", "E5", "G5"], gap: 0.1, timbre: "soft" }, // flower hat: a little flourish
+  { notes: ["C4", "G4", "C5"], gap: 0.2, timbre: "soft" }, // lion's mane: big, low and slow
+];
+
+/** The motif for species `k` as frequencies (Hz) and start offsets (s); unknown species get the moon's. */
+export function motifFor(k: number | undefined): { f: number; at: number; timbre: "soft" | "bell" }[] {
+  const m = SPECIES_MOTIFS[k ?? 0] ?? SPECIES_MOTIFS[0]!;
+  return m.notes.map((n, i) => ({ f: midiToHz(noteToMidi(n)), at: i * m.gap, timbre: m.timbre }));
+}
+
+/** The rain bed's level (on the ambience bus, before the master) and its fades, s (time constants). */
+export const RAIN_GAIN = 0.05;
+export const RAIN_FADE_IN = 1.4;
+export const RAIN_FADE_OUT = 1.0;
+/** Milliseconds to the next drip on the sill while it rains (r a 0..1 random): every 0.7-2.5 s. */
+export function dripDelayMs(r: number): number {
+  return 700 + clamp01(r) * 1800;
+}
+
 // ---------------------------------------------------------------- engine
 
 type Ctor = typeof AudioContext;
@@ -241,6 +280,12 @@ export function createTankAudio(): TankAudio {
   let mFade: GainNode, mDuck: GainNode, mNight: GainNode, mMurk: BiquadFilterNode, mTone: BiquadFilterNode;
   let mKeys: BiquadFilterNode, mWobble: GainNode, mBass: GainNode, mDrums: GainNode, mCrackle: GainNode;
   let crackleBuf: AudioBuffer;
+  // pet: the species whose motif the next "pet" plays
+  let petSpecies: number | undefined;
+  // rain on the window (built lazily the first time it rains)
+  let raining = false;
+  let rainBus: GainNode | null = null;
+  let dripTimer: ReturnType<typeof setTimeout> | null = null;
 
   const live = () => c !== null && c.state === "running";
 
@@ -354,10 +399,16 @@ export function createTankAudio(): TankAudio {
       tone({ f: 320 * k, f2: 700 * k, glide: 0.11, d: 0.16, g: 0.14, lp: 1800 });
       tone({ f: 480 * k, f2: 900 * k, glide: 0.08, at: 0.07, d: 0.12, g: 0.07, lp: 1800 });
     },
-    // Affection: two warm triangle notes (C5 then E5) over a quiet 110 Hz purr amplitude-wobbled at ~24 Hz.
+    // Affection: the species' motif (SPECIES_MOTIFS: warm triangles, or little bells) over a quiet 110 Hz purr
+    // amplitude-wobbled at ~24 Hz. Longer motifs play each note a little softer, so a pet is as loud as it was.
     pet() {
-      tone({ f: 523.25, type: "triangle", a: 0.015, d: 0.7, g: 0.07, lp: 2000 });
-      tone({ f: 659.25, type: "triangle", at: 0.14, a: 0.015, d: 0.85, g: 0.07, lp: 2000 });
+      const notes = motifFor(petSpecies);
+      const level = 0.07 * Math.sqrt(2 / notes.length);
+      notes.forEach((n, i) => {
+        const last = i === notes.length - 1;
+        if (n.timbre === "bell") bell(n.f, n.at, level * 0.8, last ? 0.7 : 0.45);
+        else tone({ f: n.f, type: "triangle", at: n.at, a: 0.015, d: last ? 0.8 : 0.5, g: level, lp: 2000 });
+      });
       const t = c!.currentTime, purr = c!.createOscillator(), lfo = c!.createOscillator();
       const depth = c!.createGain(), am = c!.createGain(), g = c!.createGain(), lp = filter("lowpass", 420);
       purr.type = "triangle"; purr.frequency.value = 110;
@@ -542,6 +593,7 @@ export function createTankAudio(): TankAudio {
       else void c.resume().catch(() => {});
     });
     trickle();
+    applyRain(); // it may have started raining before the first gesture
     if (music) startMusic();
   }
 
@@ -820,6 +872,47 @@ export function createTankAudio(): TankAudio {
     p.setTargetAtTime(1, t + 0.4, 0.18);
   }
 
+  // --- rain -------------------------------------------------------------------------
+  // Rain on the window: white noise as a soft hiss (high- and lowpassed, 500 Hz - 2.4 kHz) under a thinner bright
+  // patter (bandpassed ~5 kHz) whose level gusts on a slow LFO, and now and then a drip off the sill. It goes on the
+  // ambience bus after the murk filter (the rain is outside the tank), so the master's mute silences it and a
+  // hidden tab's suspended context stops it with everything else.
+
+  function ensureRain() {
+    if (rainBus || !c) return;
+    const ac = c;
+    rainBus = ac.createGain();
+    rainBus.gain.value = 0;
+    rainBus.connect(amb);
+    const src = ac.createBufferSource();
+    src.buffer = white; src.loop = true;
+    const hiss = ac.createGain(); hiss.gain.value = 0.55;
+    src.connect(filter("highpass", 500, 0.5)).connect(filter("lowpass", 2400, 0.5)).connect(hiss).connect(rainBus);
+    const patter = ac.createGain(); patter.gain.value = 0.18;
+    lfo(0.09, 0.08, patter.gain); // gusts
+    src.connect(filter("bandpass", 5200, 0.8)).connect(patter).connect(rainBus);
+    src.start(0, Math.random() * 3);
+  }
+
+  /** One drip off the sill: a tiny falling sine bloop, quiet, then the next. */
+  function drip() {
+    dripTimer = null;
+    if (!raining) return;
+    if (live() && !muted && rainBus) {
+      const f = 1500 * jitter(0.3);
+      tone({ f, f2: f * 0.7, glide: 0.05, d: 0.06, g: 0.5, lp: 3200, out: rainBus });
+    }
+    dripTimer = setTimeout(drip, dripDelayMs(Math.random()));
+  }
+
+  function applyRain() {
+    if (!c) return;
+    if (raining) ensureRain();
+    if (!rainBus) return;
+    rainBus.gain.setTargetAtTime(raining ? RAIN_GAIN : 0, c.currentTime, raining ? RAIN_FADE_IN : RAIN_FADE_OUT);
+    if (raining && !dripTimer) dripTimer = setTimeout(drip, dripDelayMs(Math.random()));
+  }
+
   // --- public API ---------------------------------------------------------------
 
   return {
@@ -835,10 +928,16 @@ export function createTankAudio(): TankAudio {
       build();
       void c.resume().catch(() => {});
     },
-    play(name) {
+    play(name, species) {
       if (!live() || muted) return;
       if (!gate.admit(name, c!.currentTime)) return;
+      petSpecies = species;
       try { recipes[name](); duck(); } catch { /* never let a sound break the game */ }
+    },
+    setRain(on) {
+      if (on === raining) return;
+      raining = on;
+      try { applyRain(); } catch { /* never let the weather break the game */ }
     },
     setNight(amount) {
       const n = clamp01(amount);

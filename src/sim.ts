@@ -131,6 +131,7 @@ import {
   MORPH_CLASSIC,
   MORPH_DUSK,
   MORPH_GHOST,
+  MORPH_FROST,
   MORPH_IDS,
   MORPH_INHERIT,
   MORPH_KNOWN,
@@ -318,7 +319,7 @@ export type { Species, Stage, Snail, Walker, Cam, Visit, VisitorKind, Spot, Save
 export { favouriteFood, FOOD_NAMES, FOOD_KINDS, THEME_N, THEME_NAMES, foodItem, themeItem };
 export { SPOT_N, murkOf, spotsForMurk };
 export { VISITORS };
-export { MORPH_NONE, MORPH_CLASSIC, MORPH_GHOST, MORPH_DUSK, MORPH_PEARL, requestText, rewardOf };
+export { MORPH_NONE, MORPH_CLASSIC, MORPH_GHOST, MORPH_FROST, MORPH_DUSK, MORPH_PEARL, requestText, rewardOf };
 export type { DailyRequests, Request, RequestKind, KeepSave, FindSave, FindSource };
 export { FIND_ITEMS, FIND_SETS };
 export { MILESTONES };
@@ -354,7 +355,7 @@ export interface SaveJelly {
   born: number;
   /** growth-scaled seconds of content time (adult, mood > 0.7) towards the next baby */
   content: number;
-  /** v12: its colour morph, fixed for life: 0 none, 1 classic (v7's rare colour, 1 in 10 births), 2 ghost (a season's).
+  /** v12: its colour morph, fixed for life: 0 none, 1 classic (v7's rare colour, 1 in 10 births), 2 ghost, 3 frost (a season's).
    *  v7..v9 saves wrote a boolean (true = classic); loading takes either */
   morph: number;
   /** v13 (optional): its personality, 0 shy, 1 curious, 2 sleepy, 3 social (./traits.ts). Missing: derived from
@@ -374,7 +375,7 @@ export interface JournalEntry {
   firstAdultAt: number | null;
   /** that first adult's name */
   firstName: string | null;
-  /** v12: the colour morphs ever owned, a bitmask by morph id (bit id - 1: 1 classic, 2 ghost); v7..v9 saves wrote a boolean */
+  /** v12: the colour morphs ever owned, a bitmask by morph id (bit id - 1: 1 classic, 2 ghost, 3 frost); v7..v9 saves wrote a boolean */
   morphSeen: number;
   /** v13: the personalities met in this species, a bitmask by trait (bit t); older saves: from the jellies in the tank */
   traitSeen: number;
@@ -736,7 +737,7 @@ export interface SimOptions {
   /** ×20 when the URL has ?fast=1 */
   growthMultiplier?: number;
   /**
-   * v12: the morph an active season offers babies (MORPH_GHOST around Halloween), or null when no season is on.
+   * v12: the morph an active season offers babies (MORPH_GHOST around Halloween, MORPH_FROST in winter), or null when no season is on.
    * A baby that rolled plain is that morph SEASON_MORPH_CHANCE of the time. Called with the sim clock (epoch ms).
    */
   seasonalMorph?: (now: number) => number | null;
@@ -4058,7 +4059,7 @@ const NEEDS17 = K.props.includes("needs17");
 /** One placed jelly's props: `j{slot}` in the tank (---- nursery ---- `nj{n}` in the bowl, with its own mood). */
 function writeSlot(v: View, s: State, slot: number, j: Jelly | null, night: number, p = `j${slot}`, mood?: number): void {
   if (!j) {
-    for (const name of ["on", "x", "y", "healthy", "pale", "flush", "glow", "morph", "rot", "ghost", "nglow", "dusk", "pearl"]) v[p + name] = 0;
+    for (const name of ["on", "x", "y", "healthy", "pale", "flush", "glow", "morph", "rot", "ghost", "frost", "nglow", "dusk", "pearl"]) v[p + name] = 0;
     for (let i = 0; i < SPECIES_N; i++) v[`${p}k${i}`] = 0;
     for (let i = 0; i < 4; i++) v[`${p}g${i}`] = 0;
     for (const g of ["bf", "tf"]) for (let i = 0; i < FRAME_N; i++) v[`${p}${g}${i}`] = 0;
@@ -4098,15 +4099,17 @@ function writeSlot(v: View, s: State, slot: number, j: Jelly | null, night: numb
   const pale = m < 0.35 ? 1 : 0;
   const morph = j.morph === MORPH_CLASSIC && !pale ? 1 : 0;
   const ghost = j.morph === MORPH_GHOST && !pale ? 1 : 0;
+  const frost = j.morph === MORPH_FROST && !pale ? 1 : 0; // winter's frost morph: pale overrides it too
   // v16: a pair's new colours (./pairs.ts)
   const dusk = j.morph === MORPH_DUSK && !pale ? 1 : 0;
   const pearl = j.morph === MORPH_PEARL && !pale ? 1 : 0;
   v[p + "pale"] = pale;
   v[p + "morph"] = morph;
   v[p + "ghost"] = ghost;
+  v[p + "frost"] = frost;
   v[p + "dusk"] = dusk;
   v[p + "pearl"] = pearl;
-  v[p + "healthy"] = pale || morph || ghost || dusk || pearl ? 0 : 1;
+  v[p + "healthy"] = pale || morph || ghost || frost || dusk || pearl ? 0 : 1;
   // rosy flush over whichever body is showing, fading out in steps; a favourite meal holds it longer (v11)
   const fp = (s.t - j.wiggleT0) / FLUSH_TIME;
   const lp = (s.t - j.loveT0) / LOVE_FLUSH_TIME;
@@ -4224,7 +4227,7 @@ export function view(s: State): View {
   v.haveShrimp = s.foods[1] ? 1 : 0;
   v.havePlankton = s.foods[2] ? 1 : 0;
   for (let t = 0; t < THEME_N; t++) v[`theme${t}`] = t === s.theme ? 1 : 0;
-  // seasonal events: each season's decor shows on its own prop (evHalloween)
+  // seasonal events: each season's decor shows on its own prop (evHalloween, evWinter)
   for (const season of SEASONS) v[season.prop] = s.event === season.id ? 1 : 0;
 
   const js = jellies(s);

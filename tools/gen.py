@@ -200,7 +200,7 @@ def sprite(name, px):
 # referenced ImageAsset: the .riv keeps the record, its PNG goes into public/sprites/<group>.json with the rest of
 # its group, and the host fetches that file when a jelly of the species (or the event) shows up. Everything else
 # (tank, decor, shop, helpers, visitors) stays embedded. A new species or event needs nothing more than a line here.
-EVENT_GROUPS = {"hw_": "ev-halloween"}  # sprite-name prefix -> group
+EVENT_GROUPS = {"hw_": "ev-halloween", "wn_": "ev-winter"}  # sprite-name prefix -> group (wn_: ---- winter ----)
 MO_GROUPS = {"mo_dusk_": "mo-dusk", "mo_pearl_": "mo-pearl"}  # ---- pair colours ---- a pair's colours, one group each
 
 
@@ -4459,6 +4459,447 @@ def hw_contract(c):
 # ---- end Halloween event ----
 
 
+# ---- winter ----
+# Everything here is event art: every sprite is named wn_* (grouped as "ev-winter", loaded on demand like the
+# Halloween art) and the tank's decor shows on one prop, evWinter (0/1), written by the logic from src/season.ts
+# (1 December to 28/29 February). Layered over whichever theme is in use: snow drifting down through the water and
+# dusting the sand, snow caps on the reef rocks and the arch, a little snowman of sand-dollar discs (World), frost
+# creeping in at the glass's edges and corners, further at night (screen-fixed, over the vignette), the penguin
+# visitor (World, behind the jellies, so the Night layer tints it), and the frost jelly morph (Jelly VM `frost`, a
+# palette group per stage like Ghost, with ice crystals glinting round the rim). The room's winter extras are
+# ROOM_SEASONS["winter"] in the room block.
+
+WN_ICE = ramp("2c5a8c", "5e98c8", "9ccbe8", "d4effa", "f6fdff")  # the frost morph: deep ice -> rime white
+WN_SNOW = ramp("8ea6c8", "b8cce4", "dceaf6", "f4faff", "ffffff")  # snow, shadowed blue -> lit white
+WN_FROST = hx("f2fbff")  # frost on the glass
+WN_NAVY = ramp("0e1220", "1a2238", "283452", "3a4a6e", "566a90", "7c90b4")  # the penguin's back, lit upper left
+WN_BELLY = ramp("98a8c4", "c6d2e4", "e8eef6", "fbfdff")
+WN_BEAK = ramp("8a2e0e", "d4561c", "f6862e", "ffb860")
+WN_SCARF = ramp("5a1018", "a8232c", "d8443e", "f47a62")
+WN_TWIG = ramp("2e1c10", "5a3a20", "8a5e34")
+
+
+# ---- the frost morph (art only; the logic's morph id 3 writes j{s}frost = 1). Every palette gets a "w" key: its
+# colours mapped by lightness onto the ice ramp, a little see-through, the outline a crisp ice blue and the rim
+# rime-white, so the bell reads as frosted glass with a crystalline edge.
+def wn_frostify(key, c, alpha=0.88):
+    if key in ("out", "deep"):
+        return (*hx("3e78b0")[:3], max(170, c[3]))
+    if key in ("rim", "edge"):
+        return (*hx("ffffff")[:3], max(200, c[3]))
+    r, g_, b, a = c
+    lum = (0.3 * r + 0.59 * g_ + 0.11 * b) / 255
+    t = (0.22 + 0.78 * lum ** 0.75) * (len(WN_ICE) - 1)
+    i = min(len(WN_ICE) - 2, int(t))
+    rgb = mix(WN_ICE[i], WN_ICE[i + 1], t - i)[:3]
+    return (*rgb, max(34, round(a * alpha)))
+
+
+def wn_frost_pal(src):
+    return {key: (wn_frostify(key, c) if isinstance(c, tuple) else c) for key, c in src.items()}
+
+
+JELLY["jw"] = wn_frost_pal(JELLY["j"])
+PAL_MOON["w"] = "jw"
+for _pals in (BLUBBER, UPSIDE):
+    _pals["w"] = wn_frost_pal(_pals["h"])
+COMB["w"] = dict(wn_frost_pal(COMB["h"]), comb=0.7, sat=0.25)  # the comb rows still shimmer, icily
+for _k in NEW:
+    NEW[_k]["w"] = wn_frost_pal(NEW[_k]["h"])
+WN_FROST_FADE = 0.62  # the usual tentacles' opacity under a frost bell
+WN_FADE_CONV = nid()  # DataConverterRangeMapper frost 0..1 -> 1..WN_FROST_FADE (appended last: the list is positional)
+
+
+def wn_frost_tents(tents):
+    """The stage's tentacles, a little faded while the frost palette shows (the bell is the ice)."""
+    return [node("FrostFade", tents, binds=[bind(jprop("frost"), 18, WN_FADE_CONV)])]
+
+
+def wn_frost_halo(gcy, gw, gh):
+    return ellipse_shape("FrostGlow", 0, gcy, round(gw * 0.9), round(gh * 0.9),
+                         rad_grad(0, 0, round(gw * 0.45), [(0, hx("f0fcff", 105)), (0.45, hx("9cd8f4", 45)), (1, hx("9cd8f4", 0))]),
+                         blend="screen", opacity=0, binds=[bind(jprop("frost"), 18)])
+
+
+def wn_crystal(px, x, y, big):
+    """A tiny six-armed ice crystal: a cross with diagonal tips, white at the heart."""
+    px.put(x, y, hx("ffffff"))
+    arms = ((1, 0), (-1, 0), (0, 1), (0, -1))
+    for a, b in arms:
+        px.put(x + a, y + b, hx("d8f4ff", 230))
+    if big:
+        for a, b in arms:
+            px.put(x + 2 * a, y + 2 * b, hx("a8e0ff", 170))
+        for a, b in ((1, 1), (-1, -1), (1, -1), (-1, 1)):
+            px.put(x + a, y + b, hx("c8ecff", 120))
+
+
+def wn_frost_glints(k, g, f):
+    """Ice crystals catching the light on the frost bell's rim: a different few lit in each of four sets (cycling
+    with the pulse frames, like the classic morph's glints)."""
+    b = species_body(k, g, 0, "w")
+    edge = sorted((x, y) for (x, y) in b.d if any(not b.has(x + a, y + c) for a, c in N4))
+    r2 = random.Random(1300 + k * 10 + g)
+    px = Px()
+    n = 3 if g >= 2 else 2
+    for i in range(n * 4):
+        x, y = r2.choice(edge)
+        if i % 4 == f:
+            wn_crystal(px, x, y, (i // 4) % 2 == 0 and g >= 2)
+    if not px.d:
+        px.put(*edge[0], hx("ffffff", 1))
+    return px
+
+
+# ---- the penguin: a little gentoo (slate back, white front, an orange bill and feet, the white band over its eye).
+# Faces right at sx +1; origin = the middle of its body. Frames 0-1 swimming side-on (gliding, a flipper stroke),
+# 2-3 upright in the water (flippers at its sides, flippers out).
+def wn_mask_ellipse(cx, cy, rx, ry):
+    return {(x, y) for y in range(math.floor(cy - ry) - 1, math.ceil(cy + ry) + 1)
+            for x in range(math.floor(cx - rx) - 1, math.ceil(cx + rx) + 1)
+            if ((x + 0.5 - cx) / rx) ** 2 + ((y + 0.5 - cy) / ry) ** 2 <= 1}
+
+
+def wn_shade(px, mask, rmp, light=(-0.6, -0.8), dither=0.6):
+    if not mask:
+        return
+    xs, ys = [p[0] for p in mask], [p[1] for p in mask]
+    cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+    hw, hh = max(1, (max(xs) - min(xs)) / 2), max(1, (max(ys) - min(ys)) / 2)
+    for (x, y) in mask:
+        t = 0.55 + 0.42 * ((x - cx) / hw * light[0] + (y - cy) / hh * light[1])
+        px.put(x, y, rmp[shade_index(t, len(rmp), x, y, dither)])
+
+
+def wn_flipper(px, root, tip, w0, mask_out=None):
+    """A flipper: a tapered dark stroke from the shoulder, its leading edge lit."""
+    n = 14
+    for i in range(n + 1):
+        u = i / n
+        x, y = root[0] + (tip[0] - root[0]) * u, root[1] + (tip[1] - root[1]) * u
+        w = w0 * (1 - 0.7 * u)
+        for (a, b) in wn_mask_ellipse(x, y, max(0.6, w), max(0.6, w)):
+            px.put(a, b, WN_NAVY[1] if u > 0.15 else WN_NAVY[2])
+    line_px(px, [(root[0], root[1] - w0 * 0.6), (tip[0], tip[1] - 0.4)], WN_NAVY[3])
+
+
+def wn_outline(px, mask, col=WN_NAVY[0]):
+    for (x, y) in mask:
+        if any((x + a, y + b) not in mask for a, b in ((1, 0), (0, 1))) or ((x - 1, y) not in mask and (x, y - 1) not in mask):
+            px.put(x, y, col)
+
+
+def wn_penguin(frame):
+    px = Px()
+    if frame < 2:  # swimming, side-on: a torpedo, head to the right
+        body = {(x, y) for (x, y) in wn_mask_ellipse(0, 0.2, 11, 6.2)
+                if abs(y + 0.3) <= 6.2 * (1 - 0.42 * max(0.0, -(x + 0.5) / 11) ** 2)}
+        head = wn_mask_ellipse(8.2, -1.6, 5, 4.4)
+        tail = hw_fill_poly([(-9.5, -1.5), (-14.5, -0.2), (-9.5, 1.4)])
+        m = body | head | tail
+        belly = lambda x, y: y + 0.5 > -0.4 - 0.08 * x and x < 11
+        dark = {(x, y) for (x, y) in m if not belly(x, y)}
+        wn_shade(px, dark, WN_NAVY[1:])
+        wn_shade(px, m - dark, WN_BELLY, light=(-0.3, -0.9))
+        wn_outline(px, m)
+        # the bill, the eye and the white band over it, a touch of blush
+        for (x, y) in hw_fill_poly([(12.2, -2.9), (16.4, -1.4), (12.2, -0.2)]):
+            px.put(x, y, WN_BEAK[2] if y < -1 else WN_BEAK[1])
+        px.put(12, -2, WN_BEAK[3])
+        px.put(10, -3, hx("0a0c16"))
+        px.put(10, -4, hx("0a0c16"))
+        px.put(11, -4, hx("ffffff"))
+        for x, y in ((9, -5), (10, -5), (11, -5)):
+            px.put(x, y, WN_BELLY[3])
+        px.put(11, -1, hx("f49aaa", 170))
+        # feet trailing behind, and the flipper
+        for (x, y) in hw_fill_poly([(-9, 2.2), (-13.6, 3.8), (-12.4, 1.6)]):
+            px.put(x, y, WN_BEAK[1])
+        if frame == 0:
+            wn_flipper(px, (3.5, 0.5), (-5.5, 2.8), 1.6)
+        else:
+            wn_flipper(px, (3.5, 0.5), (0.5, 7.2), 1.6)
+        return px
+    # upright, three-quarters to the right: dark back and head, white front
+    body = {(x, y) for (x, y) in wn_mask_ellipse(0, 1.5, 6.6, 9.2) if True}
+    head = wn_mask_ellipse(0.8, -7.4, 5.0, 4.6)
+    m = body | head
+    front = wn_mask_ellipse(1.9, 3, 4.5, 7.6)
+    dark = {(x, y) for (x, y) in m if (x, y) not in front or y < -5}
+    wn_shade(px, dark, WN_NAVY[1:])
+    wn_shade(px, m - dark, WN_BELLY, light=(-0.4, -0.85))
+    wn_outline(px, m)
+    for (x, y) in hw_fill_poly([(5.2, -8.6), (9.2, -7.4), (5.2, -6.2)]):
+        px.put(x, y, WN_BEAK[2] if y < -7 else WN_BEAK[1])
+    px.put(3, -9, hx("0a0c16"))
+    px.put(3, -8, hx("0a0c16"))
+    px.put(4, -9, hx("ffffff"))
+    for x, y in ((0, -11), (1, -11), (2, -11), (3, -11), (4, -10)):
+        px.put(x, y, WN_BELLY[3])
+    px.put(4, -6, hx("f49aaa", 170))
+    for fx in (-3, 1):  # feet, dangling
+        for x in (fx, fx + 1, fx + 2):
+            px.put(x, 11, WN_BEAK[1])
+        px.put(fx + 1, 10, WN_BEAK[2])
+    if frame == 2:
+        wn_flipper(px, (-4.6, -2.5), (-7.0, 5.0), 1.5)
+        wn_flipper(px, (5.2, -2.0), (6.6, 4.5), 1.3)
+    else:  # flippers out: a happy flap
+        wn_flipper(px, (-4.6, -2.5), (-11.0, -4.5), 1.5)
+        wn_flipper(px, (5.2, -2.0), (11.2, -3.8), 1.3)
+    return px
+
+
+# ---- the tank's winter dressing (placed from the scene, in marked lines)
+WN_SNOWMAN_X = 133  # in the open sand left of the chest (where Halloween's cauldron sits)
+WN_DEPTH = 8
+
+
+def wn_base_y(x):
+    return min(WATER_BOT - 2, sand_top(x) + WN_DEPTH)
+
+
+def wn_event_bind():
+    return dict(opacity=0, binds=[bind(prop("evWinter"), 18)])
+
+
+def wn_snowman():
+    """A tiny snowman of three sand-dollar discs stood on edge, dusted with snow: twig arms, a red scarf, coal-pebble
+    eyes, an orange-pebble nose and a pink scallop shell for a hat. Origin = base centre on the sand."""
+    px = Px()
+    for (x, y) in wn_mask_ellipse(0, 0, 10, 2.6):  # a little drift round its base
+        if y <= 0:
+            px.put(x, y, WN_SNOW[2 + (1 if x < 0 else 0)] if y < 0 else WN_SNOW[1])
+    discs = [(0, -6.2, 6.2), (0, -16.2, 4.6), (0, -24.0, 3.7)]
+    for cx, cy, r in discs[:2]:
+        sand_dollar(px, cx - 0.5, cy, r)
+    for (x, y) in wn_mask_ellipse(-0.5, -24.0, 3.7, 3.7):  # the head: a plain disc, so the face reads
+        edge = any((x + a, y + b) not in wn_mask_ellipse(-0.5, -24.0, 3.7, 3.7) for a, b in N4)
+        px.put(x, y, R_SD[1] if edge and x + y > -24 else R_SD[2] if edge else R_SD[3] if x + y > -25 else R_SD[4])
+    for cx, cy, r in discs:  # snow on each disc's upper rim
+        for (x, y) in wn_mask_ellipse(cx - 0.5, cy, r, r):
+            if (x, y - 1) not in wn_mask_ellipse(cx - 0.5, cy, r, r) and y < cy:
+                px.put(x, y, WN_SNOW[4] if x < cx else WN_SNOW[3])
+                if (x + 1) % 3:
+                    px.put(x, y + 1, WN_SNOW[3])
+    for x, y in ((-2, -25), (1, -25)):  # face
+        px.put(x, y, hx("1a1420"))
+    px.put(0, -23, WN_BEAK[2])
+    px.put(1, -23, WN_BEAK[1])
+    for x, y in ((-2, -22), (-1, -21), (0, -21), (1, -22)):
+        px.put(x, y, hx("3a2a30"))
+    for x in range(-3, 3):  # scarf at the neck, its tail fluttering off to the side
+        px.put(x, -20, WN_SCARF[2] if x % 2 else WN_SCARF[3])
+    for x, y in ((3, -20), (4, -19), (5, -19), (5, -18)):
+        px.put(x, y, WN_SCARF[1] if y > -19 else WN_SCARF[2])
+    for sx in (-1, 1):  # twig arms
+        line_px(px, [(sx * 4, -17), (sx * 8.5, -21), (sx * 9.5, -23.5)], WN_TWIG[1])
+        line_px(px, [(sx * 7.6, -20.2), (sx * 9.8, -20.6)], WN_TWIG[2])
+    for (x, y) in wn_mask_ellipse(-0.5, -28.6, 3.4, 1.9):  # the scallop-shell hat
+        if y <= -28:
+            px.put(x, y, R_SHELL[3] if (x % 2) else R_SHELL[2])
+    for x in range(-3, 3):
+        px.put(x, -28, R_SHELL[1])
+    px.put(-1, -30, R_SHELL[4])
+    return px
+
+
+def wn_snow_caps(rocks, arch_tops):
+    """Snow settled on the reef rocks' tops and along the back of the arch (all the rock in every theme): a cap
+    two or three px deep where the top is flat, thinning on the slopes, with the odd icicle under the lip."""
+    px = Px()
+    tops = {}
+    for (x, y) in rocks.d:
+        if 355 <= x <= 380:  # the boulder inside the cave: no snow in there
+            continue
+        if y < tops.get(x, 10 ** 6):
+            tops[x] = y
+    arch = set()
+    for x, t in arch_tops.items():
+        if t < tops.get(x, 10 ** 6):
+            tops[x] = t
+            arch.add(x)
+    for x, t in sorted(tops.items()):
+        slope = max(abs(t - tops.get(x - 1, t)), abs(t - tops.get(x + 1, t)))
+        if slope > (1 if x in arch else 3):  # the arch's flanks are steep: only its flatter back holds snow
+            continue
+        depth = 3 if slope <= 1 and _hash2(x, t, 5) > 0.35 else 2
+        for i in range(depth):
+            px.put(x, t - 1 + i, WN_SNOW[4] if i == 0 else WN_SNOW[3] if i == 1 else WN_SNOW[1])
+        if _hash2(x, t, 9) > 0.86:
+            px.put(x, t + depth - 1, hx("d8ecf8", 200))
+            px.put(x, t + depth, hx("c4e2f6", 150))
+    for (x, y) in list(px.d):  # the lit side of each lump
+        if not px.has(x - 1, y) and px.get(x, y) == WN_SNOW[3]:
+            px.put(x, y, WN_SNOW[4])
+    return px
+
+
+def wn_sand_snow():
+    """A dusting of snow along the top of the sand, the whole width of the world (every theme stands on sand_top)."""
+    px = Px()
+    for x in range(GLASS_L, WORLD_R + 1):
+        t = sand_top(x)
+        n = fbm(x * 0.07, 3.1, 31, 2)
+        if n < 0.36:
+            continue
+        px.put(x, t, WN_SNOW[4] if n > 0.5 else hx("f4faff", 200))
+        if n > 0.48:
+            px.put(x, t + 1, hx("e4f0fa", 170 if n > 0.6 else 110))
+        if n > 0.62:
+            px.put(x, t - 1, hx("ffffff", 180))
+    return px
+
+
+# snow drifting down through the water: a few soft flakes over the whole world, one slow loop (calm: slower still)
+WN_SNOW_DUR = 2700
+WN_FLAKES = 30
+
+
+def wn_flake(kind):
+    px = Px()
+    if kind == 0:
+        wn_crystal(px, 1, 1, False)
+    elif kind == 1:
+        for x, y in ((0, 0), (1, 0), (0, 1), (1, 1)):
+            px.put(x, y, hx("ffffff", 200 if (x, y) == (0, 0) else 150))
+    else:
+        px.put(0, 0, hx("ffffff", 210))
+    return px
+
+
+def wn_snow_node():
+    r = random.Random(1201)
+    kids, tracks = [], []
+    y_top, y_bot = (WATER_TOP + 2) * P, (SAND_BASE - 2) * P
+    for i in range(WN_FLAKES):
+        fid = nid()
+        x = GLASS_L + 3 + round((WORLD_R - GLASS_L - 6) * (i + r.random() * 0.8) / WN_FLAKES)
+        kind = r.choice([0, 1, 1, 2, 2])
+        kids.append(image(f"wn_Flake{kind}", lambda kind=kind: wn_flake(kind), node_id=fid, node_name=f"wn_Flake{i}"))
+        phase = r.random()
+        y_start = round(y_top + (y_bot - y_top) * phase)
+        f_wrap = max(1, round(WN_SNOW_DUR * (1 - phase)))
+        kv = [(0, y_start), (f_wrap, y_bot)]
+        if f_wrap < WN_SNOW_DUR - 1:
+            kv += [(f_wrap + 1, y_top), (WN_SNOW_DUR, y_start)]
+        tracks.append(keys(fid, 14, kv, "linear"))
+        sw = r.choice([-6, -4, 4, 6])
+        q = WN_SNOW_DUR // 6
+        tracks.append(keys(fid, 13, [(0, x * P), (q, (x + sw) * P), (3 * q, (x - sw) * P), (5 * q, (x + sw // 2) * P),
+                                     (WN_SNOW_DUR, x * P)], "cubic"))
+    add_anim("wn_Snow", WN_SNOW_DUR, tracks)
+    return node("WnSnow", kids, **wn_event_bind())
+
+
+def wn_decor_node():
+    """World layer, on the sand behind the front kelp: the snowman."""
+    return node("WnDecor", [image("wn_Snowman", wn_snowman, lx=WN_SNOWMAN_X, ly=wn_base_y(WN_SNOWMAN_X))], **wn_event_bind())
+
+
+# ---- frost on the glass: feathery ice grown in from the corners and along the top, screen-fixed over the water
+# (the walls, drawn over it, hide what falls on them). More of it creeps in at night (nightShade).
+def wn_frost(w, h, seed, reach, edge=6, top_only=False):
+    """Frost grown from the corner (0, 0) of a w x h patch toward +x, +y: a rime of haze hugging the corner and both
+    edges, and ice feathers (each branch sprouting twigs at 60 degrees) reaching in, fainter as they go.
+    top_only: along the top edge only (the strip under the hood)."""
+    px = Px()
+    rng = random.Random(seed)
+    for y in range(h):
+        for x in range(w):
+            d = math.hypot(x, y) / (reach * 0.42)
+            f = max(0.0 if top_only else 1 - d, 1 - y / edge, 0.0 if top_only else 1 - x / edge)
+            if f > 0.12 + (bay(x, y) + 0.5) * 0.6:
+                px.put(x, y, (*WN_FROST[:3], round(70 + 90 * min(1, f))))
+
+    def branch(x, y, ang, length, depth):
+        for i in range(int(length)):
+            x += math.cos(ang)
+            y += math.sin(ang)
+            if not (0 <= x < w and 0 <= y < h):
+                return
+            d = y / h if top_only else math.hypot(x, y) / reach
+            px.put(math.floor(x), math.floor(y), (*WN_FROST[:3], round(max(90, 235 - 150 * d - 30 * depth))))
+            if depth < 2 and i >= 2 and i % 3 == 2:
+                for sgn in (-1, 1):
+                    if rng.random() < 0.8:
+                        branch(x, y, ang + sgn * math.pi / 3, max(1.5, (length - i) * 0.4), depth + 1)
+
+    span = w if top_only else reach * 1.25
+    t = 3
+    while t < span:
+        k = max(0.25, 1 - t / span)
+        down = math.pi / 2 + rng.uniform(-0.45, 0.45)
+        branch(t, 0, down, (h * 0.9 if top_only else reach * 0.75) * k * rng.uniform(0.55, 1), 0)
+        if not top_only:
+            branch(0, t, rng.uniform(-0.45, 0.45), reach * 0.75 * k * rng.uniform(0.55, 1), 0)
+        t += rng.randint(5, 8)
+    if not top_only:
+        branch(0, 0, math.pi / 4, reach * 0.9, 0)
+    return px
+
+
+def wn_flip(px, fx, fy, w, h):
+    out = Px()
+    for (x, y), c in px.d.items():
+        out.put(w - 1 - x if fx else x, h - 1 - y if fy else y, c)
+    return out
+
+
+def wn_frost_set(name, reach, seed):
+    """The four corners and the strip along the top, as one node of images (screen-fixed, logical px)."""
+    s = reach + 6
+    w_, h_ = GLASS_R - GLASS_L + 1, WATER_BOT - WATER_TOP + 1
+    kids = []
+    for i, (fx, fy) in enumerate(((False, False), (True, False), (False, True), (True, True))):
+        art = lambda fx=fx, fy=fy, i=i: wn_flip(wn_frost(s, s, seed + i, reach, edge=5), fx, fy, s, s)
+        kids.append(image(f"wn_{name}{i}", art, lx=GLASS_L + (w_ - s if fx else 0), ly=WATER_TOP + (h_ - s if fy else 0)))
+    kids.append(image(f"wn_{name}Top", lambda: wn_frost(w_, max(6, reach // 4), seed + 9, reach, edge=3, top_only=True),
+                      lx=GLASS_L, ly=WATER_TOP))
+    return kids
+
+
+def wn_frost_node():
+    night = node("WnFrostNight", wn_frost_set("FrostNight", 56, 1240), opacity=0, binds=[bind(prop("nightShade"), 18)])
+    return node("WnFrost", wn_frost_set("Frost", 34, 1220) + [night], **wn_event_bind())
+
+
+def wn_penguin_node():
+    """World, behind the jellies (the Night layer tints it): the penguin visitor (penguinOn/X/Y/SX/F0..3)."""
+    return node("WnPenguin", [visitor_node("penguin", "wn_Penguin", wn_penguin, 120 * P, 170 * P)], **wn_event_bind())
+
+
+def wn_contract(c):
+    """What the logic needs to know, merged into contract.json."""
+    sand = [{"x": WN_SNOWMAN_X * P, "w": 20 * P, "tier": 0}]
+    c["seasons"]["winter"] = {"prop": "evWinter", "sprites": "wn_", "visitor": "penguin", "morphKey": "frost", "sand": sand}
+    c["visitorOrigin"]["penguin"] = "the middle of its body (swimming side-on, frames 0-1, or upright, 2-3)"
+
+
+def wn_portraits():
+    """The journal's visitor log: the penguin (key vpenguin) and its silhouette."""
+    px = wn_penguin(2)
+    sil = Px()
+    for (x, y), c in px.d.items():
+        if c[3] >= 40:
+            sil.put(x, y, hx("141a33", 255 if c[3] >= 110 else round(70 + c[3])))
+    return {"vpenguin": data_url(px), "vpenguins": data_url(sil)}
+
+
+def wn_frost_portrait(k):
+    """The frost morph as the tank draws it: the usual tentacles faded a little (WN_FROST_FADE) under the Frost bell,
+    with one set of its rim crystals."""
+    m = Px()
+    for (x, y), c in species_tent(k, 3, 0, TR_NEUTRAL, "h").d.items():
+        m.over(x, y, (*c[:3], round(c[3] * WN_FROST_FADE)))
+    for (x, y), c in species_body(k, 3, 0, "w").d.items():
+        m.over(x, y, c)
+    for (x, y), c in wn_frost_glints(k, 3, 0).d.items():
+        m.over(x, y, c)
+    return m
+# ---- end winter ----
+
+
 # ---- night visitors ----
 # Three rare visitors that only come at night (src/visitors.ts VISITOR_NIGHT), all embedded (28 small sprites,
 # ~8 KB of PNG). Art faces right at scaleX +1, like the day visitors.
@@ -7710,13 +8151,103 @@ def room_bats():
     return px
 
 
+# ---- winter ---- the room in winter: snow on the roofs and the tree outside, frost in the panes' corners, a
+# snow globe on the sill, and (only while it snows, src/room.ts's weather) snow drifted against the bottom panes
+WN_PANES = ((ROOM_WIN[0], ROOM_WIN[1], ROOM_MULLION, ROOM_TRANSOM), (ROOM_MULLION + 3, ROOM_WIN[1], ROOM_WIN[2], ROOM_TRANSOM),
+            (ROOM_WIN[0], ROOM_TRANSOM + 3, ROOM_MULLION, ROOM_WIN[3]), (ROOM_MULLION + 3, ROOM_TRANSOM + 3, ROOM_WIN[2], ROOM_WIN[3]))
+
+
+def wn_room_roofsnow():
+    """Snow on whatever faces the sky outside: the hills, the roofs and chimneys, the tree (window coordinates)."""
+    x0, y0, x1, y1 = ROOM_WIN
+    w, h = x1 - x0, y1 - y0
+    hills, near, tree, _ = room_skyline_masks(w, h)
+    px = Px()
+    for mask, depth in ((hills, 3), (near, 2), (tree, 2)):
+        for (x, y) in mask:
+            if not 0 <= x < w or (x, y - 1) in mask:
+                continue
+            for i in range(depth):
+                if (x, y + i) in mask:
+                    px.put(x, y + i, hx("e8f0fa") if i == 0 else hx("c4d2e6") if i == 1 else hx("a8b8d2", 200))
+    return px
+
+
+def wn_room_pane_frost():
+    """Frost in the corners of the four panes (window coordinates)."""
+    px = Px()
+    for i, (ax, ay, bx, by) in enumerate(WN_PANES):
+        w, h = bx - ax, by - ay
+        for fx in (False, True):
+            for fy in (False, True):
+                if not fy and i < 2 and fx == (i == 0):
+                    continue  # the upper panes keep their inner top corners clear
+                art = wn_flip(wn_frost(14, 14, 1500 + i * 4 + fx * 2 + fy, 11, edge=2), fx, fy, 14, 14)
+                for (x, y), c in art.d.items():
+                    px.put(ax - ROOM_WIN[0] + (w - 14 if fx else 0) + x, ay - ROOM_WIN[1] + (h - 14 if fy else 0) + y,
+                           c[:3] + (min(255, c[3] + 20),))
+    return px
+
+
+def wn_room_sill_snow():
+    """Snow drifted against the bottom of each pane, outside (window coordinates)."""
+    px = Px()
+    for ax, ay, bx, by in WN_PANES:
+        for x in range(ax, bx):
+            u = (x - ax) / max(1, bx - ax - 1)
+            d = round(3 + 2.5 * math.sin(u * math.pi) ** 0.6 + 1.2 * math.sin(x * 0.7) + (2 if u < 0.12 or u > 0.88 else 0))
+            for i in range(d):
+                y = by - 1 - i
+                c = hx("f4f8ff") if i == d - 1 else hx("dce6f4") if i >= d - 2 else hx("b8c6dc")
+                px.put(x - ROOM_WIN[0], y - ROOM_WIN[1], c)
+    return px
+
+
+def wn_room_globe():
+    """A little snow globe on the sill: a pink jelly in a glass dome, snow at its feet, on a wooden base."""
+    px = Px()
+    for x in range(-6, 7):
+        for y in (-1, 0):
+            px.put(x, y, R_WOOD[3] if y == -1 else R_WOOD[1])
+    px.put(-6, -1, R_WOOD[2])
+    dome = wn_mask_ellipse(0, -8.5, 6, 7)
+    for (x, y) in dome:
+        if y > -2:
+            continue
+        edge = any((x + a, y + b) not in dome for a, b in N4)
+        px.put(x, y, hx("e8f8ff", 200) if edge else hx("9ad0ec", 120))
+    for x in range(-5, 6):
+        px.put(x, -2, hx("f4faff"))
+        if abs(x) < 4:
+            px.put(x, -3, hx("dceaf6"))
+    for (x, y) in wn_mask_ellipse(0, -9, 2.6, 2.0):  # the jelly
+        if y <= -9:
+            px.put(x, y, hx("f29ad6") if y < -10 else hx("ffc8ec"))
+    for x in (-2, 0, 2):
+        for y in range(-8, -5):
+            if (x + y) % 2 == 0:
+                px.put(x, y, hx("f7a6dc", 200))
+    for x, y in ((-3, -12), (3, -13), (2, -6), (-4, -7), (0, -14)):
+        px.put(x, y, hx("ffffff"))
+    px.put(-3, -13, hx("ffffff", 230))
+    px.put(-4, -12, hx("ffffff", 200))
+    return px
+
+
 # what each season adds to the room: sprite name -> (art, its origin's room position, when it shows). The host
-# draws `when` = "always", "night" (dusk and night) or "sky" (in the window, dusk and night). Winter: a row here.
+# draws `when` = "always", "night" (dusk and night), "sky" (in the window, dusk and night), "pane" (in the window,
+# at any time of day) or "snow" (in the window, while it snows: src/room.ts's weather).
 ROOM_SEASONS = {
     "halloween": {
         "hw_moon": (lambda: room_moon(11, ramp("6a2408", "b4480c", "e2701a", "f89a38", "ffc46a", "ffe2a0")), ROOM_MOON, "sky"),
         "hw_bats": (room_bats, (ROOM_MOON[0] - 17, ROOM_MOON[1] - 5), "sky"),  # one crossing the moon
         "hw_pumpkin": (lambda: hw_pumpkin(9, 7, "mid"), ROOM_SILL, "always"),
+    },
+    "winter": {  # ---- winter ----
+        "wn_roofsnow": (wn_room_roofsnow, (ROOM_WIN[0], ROOM_WIN[1]), "pane"),
+        "wn_sill_snow": (wn_room_sill_snow, (ROOM_WIN[0], ROOM_WIN[1]), "snow"),
+        "wn_pane_frost": (wn_room_pane_frost, (ROOM_WIN[0], ROOM_WIN[1]), "pane"),
+        "wn_globe": (wn_room_globe, ROOM_SILL, "always"),
     },
 }
 
@@ -7749,6 +8280,7 @@ def room_pack(contract):
     layout = {
         "side": ROOM_SIDE, "w": ROOM_W, "h": LH, "tile": ROOM_TILE, "floor": ROOM_FLOOR,
         "window": {"x0": ROOM_WIN[0], "y0": ROOM_WIN[1], "x1": ROOM_WIN[2], "y1": ROOM_WIN[3]},
+        "mullion": ROOM_MULLION, "transom": ROOM_TRANSOM,  # ---- winter ---- the glazing bars (weather stays behind them)
         "lamp": {"x": ROOM_LAMP[0], "y": ROOM_LAMP[1]}, "sill": {"x": ROOM_SILL[0], "y": ROOM_SILL[1] - 8},
         "tank": {"x0": ROOM_SIDE, "x1": ROOM_SIDE + LW, "y0": 0, "y1": LH},
     }
@@ -8290,7 +8822,7 @@ def calm_speed(anim):
     """The speed anim plays at while calm (0: held still on its first frame), or None to leave it alone."""
     if re.fullmatch(r"Caustics|Shafts\w*|Dapple\d+|BubblerShimmer|ChestGlow|CoralGlow|PearlGlow|CaveBreath|CaveTwinkle|SgChimeSway\d+", anim):  # ---- sea glass ---- the chime hangs still
         return 0  # flicker, drifting light and pulsing glows: still
-    if re.fullmatch(r"Bubble\d+|BubblerBub\d+|School\d+(Tail)?|Kelp\w+|Seagrass|Anemones|Snow|Snowfall|LighthouseBeam", anim):
+    if re.fullmatch(r"Bubble\d+|BubblerBub\d+|School\d+(Tail)?|Kelp\w+|Seagrass|Anemones|Snow|Snowfall|LighthouseBeam|wn_Snow", anim):
         return 0.3  # things that live in the water (and the lighthouse beam): slower
     return None
 
@@ -8459,6 +8991,7 @@ c_ids = [nid() for _ in range(4)]
 world.append(node("Caustics", [image(f"Caustic{f}", caustics(f), opacity=1 if f == 0 else 0, node_id=c_ids[f], blend="screen") for f in range(4)],
                   binds=[bind(prop("daylight", default=1), 18)]))
 frame_cycle("Caustics", c_ids, [0, 1, 2, 3], 9)
+world.append(node("WnSandSnow", [image("wn_SandSnow", wn_sand_snow)], **wn_event_bind()))  # ---- winter ---- snow on the sand
 
 
 def seagrass_clump(name, x0, x1, seed, step):
@@ -8663,6 +9196,7 @@ for want, tier, span in ((28, 0, 8), (54, 0, 8), (222, 0, 8), (325, 1, 3), (342,
     best = min(cols, key=lambda x: (clutter(x), abs(x - want)))
     POLYP_ANCHORS.append((best, rock_top(best), tier))
 POLYP_ANCHORS.append((397, ARCH_TOPS[397], 2))  # on the lit back of the arch, in the sun
+world.append(node("WnSnowCaps", [image("wn_SnowCaps", lambda: wn_snow_caps(rocks, ARCH_TOPS))], **wn_event_bind()))  # ---- winter ----
 # (sand x, tier) for settled upside-down jellies: on open sand, a bell's width (~40) apart
 SETTLE = [(74, 0), (128, 0), (198, 0), (254, 1), (298, 1), (404, 2), (442, 2)]
 OPEN_SAND = [(62, 150, 0), (233, 318, 1), (380, 464, 2)]  # (x0, x1, tier): sand no scenery hides
@@ -8676,6 +9210,7 @@ add_anim("ChestGlow", 240, [keys(glow_id, 18, [(0, 0.55), (120, 1), (240, 0.55)]
 
 # ---- Halloween event ---- pumpkins and the cauldron on the sand, behind the front kelp (evHalloween)
 world.append(hw_decor_node())
+world.append(wn_decor_node())  # ---- winter ---- the snowman, on the sand behind the front kelp (evWinter)
 world.append(kelp_clump("KelpFrontL", 92, 344, [70, 96, 58], R_KELP, 2.1, 13))
 world.append(kelp_clump("KelpFrontR", 228, 348, [84, 60], R_KELP, 4.3, 15))
 world.append(kelp_clump("KelpFrontM", 324, 347, [70, 94], R_KELP, 5.2, 14))
@@ -8690,6 +9225,7 @@ for n in (SG_DECOR0, SG_DECOR0 + 1):  # ---- sea glass ---- the wind chime and t
     world.append(decor_node(n))
 # the sea turtle swims across at mid depth: in front of the scenery, behind the jellies (WorldMid)
 world.append(visitor_node("turtle", "Turtle", turtle_art, 120 * P, 170 * P))
+world.append(wn_penguin_node())  # ---- winter ---- the penguin zips through mid water, behind the jellies
 
 
 def kelp_grips():
@@ -8783,6 +9319,7 @@ for i in range(70):
     flake_tracks.append(keys(sid, 13, [(0, x * P), (FLAKE_DUR // 4, (x + sw) * P), (3 * FLAKE_DUR // 4, (x - sw) * P), (FLAKE_DUR, x * P)], "cubic"))
 world.append(node("Snowfall", flakes, **themed(3)))
 add_anim("Snowfall", FLAKE_DUR, flake_tracks)
+world.append(wn_snow_node())  # ---- winter ---- snow drifting down through the water (evWinter)
 
 btf.append(node("World", list(reversed(world)), binds=cam_bind()))
 
@@ -9034,8 +9571,9 @@ SLOT_XY = [(360, 540), (204, 420), (516, 690), (870, 600), (1020, 450), (1269, 6
 # palette groups, back to front: flush is drawn over the others. v7 adds Morph (j{s}morph): the logic writes
 # healthy = 0, morph = 1 for a morph that is neither pale nor flushed.
 PAL_NAMES = (("h", "Healthy", "healthy"), ("p", "Pale", "pale"), ("m", "Morph", "morph"), ("g", "Ghost", "ghost"),
-             *MO_PALS, ("r", "Flush", "flush"))  # ---- pair colours ---- MO_PALS: Dusk (dusk), Pearl (pearl)
-# (Ghost: the Halloween ghost-pale morph, j{s}ghost; its sprites are hw_*, see the Halloween event block)
+             ("w", "Frost", "frost"), *MO_PALS, ("r", "Flush", "flush"))  # ---- winter ---- Frost; ---- pair colours ---- MO_PALS: Dusk (dusk), Pearl (pearl)
+# (Ghost: the Halloween ghost-pale morph, j{s}ghost; its sprites are hw_*, see the Halloween event block. Frost: winter's
+# frost morph, j{s}frost, sprites wn_*, see the winter block)
 INVERT_CONV = nid()  # DataConverterRangeMapper 0..1 -> 1..0: "not a morph" (the usual tentacles, the green ring)
 bodies = [[None] * 4 for _ in range(len(SPECIES))]
 
@@ -9045,6 +9583,8 @@ def sprite_name(k, g, part):
         return f"hw_{SPECIES[k].capitalize()}{STAGES[g].capitalize()}Ghost"
     if part in MO_PARTS:  # ---- pair colours ---- mo_dusk_ / mo_pearl_ prefix (their own groups)
         return f"{MO_PARTS[part][0]}{SPECIES[k].capitalize()}{STAGES[g].capitalize()}{MO_PARTS[part][1]}"
+    if part in ("Frost", "FrostGlint"):  # ---- winter ---- event art: wn_ prefix
+        return f"wn_{SPECIES[k].capitalize()}{STAGES[g].capitalize()}{part}"
     if k == 0 and g == 3:  # the v1 moon jelly keeps its asset names
         return {"Tent": "Tent", "Healthy": "BellHealthy", "Pale": "BellPale", "Flush": "BellFlush", "Morph": "BellMorph",
                 "MorphTent": "TentMorph", "Glint": "BellGlint"}[part]
@@ -9161,6 +9701,7 @@ def stage_node(k, g):
     else:
         tents = [tent_set("Tentacles", "Tent", "h")]
     tents = hw_ghost_tents(tents)  # Halloween: they fade back under a ghost bell
+    tents = wn_frost_tents(tents)  # ---- winter ---- and a little under a frost bell
     parts = [None, None] + tents  # [glow, morph halo] + tentacles, then the palettes (back to front)
     for pk, pn, pprop in PAL_NAMES:
         # v10: 8 pulse frames for juvenile/adult bells; the pale palette keeps 4 drawn ones (PALE_OF)
@@ -9174,6 +9715,9 @@ def stage_node(k, g):
         if pk in ("du", "pe") and g == 3:  # ---- pair colours ---- an adult Dusk's first stars, Pearl's opal glints (4 sets, cycling)
             gl = "DuskStar" if pk == "du" else "PearlOpal"
             frames += [frame_image(f"{sprite_name(k, g, gl)}{f % 4}", lambda f=f % 4, pk=pk: mo_glint(k, g, f, pk), blend="screen",
+                                   **on(f"bf{f}", 1 if f == 0 else 0)) for f in range(NB)]
+        if pk == "w":  # ---- winter ---- ice crystals glint on the frost bell's rim (4 sets, cycling)
+            frames += [frame_image(f"{sprite_name(k, g, 'FrostGlint')}{f % 4}", lambda f=f % 4: wn_frost_glints(k, g, f),
                                    **on(f"bf{f}", 1 if f == 0 else 0)) for f in range(NB)]
         parts.append(node(pn, list(reversed(frames)), **on(pprop, 1 if pk == "h" else 0), **SCALED))
     # v10: a drifting caustic sheen over the bell, clipped to it (shared sprite, one timeline for every slot)
@@ -9216,7 +9760,8 @@ def stage_node(k, g):
                              rad_grad(0, 0, round(gw * 0.45), [(0, hx("fff6d0", 110)), (0.45, hx("ffd86a", 45)), (1, hx("ffd86a", 0))]),
                              blend="screen", opacity=0, binds=[bind(morph, 18)])
     parts.insert(2, hw_ghost_halo(gcy, gw, gh))  # Halloween: the ghost's pale halo, behind the tentacles
-    parts[3:3] = [mo_halo(pk, gcy, gw, gh) for pk, _, _ in MO_PALS]  # ---- pair colours ---- their halos, behind the tentacles
+    parts.insert(3, wn_frost_halo(gcy, gw, gh))  # ---- winter ---- the frost bell's cold halo
+    parts[4:4] = [mo_halo(pk, gcy, gw, gh) for pk, _, _ in MO_PALS]  # ---- pair colours ---- their halos, behind the tentacles
     parts.append(night_bell_glow(k, g, gcy, gw, gh))  # quiet nights: the bell's own soft light
     if k == CRYSTAL and g >= 2:
         sc = 1.0 if g == 3 else 0.6
@@ -10098,6 +10643,7 @@ btf.append(node("WorldGlass", list(reversed(glass)), binds=cam_bind()))
 
 btf.append(rect_shape("Vignette", water_x, water_y, water_w, water_h,
                       rad_grad(water_w / 2, water_h * 0.45, water_h * 0.62, [(0, hx("061a3a", 0)), (0.6, hx("061a3a", 0)), (1, hx("061a3a", 150))])))
+btf.append(wn_frost_node())  # ---- winter ---- frost at the glass's edges (screen-fixed)
 btf.append(poly_shape("GlassStreak1", [(30 * P, 20 * P), (44 * P, 20 * P), (14 * P, 120 * P), (6 * P, 120 * P)],
                       lin_grad(0, 20 * P, 0, 120 * P, [(0, hx("ffffff", 40)), (1, hx("ffffff", 0))])))
 btf.append(poly_shape("GlassStreak2", [(50 * P, 20 * P), (54 * P, 20 * P), (26 * P, 100 * P), (24 * P, 100 * P)],
@@ -10490,6 +11036,7 @@ doc = f'''<Rive version="1" kind="fragment">
 <DataConverterRangeMapper minInput="0" maxInput="1" minOutput="1" maxOutput="{HW_GHOST_FADE}" clampLower="true" clampUpper="true" name="hw_GhostFade" id="{HW_FADE_CONV}"/>
 {calm_converters()}
 <DataConverterRangeMapper minInput="0" maxInput="1" minOutput="1" maxOutput="{GEL_DIM}" clampLower="true" clampUpper="true" name="GelDim" id="{GEL_DIM_CONV}"/>
+<DataConverterRangeMapper minInput="0" maxInput="1" minOutput="1" maxOutput="{WN_FROST_FADE}" clampLower="true" clampUpper="true" name="wn_FrostFade" id="{WN_FADE_CONV}"/>
 {jvm}
 {vm}
 {nl.join(assets)}
@@ -10565,6 +11112,7 @@ contract = {
     "nested": {"pattern": "^j([0-6])(.+)$", "path": "j{s}/{key}", "viewModel": "Jelly", "keys": list(_jorder)},
 }
 hw_contract(contract)  # ---- Halloween event ----
+wn_contract(contract)  # ---- winter ----
 keep_contract(contract)  # ---- keepsakes ----
 sg_contract(contract, SG_DECOR0)  # ---- sea glass ----
 store_contract(contract)  # ---- put away ----
@@ -10629,6 +11177,7 @@ for k in range(len(SPECIES)):
     journal_art[f"{k}g"] = data_url(hw_ghost_portrait(k))  # ---- Halloween event ---- the journal's ghost row
     for pk, key in (("du", "d"), ("pe", "p")):  # ---- pair colours ---- the journal's dusk and pearl rows
         journal_art[f"{k}{key}"] = data_url(mo_body(k, 3, 0, pk))  # just the bell: the Colours row shows only its top
+    journal_art[f"{k}f"] = data_url(wn_frost_portrait(k))  # ---- winter ---- the journal's frost row
     sil = Px()  # a dark silhouette: the body solid (even glassy ones), strands as they are, a touch firmer
     body = species_body(k, 3, 0, "h")
     for (x, y), c in port.d.items():
@@ -10640,6 +11189,7 @@ journal_art.update(nv_portraits())  # ---- night visitors ---- the visitor log
 journal_art.update(sg_portraits())  # ---- sea glass ---- the Collection drawer
 if __import__("os").environ.get("SG_PREVIEW"):  # ---- sea glass ----
     sg_preview(ROOT / "rive" / "build" / "sg-preview.png")
+journal_art.update(wn_portraits())  # ---- winter ---- the penguin in the visitor log
 (ROOT / "src" / "journal-art.json").write_text(json.dumps(journal_art, indent=1))
 
 

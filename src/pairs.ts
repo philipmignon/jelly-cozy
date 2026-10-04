@@ -15,9 +15,10 @@
  *   trait   parent A's TRAIT_INHERIT of the time, parent B's TRAIT_INHERIT of the time, else a uniform roll.
  * The polyp still needs a free slot and rock: a full tank holds the baby back, as for one parent.
  *
- * Morph id 3 is reserved (the winter frost morph, another feature): this module never makes it.
+ * Morph id 3 is winter's frost: no recipe makes it, but a frost parent passes it on like any colour (and in winter
+ * the season's roll can give it).
  */
-import { MORPH_CHANCE, MORPH_CLASSIC, MORPH_DUSK, MORPH_GHOST, MORPH_INHERIT, MORPH_NONE, MORPH_PEARL, SEASON_MORPH_CHANCE } from "./species";
+import { MORPH_CHANCE, MORPH_CLASSIC, MORPH_DUSK, MORPH_FROST, MORPH_GHOST, MORPH_INHERIT, MORPH_NONE, MORPH_PEARL, SEASON_MORPH_CHANCE } from "./species";
 import { TRAIT_INHERIT, TRAIT_N, type Trait } from "./traits";
 
 // ---------------------------------------------------------------- tuning
@@ -135,6 +136,7 @@ export function pairOdds(a: number, b: number, season: number = MORPH_NONE): Map
 export const COLOUR_WORDS: Readonly<Record<number, string>> = {
   [MORPH_CLASSIC]: "a rare-coloured one",
   [MORPH_GHOST]: "a ghost-pale one",
+  [MORPH_FROST]: "a frost-blue one",
   [MORPH_DUSK]: "a dusk-coloured one",
   [MORPH_PEARL]: "a pearl-coloured one",
 };
@@ -143,6 +145,7 @@ export const COLOUR_NAMES: Readonly<Record<number, string>> = {
   [MORPH_NONE]: "plain",
   [MORPH_CLASSIC]: "rare",
   [MORPH_GHOST]: "ghost",
+  [MORPH_FROST]: "frost",
   [MORPH_DUSK]: "dusk",
   [MORPH_PEARL]: "pearl",
 };
@@ -159,5 +162,6 @@ export function colourHow(id: number): string {
   if (r) return `From a pair: ${COLOUR_NAMES[r[0]]} × ${COLOUR_NAMES[r[1]]}`;
   if (id === MORPH_CLASSIC) return "Born now and then, 1 in 10";
   if (id === MORPH_GHOST) return "Born around Halloween";
+  if (id === MORPH_FROST) return "Born in winter";
   return "";
 }

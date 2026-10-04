@@ -616,17 +616,18 @@ export const CRAB_SPEED = 11;
 export const NAME_MAX = 12;
 /** v7: a new jelly (a baby, or a bought polyp) is a rare colour morph this often. ?fast=1 doesn't change it. */
 export const MORPH_CHANCE = 0.1;
-/** v12 morph ids (SaveJelly.morph): 0 none, 1 classic (the v7 rare palette), 2 ghost (the Halloween palette). */
+/** v12 morph ids (SaveJelly.morph): 0 none, 1 classic (the v7 rare palette), 2 ghost (the Halloween palette), 3 frost (winter's). */
 export const MORPH_NONE = 0;
 export const MORPH_CLASSIC = 1;
 export const MORPH_GHOST = 2;
+export const MORPH_FROST = 3;
 /** v16 (pairs): the colours only a pair's baby can have, dusk (classic x classic) and pearl (classic x ghost):
- *  ./pairs.ts. Id 3 is reserved for the winter frost morph (another feature). */
+ *  ./pairs.ts. */
 export const MORPH_DUSK = 4;
 export const MORPH_PEARL = 5;
 export const MORPH_IDS = 6;
-/** The morph ids this build knows (anything else under MORPH_IDS, the reserved 3, loads as none). */
-export const MORPH_KNOWN: readonly number[] = [MORPH_NONE, MORPH_CLASSIC, MORPH_GHOST, MORPH_DUSK, MORPH_PEARL];
+/** The morph ids this build knows (anything else loads as none). */
+export const MORPH_KNOWN: readonly number[] = [MORPH_NONE, MORPH_CLASSIC, MORPH_GHOST, MORPH_FROST, MORPH_DUSK, MORPH_PEARL];
 /** v12: a morph parent's baby is the same morph this often (otherwise it rolls like a plain parent's). */
 export const MORPH_INHERIT = 0.5;
 /** v12: while a season offers a morph (SimOptions.seasonalMorph), a baby that rolled plain is that morph this often. */
@@ -830,7 +831,7 @@ export function specProps(foodN = K.foodN): string[] {
   for (let s = 0; s < MAX_SLOTS; s++) for (const key of JELLY_KEYS) out.push(`j${s}${key}`);
   // v16 (pairs): the tiny sparkle a pair shares (world), its twinkle frames one-hot
   out.push("pairX", "pairY", "pairO", "pairF0", "pairF1", "pairF2");
-  // seasonal events: each season's decor prop (evHalloween)
+  // seasonal events: each season's decor prop (evHalloween, evWinter)
   for (const season of SEASONS) out.push(season.prop);
   out.push("fxX", "fxY", "fxS", "fxO");
   for (let p = 0; p < 4; p++) for (let d = 0; d < 10; d++) out.push(`cd${p}n${d}`);
@@ -853,8 +854,8 @@ export function specProps(foodN = K.foodN): string[] {
   out.push("snailOn", "snailX", "snailY", "snailSX", "snailF0", "snailF1");
   for (const h of ["shrimp", "crab"]) out.push(`${h}On`, `${h}X`, `${h}Y`, `${h}SX`, `${h}F0`, `${h}F1`, `${h}F2`, `${h}F3`);
   out.push("camX", "camY", "camZ", "wallX", "panL", "panR");
-  // v7 visitors: turtle, seahorse ("horse"), diver; the Halloween bat
-  for (const v of ["turtle", "horse", "diver", "bat"]) out.push(`${v}On`, `${v}X`, `${v}Y`, `${v}SX`, `${v}F0`, `${v}F1`, `${v}F2`, `${v}F3`);
+  // v7 visitors: turtle, seahorse ("horse"), diver; the Halloween bat; winter's penguin
+  for (const v of ["turtle", "horse", "diver", "bat", "penguin"]) out.push(`${v}On`, `${v}X`, `${v}Y`, `${v}SX`, `${v}F0`, `${v}F1`, `${v}F2`, `${v}F3`);
   // v14 night visitors: the manta and the hermit crab like the others; the octopus by spot (octoS{i}), with octoDY and its colours
   for (const v of ["manta", "hermit"]) out.push(`${v}On`, `${v}X`, `${v}Y`, `${v}SX`, `${v}F0`, `${v}F1`, `${v}F2`, `${v}F3`);
   const octoSpots = (K as unknown as { octoSpots?: unknown[] }).octoSpots;
@@ -881,8 +882,8 @@ export const JELLY_KEYS: readonly string[] = (() => {
   for (const g of ["bf", "tf"]) for (let i = 0; i < 8; i++) out.push(`${g}${i}`);
   for (let i = 0; i < TRAIL_N; i++) out.push(`tr${i}`);
   out.push("healthy", "pale", "flush", "glow", "rot");
-  // Halloween's ghost-pale morph palette; quiet nights' bell glow
-  out.push("ghost", "nglow");
+  // Halloween's ghost-pale morph palette; quiet nights' bell glow; winter's frost morph palette
+  out.push("ghost", "nglow", "frost");
   // v16 (pairs): the two colours only a pair's baby can have (in the nursery too: a pair's baby can be born there)
   out.push("dusk", "pearl");
   // ---- lamp gels ---- how strongly the jelly fluoresces under the UV gel (the nursery bowl hangs in the same light)

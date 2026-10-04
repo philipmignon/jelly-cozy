@@ -6,7 +6,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { cleanName } from "./names";
 import { createState, loadGame, step, toSave, SAVE_VERSION, type Save } from "./sim";
-import { DECOR_N, FOOD_KINDS, HELPER_N, MAX_DOLLARS, MAX_SLOTS, SPECIES_N, THEME_N, TIER_N, maxJelliesOf } from "./species";
+import { DECOR_N, FOOD_KINDS, HELPER_N, MAX_DOLLARS, MAX_SLOTS, MORPH_KNOWN, SPECIES_N, THEME_N, TIER_N, maxJelliesOf } from "./species";
 import { REQUESTS_PER_DAY } from "./requests";
 import { KEEPSAKE_N } from "./keepsakes";
 
@@ -36,7 +36,7 @@ function problem(s: Save, now: number): string {
     if (j.fullness < 0 || j.fullness > 1 || j.affection < 0 || j.affection > 1) return "needs out of 0..1";
     if (cleanName(j.name) !== j.name) return `name ${JSON.stringify(j.name)}`;
     if (j.trait !== undefined && (!Number.isInteger(j.trait) || j.trait < 0 || j.trait > 3)) return `trait ${j.trait}`;
-    if (![0, 1, 2, 4, 5].includes(j.morph)) return `morph ${j.morph}`;
+    if (!MORPH_KNOWN.includes(j.morph)) return `morph ${j.morph}`;
     if (j.pair !== undefined && (!Number.isInteger(j.pair) || j.pair < 0 || j.pair >= MAX_SLOTS)) return `pair ${j.pair}`;
   }
   if (!Number.isInteger(s.dollars) || s.dollars < 0 || s.dollars > MAX_DOLLARS) return `dollars ${s.dollars}`;

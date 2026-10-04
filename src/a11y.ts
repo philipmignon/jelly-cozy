@@ -220,7 +220,7 @@ export interface DescribeInfo {
 }
 
 /** v16: each colour morph as said (0 none: nothing). */
-const COLOUR_SAID: Readonly<Record<number, string>> = { 1: "rare colour", 2: "ghost colour", 4: "dusk colour", 5: "pearl colour" };
+const COLOUR_SAID: Readonly<Record<number, string>> = { 1: "rare colour", 2: "ghost colour", 3: "frost colour", 4: "dusk colour", 5: "pearl colour" };
 
 /** "Muffin, juvenile moon jelly, full, happy, shy" */
 export function describeJelly(i: DescribeInfo): string {

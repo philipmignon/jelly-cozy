@@ -1526,6 +1526,12 @@
    "x1": 90,
    "y1": 57
   },
+  "penguin": {
+   "x0": -39,
+   "y0": -36,
+   "x1": 48,
+   "y1": 36
+  },
   "diver": {
    "x0": -39,
    "y0": -90,
@@ -1568,6 +1574,7 @@
   "horse": "the tail's grip on the kelp stalk",
   "diver": "middle of the belly, on the front glass",
   "bat": "where its feet grip the hood's lip (y = batHangY when hanging); flying, the same point above it",
+  "penguin": "the middle of its body (swimming side-on, frames 0-1, or upright, 2-3)",
   "octo": "the point on a reef rock's top edge it peeks over (octoSpots, octoS{i}); octoDY = how far below it",
   "manta": "the middle of its body, in far-layer x (parallax Far)",
   "hermit": "walking (frames 0-1): bottom-centre on the sand; peeking (2-3): the helmet port's centre (hermitPeek box)"
@@ -1694,6 +1701,7 @@
   "mantaSX",
   "camX",
   "daylight",
+  "evWinter",
   "dec0ov",
   "dec0lift",
   "dec0",
@@ -1793,6 +1801,14 @@
   "turtleX",
   "turtleY",
   "turtleSX",
+  "penguinF0",
+  "penguinF1",
+  "penguinF2",
+  "penguinF3",
+  "penguinOn",
+  "penguinX",
+  "penguinY",
+  "penguinSX",
   "camY",
   "camZ",
   "nightShade",
@@ -1922,6 +1938,7 @@
   "j0tf2",
   "j0tf3",
   "j0ghost",
+  "j0frost",
   "j0bf0",
   "j0bf1",
   "j0bf2",
@@ -1970,6 +1987,7 @@
   "j1tf2",
   "j1tf3",
   "j1ghost",
+  "j1frost",
   "j1bf0",
   "j1bf1",
   "j1bf2",
@@ -2018,6 +2036,7 @@
   "j2tf2",
   "j2tf3",
   "j2ghost",
+  "j2frost",
   "j2bf0",
   "j2bf1",
   "j2bf2",
@@ -2066,6 +2085,7 @@
   "j3tf2",
   "j3tf3",
   "j3ghost",
+  "j3frost",
   "j3bf0",
   "j3bf1",
   "j3bf2",
@@ -2114,6 +2134,7 @@
   "j4tf2",
   "j4tf3",
   "j4ghost",
+  "j4frost",
   "j4bf0",
   "j4bf1",
   "j4bf2",
@@ -2162,6 +2183,7 @@
   "j5tf2",
   "j5tf3",
   "j5ghost",
+  "j5frost",
   "j5bf0",
   "j5bf1",
   "j5bf2",
@@ -2210,6 +2232,7 @@
   "j6tf2",
   "j6tf3",
   "j6ghost",
+  "j6frost",
   "j6bf0",
   "j6bf1",
   "j6bf2",
@@ -2265,6 +2288,7 @@
   "nj0tf2",
   "nj0tf3",
   "nj0ghost",
+  "nj0frost",
   "nj0bf0",
   "nj0bf1",
   "nj0bf2",
@@ -2313,6 +2337,7 @@
   "nj1tf2",
   "nj1tf3",
   "nj1ghost",
+  "nj1frost",
   "nj1bf0",
   "nj1bf1",
   "nj1bf2",
@@ -2361,6 +2386,7 @@
   "nj2tf2",
   "nj2tf3",
   "nj2ghost",
+  "nj2frost",
   "nj2bf0",
   "nj2bf1",
   "nj2bf2",
@@ -2409,6 +2435,7 @@
   "nj3tf2",
   "nj3tf3",
   "nj3ghost",
+  "nj3frost",
   "nj3bf0",
   "nj3bf1",
   "nj3bf2",
@@ -2870,6 +2897,7 @@
    "tf2",
    "tf3",
    "ghost",
+   "frost",
    "bf0",
    "bf1",
    "bf2",
@@ -2949,6 +2977,19 @@
     {
      "x": 393,
      "w": 78,
+     "tier": 0
+    }
+   ]
+  },
+  "winter": {
+   "prop": "evWinter",
+   "sprites": "wn_",
+   "visitor": "penguin",
+   "morphKey": "frost",
+   "sand": [
+    {
+     "x": 399,
+     "w": 60,
      "tier": 0
     }
    ]
@@ -3138,6 +3179,12 @@
    "sprites": 236,
    "bytes": 160951
   },
+  "ev-winter": {
+   "file": "sprites/ev-winter.json",
+   "v": "0ef5382d5e",
+   "sprites": 372,
+   "bytes": 195931
+  },
   "mo-dusk": {
    "file": "sprites/mo-dusk.json",
    "v": "3895e4d0d2",
@@ -3207,7 +3254,7 @@
  },
  "room": {
   "file": "sprites/room.json",
-  "v": "13c9091cee",
-  "bytes": 54903
+  "v": "8d3a4670ee",
+  "bytes": 57833
  }
 }

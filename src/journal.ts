@@ -11,7 +11,7 @@ import { focusReturn } from "./a11y";
 import { captionDate } from "./photo";
 import type { VisitorRow } from "./visitlog";
 import { SPECIES_NAMES } from "./species";
-import { FOOD_NAMES, MORPH_CLASSIC, MORPH_DUSK, MORPH_GHOST, MORPH_PEARL, favouriteFood, morphSeen, type Species } from "./sim";
+import { FOOD_NAMES, MORPH_CLASSIC, MORPH_DUSK, MORPH_FROST, MORPH_GHOST, MORPH_PEARL, favouriteFood, morphSeen, type Species } from "./sim";
 import { prefWords } from "./temperature";
 import { colourHow } from "./pairs";
 import { traitsIn } from "./traits";
@@ -59,6 +59,11 @@ const GHOSTS = [
   "Ghost moon", "Ghost blubber", "Ghost upside-down", "Ghost comb", "Ghost fried egg", "Ghost nettle",
   "Ghost crystal", "Ghost flower hat", "Ghost lion's mane",
 ];
+/** Winter's frost morph's name per species ("Frost moon"). */
+const FROSTS = [
+  "Frost moon", "Frost blubber", "Frost upside-down", "Frost comb", "Frost fried egg", "Frost nettle",
+  "Frost crystal", "Frost flower hat", "Frost lion's mane",
+];
 /** v16: the colours only a pair's baby can have, per species. */
 const DUSKS = [
   "Dusk moon", "Dusk blubber", "Dusk upside-down", "Dusk comb", "Dusk fried egg", "Dusk nettle",
@@ -70,11 +75,13 @@ const PEARLS = [
 ];
 /**
  * v12: the morph rows, in order: id, label, names, portrait key suffix (ART[`${k}${suffix}`]), the row's class.
- * v16: the Colours section: classic, ghost, and a pair's dusk and pearl; once raised, how each comes about (colourHow).
+ * v16: the Colours section: classic, ghost, winter's frost, and a pair's dusk and pearl; once raised, how each comes
+ * about (colourHow).
  */
 const MORPH_ROWS = [
   { id: MORPH_CLASSIC, label: "Rare", names: MORPHS, art: "m", cls: "" },
   { id: MORPH_GHOST, label: "Ghost", names: GHOSTS, art: "g", cls: "ghost" },
+  { id: MORPH_FROST, label: "Frost", names: FROSTS, art: "f", cls: "frost" },
   { id: MORPH_DUSK, label: "Dusk", names: DUSKS, art: "d", cls: "dusk" },
   { id: MORPH_PEARL, label: "Pearl", names: PEARLS, art: "p", cls: "pearl" },
 ] as const;
@@ -129,6 +136,7 @@ const CSS = `
 .jt-book-morph b { font-weight: normal; color: #8e5632; }
 .jt-book-morph.found b { color: #8e5632; }
 .jt-book-morph.ghost.found { border-color: #8f86c8; color: #3c3466; background: #ece8ff; }
+.jt-book-morph.frost.found { border-color: #6aa8cc; color: #1e4a66; background: #e4f6ff; }
 .jt-book-morph.dusk.found { border-color: #a65aa0; color: #4e1f52; background: #f6e2f2; }
 .jt-book-morph.pearl.found { border-color: #a48ca4; color: #4e3a4c; background: #e8e0ea; }
 .jt-book-morph img { image-rendering: pixelated; }
@@ -317,7 +325,7 @@ export function createJournal(pages: () => JournalPage[], keepsakes?: () => Keep
         (li.querySelector(".jt-vlog-seen") as HTMLElement).textContent = met ? `Seen ${r.n === 1 ? "once" : `${r.n} times`}` : "Not met yet";
         (li.querySelector(".jt-vlog-when") as HTMLElement).textContent = met && r.first !== null
           ? `First seen ${seenDate(r.first)}`
-          : r.night ? "Comes out at night" : r.season === "halloween" ? "Comes at Halloween" : "Drops by any time";
+          : r.night ? "Comes out at night" : r.season === "halloween" ? "Comes at Halloween" : r.season === "winter" ? "Comes in winter" : "Drops by any time";
         li.dataset.kind = r.kind;
         return li;
       }),

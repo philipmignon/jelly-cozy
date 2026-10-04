@@ -4,12 +4,13 @@
  *
  * A season is a table entry plus art. Its art lives in tools/gen.py under the season's sprite prefix
  * (Halloween: `hw_*`) and shows on one view-model prop (`prop`, 0/1) that the sim writes; seasonal visitors
- * are tagged in visitors.ts (VISITOR_SEASON). Adding winter later: one more row here, its art, its visitor.
+ * are tagged in visitors.ts (VISITOR_SEASON). Winter (`wn_*`, evWinter) is the second row: the penguin, the frost
+ * morph and snow through the water.
  *
- * Testing: `?season=halloween` forces an event on whatever the date, `?season=none` forces it off.
+ * Testing: `?season=halloween` or `?season=winter` forces an event on whatever the date, `?season=none` forces it off.
  */
 
-export type SeasonId = "halloween";
+export type SeasonId = "halloween" | "winter";
 
 export interface Season {
   id: SeasonId;
@@ -19,7 +20,7 @@ export interface Season {
   to: readonly [number, number];
   /** the view-model prop that shows its decor (contract props) */
   prop: string;
-  /** the morph id a jelly born during it may get (2 ghost), or null */
+  /** the morph id a jelly born during it may get (2 ghost, 3 frost), or null */
   morph: number | null;
   /** its sprite prefix in gen.py (for the lead's on-demand asset groups) */
   sprites: string;
@@ -27,10 +28,16 @@ export interface Season {
 
 export const SEASONS: readonly Season[] = [
   { id: "halloween", name: "Halloween", from: [10, 1], to: [11, 2], prop: "evHalloween", morph: 2, sprites: "hw_" },
+  // the northern hemisphere's winter (meteorological: December to February), whatever the player's hemisphere: the
+  // game's seasons follow the calendar's holidays rather than the weather outside. `to` before `from` wraps over the
+  // new year; [2, 29] takes in the leap day, and in other years 1 March (3 * 100 + 1) is past it either way.
+  { id: "winter", name: "Winter", from: [12, 1], to: [2, 29], prop: "evWinter", morph: 3, sprites: "wn_" },
 ];
 
 /** The morph id of the ghost-pale Halloween morph (the morph model: 0 none, 1 classic rare colour, 2 ghost). */
 export const GHOST_MORPH = 2;
+/** The morph id of winter's frosted morph (pale ice-blue bell, crystalline rim). */
+export const FROST_MORPH = 3;
 
 /** localStorage key for the "Seasonal decor" setting ("0" = off; anything else, or nothing, = on). */
 export const SEASON_DECOR_KEY = "jellytank:seasonDecor";
@@ -83,7 +90,7 @@ export function activeSeason(now: number | Date, search = "", decorOn = true): S
 
 /**
  * The morph a jelly born at `now` may roll instead of the classic one: GHOST_MORPH (2) during Halloween,
- * else null. `search` honours the `?season=` override, like activeSeason. The birth logic decides the odds.
+ * FROST_MORPH (3) in winter, else null. `search` honours the `?season=` override, like activeSeason. The birth logic decides the odds.
  */
 export function seasonalMorph(now: number | Date, search = ""): number | null {
   const forced = seasonOverride(search);

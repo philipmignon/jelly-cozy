@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { GROUPS, createSpriteGroups, eventGroup, fromBase64, groupUrl, groupsFor, jellyGroups, morphGroup, speciesGroup, type ImageAssetLike } from "./spritegroups";
 import { SEASONS, activeSeason } from "./season";
-import { SPECIES_NAMES } from "./species";
+import { MORPH_KNOWN, SPECIES_NAMES } from "./species";
 
 const day = (m: number, d: number) => new Date(2026, m - 1, d, 12);
 
@@ -30,9 +30,19 @@ describe("morphs", () => {
     expect(jellyGroups({ k: 1, morph: 2 })).toEqual(["sp-blubber", "ev-halloween"]);
     expect(jellyGroups({ k: 1, morph: 1 })).toEqual(["sp-blubber"]);
   });
+  it("v16: every morph id past classic has a group in this build: ghost, frost, dusk, pearl", () => {
+    const want: Record<number, string> = { 2: "ev-halloween", 3: "ev-winter", 4: "mo-dusk", 5: "mo-pearl" };
+    for (const id of MORPH_KNOWN) {
+      if (id < 2) continue;
+      expect(morphGroup(id), `morph ${id}`).toBe(want[id]);
+      expect(GROUPS[morphGroup(id)!], `morph ${id}`).toBeDefined();
+      expect(jellyGroups({ k: 6, morph: id })).toEqual(["sp-crystal", want[id]]);
+    }
+    expect(Object.keys(want).map(Number)).toEqual(MORPH_KNOWN.filter((id) => id >= 2));
+  });
   it("a ghost jelly brings its art after the season, or with decor off, without the season", () => {
     const tank = [{ k: 0, morph: 0 }, { k: 3, morph: 2 }];
-    expect(groupsFor(tank, activeSeason(day(12, 1))?.id ?? null)).toEqual(["sp-moon", "sp-comb", "ev-halloween"]);
+    expect(groupsFor(tank, activeSeason(day(11, 20))?.id ?? null)).toEqual(["sp-moon", "sp-comb", "ev-halloween"]);
     expect(groupsFor(tank, activeSeason(day(10, 20), "", false)?.id ?? null)).toEqual(["sp-moon", "sp-comb", "ev-halloween"]);
     expect(groupsFor(tank, activeSeason(day(10, 20), "?season=none")?.id ?? null)).toEqual(["sp-moon", "sp-comb", "ev-halloween"]);
     expect(groupsFor([{ k: 0, morph: 1 }], null)).toEqual(["sp-moon"]);

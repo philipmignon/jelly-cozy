@@ -9,6 +9,10 @@
  * Seasonal visitors (VISITOR_SEASON) only come while their event is on: the Halloween bat flutters in,
  * hangs upside down from the hood's front lip (origin = its feet's grip, y = contract.batHangY), stretches
  * now and then, and flutters off. Frames: 0 hanging wrapped, 1 hanging stretching, 2-3 flying.
+ * Winter's penguin zips in from one side, stops to look around (upright, bobbing, a flipper flap now and then),
+ * darts to another spot or two, and zips off the other way. Greeted, it flaps happily, then zips off.
+ * Origin = the middle of its body. Frames: 0 gliding, 1 a flipper stroke (both side-on, swimming), 2 upright,
+ * 3 upright with its flippers out (a flap). Reduced motion: slower dashes, and a greeting holds the flap.
  *
  * v14 night visitors (VISITOR_NIGHT) only come while night is showing, now and then in place of a day visitor
  * (NIGHT_VISIT_CHANCE), and leave when the light comes on:
@@ -26,7 +30,7 @@
 import type { SeasonId } from "./season";
 import { K, P, clamp, num } from "./species";
 
-export const VISITORS = ["turtle", "seahorse", "diver", "bat", "octopus", "manta", "hermit"] as const;
+export const VISITORS = ["turtle", "seahorse", "diver", "bat", "octopus", "manta", "hermit", "penguin"] as const;
 export type VisitorKind = (typeof VISITORS)[number];
 export const TURTLE = 0;
 export const SEAHORSE = 1;
@@ -35,14 +39,15 @@ export const BAT = 3;
 export const OCTOPUS = 4;
 export const MANTA = 5;
 export const HERMIT = 6;
+export const PENGUIN = 7;
 /** The view-model prefix for each visitor: `{prefix}On X Y SX F0..F3` (v14: see writeVisitors in sim.ts for the octopus). */
-export const VISITOR_PROP = ["turtle", "horse", "diver", "bat", "octo", "manta", "hermit"] as const;
+export const VISITOR_PROP = ["turtle", "horse", "diver", "bat", "octo", "manta", "hermit", "penguin"] as const;
 /** The event a visitor belongs to (it only comes while that is on); null = all year. */
-export const VISITOR_SEASON: readonly (SeasonId | null)[] = [null, null, null, "halloween", null, null, null];
+export const VISITOR_SEASON: readonly (SeasonId | null)[] = [null, null, null, "halloween", null, null, null, "winter"];
 /** v14: night visitors only come while night is showing. */
-export const VISITOR_NIGHT: readonly boolean[] = [false, false, false, false, true, true, true];
+export const VISITOR_NIGHT: readonly boolean[] = [false, false, false, false, true, true, true, false];
 /** v14: what to call each visitor out loud and in the visitor log. */
-export const VISITOR_NAMES = ["sea turtle", "seahorse", "mini diver", "bat", "octopus", "manta ray", "hermit crab"] as const;
+export const VISITOR_NAMES = ["sea turtle", "seahorse", "mini diver", "bat", "octopus", "manta ray", "hermit crab", "penguin"] as const;
 /** v14: at night, the chance that the next visit is a night visitor's. */
 export const NIGHT_VISIT_CHANCE = 0.35;
 /** v14: is visitor `k` one of the night ones? */
@@ -62,6 +67,15 @@ export const BAT_FLAP_HAPPY = 9;
 /** A stretch lasts this long, every BAT_STRETCH_GAP..+3 s while it hangs. */
 export const BAT_STRETCH = 0.9;
 export const BAT_STRETCH_GAP = 5;
+
+/** The penguin: a dash's top speed (px/s; slower with reduced motion), how long it looks around between dashes. */
+export const PENGUIN_ZIP = 900;
+export const PENGUIN_ZIP_CALM = 360;
+export const PENGUIN_LOOK = 5;
+export const PENGUIN_LOOK_SPREAD = 3;
+/** Flipper strokes per second while it dashes, and its happy flaps when greeted. */
+export const PENGUIN_STROKE = 5;
+export const PENGUIN_FLAP_HAPPY = 7;
 
 /** Seconds between visits: 3-6 minutes. */
 export const VISIT_GAP_MIN = 180;
@@ -93,6 +107,7 @@ const BOX_FALLBACK: Box[] = [
   { x0: -45, y0: -63, x1: 72, y1: 9 },
   { x0: -102, y0: -69, x1: 48, y1: 69 },
   { x0: -27, y0: -39, x1: 39, y1: 6 },
+  { x0: -36, y0: -33, x1: 39, y1: 33 },
 ];
 /** Each visitor's art extent around its origin at sx +1 (contract.visitors). */
 export const VISITOR_BOX: readonly Box[] = VISITOR_PROP.map((key, i) => {
@@ -374,6 +389,7 @@ export function planVisit(kind: number, st: Stretch, tier: number, rand: () => n
     v.y = v.fy;
     return v;
   }
+  if (kind === PENGUIN) return planPenguin(v, st, rand);
   // diver: on the glass in view, mid water
   const r = [xRange(DIVER, 1, st, 4 * P), xRange(DIVER, -1, st, 4 * P)];
   if (!r[0] || !r[1]) return null;
@@ -444,6 +460,8 @@ export function stepVisit(v: Visit, dt: number, rand: () => number, aim: { x: nu
     }
   } else if (v.kind === BAT) {
     stepBat(v, dt, rand, leaving, lp);
+  } else if (v.kind === PENGUIN) {
+    stepPenguin(v, dt, rand, leaving, lp, ctx.reduced === true);
   } else {
     v.phase = (v.phase + dt / (v.happy ? 0.5 : 1.0)) % 1;
     v.f = Math.floor(v.phase * 4) % 4;
@@ -508,6 +526,105 @@ function stepBat(v: Visit, dt: number, rand: () => number, leaving: boolean, lp:
   v.x = clamp(v.ylo + (v.vx - v.ylo) * e, v.lo, v.hi);
   v.y = Math.max(BAT_HANG_Y, v.yhi + (v.baseY - v.yhi) * Math.sin((e * Math.PI) / 2) + 8 * Math.sin(v.phase * 2 * Math.PI) * e);
   v.sx = v.vx >= v.ylo ? 1 : -1;
+}
+
+// ---------------------------------------------------------------- winter: the penguin
+
+/**
+ * The penguin's plan. (fx, fy) -> (gx, gy) is the dash it's on (from t0, `dur` long), (lo, hi) x and (ylo, yhi) y
+ * the water it keeps to, nextMove when it next dashes; `vx` is where it zips off to (an x past the far edge of its
+ * stretch, so it leaves the other way from where it came) and (c1, c2) where it started to leave from.
+ */
+function planPenguin(v: Visit, st: Stretch, rand: () => number): Visit | null {
+  const r = [xRange(PENGUIN, 1, st, 4 * P), xRange(PENGUIN, -1, st, 4 * P)];
+  if (!r[0] || !r[1]) return null;
+  v.lo = Math.max(r[0][0], r[1][0]);
+  v.hi = Math.min(r[0][1], r[1][1]);
+  if (v.hi < v.lo) return null;
+  // mid water, clear of the hood and the sand
+  const [ylo, yhi] = yRange(PENGUIN, 800);
+  v.ylo = ylo + 30;
+  v.yhi = Math.max(v.ylo, Math.min(yhi, 720));
+  // in from one side, past the edge, to a spot a third of the way in
+  const from: 1 | -1 = rand() < 0.5 ? -1 : 1;
+  v.sx = from < 0 ? 1 : -1;
+  const span = v.hi - v.lo;
+  v.fx = from < 0 ? v.lo - 60 * P : v.hi + 60 * P;
+  v.gx = from < 0 ? v.lo + span * (0.2 + rand() * 0.25) : v.hi - span * (0.2 + rand() * 0.25);
+  v.fy = v.ylo + rand() * (v.yhi - v.ylo);
+  v.gy = v.ylo + rand() * (v.yhi - v.ylo);
+  v.t0 = 0;
+  v.dur = 0; // set on the first step (its length depends on reduced motion)
+  v.nextMove = Infinity;
+  v.vx = from < 0 ? v.hi + 80 * P : v.lo - 80 * P; // and out the other side
+  v.c1 = Number.NaN; // where it starts to leave from (set then)
+  v.x = v.fx;
+  v.y = v.fy;
+  return v;
+}
+
+/** How long a dash of `d` px takes: quick and eased (a penguin's burst), slower with reduced motion. */
+const dashTime = (d: number, reduced: boolean) => Math.max(0.6, Math.abs(d) / (reduced ? PENGUIN_ZIP_CALM : PENGUIN_ZIP) * 1.8);
+
+function stepPenguin(v: Visit, dt: number, rand: () => number, leaving: boolean, lp: number, reduced: boolean): void {
+  const a = v.age;
+  if (v.dur === 0) v.dur = dashTime(Math.hypot(v.gx - v.fx, v.gy - v.fy), reduced);
+  const stroke = () => {
+    v.phase = (v.phase + dt * PENGUIN_STROKE) % 1;
+    v.f = v.phase < 0.5 ? 1 : 0;
+  };
+  if (leaving) {
+    // zips off from where it was when it started to leave (c1, c2), out past the far edge, fading as it goes
+    if (Number.isNaN(v.c1)) {
+      v.c1 = v.x;
+      v.c2 = v.y;
+      v.sx = v.vx >= v.x ? 1 : -1;
+    }
+    stroke();
+    const e = smooth(lp) * (reduced ? 0.6 : 1);
+    v.x = v.c1 + (v.vx - v.c1) * e;
+    v.y = v.c2 + (Math.max(v.ylo, v.c2 - 50 * P) - v.c2) * Math.sin((e * Math.PI) / 2);
+    return;
+  }
+  const r = a - v.t0;
+  if (r < v.dur) {
+    // dashing: strokes for the first half, then a glide as it slows; a little porpoising arc on the way
+    const u = r / v.dur;
+    const p = 1 - (1 - u) ** 3;
+    v.x = v.fx + (v.gx - v.fx) * p;
+    v.y = v.fy + (v.gy - v.fy) * p - Math.sin(Math.PI * p) * Math.min(60, Math.abs(v.gx - v.fx) * 0.12);
+    v.sx = v.gx >= v.fx ? 1 : -1;
+    if (u < 0.55) stroke();
+    else v.f = 0;
+    return;
+  }
+  if (v.nextMove === Infinity) v.nextMove = a + PENGUIN_LOOK + rand() * PENGUIN_LOOK_SPREAD;
+  // looking around: upright and bobbing, a flipper flap every few seconds (greeted: flapping away until it goes)
+  v.x = v.gx;
+  v.y = v.gy + 4 * Math.sin((a * 2 * Math.PI) / 2.2) * (reduced ? 0.5 : 1);
+  if (v.happy) {
+    if (reduced) v.f = 3;
+    else {
+      v.phase = (v.phase + dt * PENGUIN_FLAP_HAPPY) % 1;
+      v.f = v.phase < 0.5 ? 3 : 2;
+    }
+    return;
+  }
+  v.f = !reduced && a % 3.1 < 0.35 ? 3 : 2;
+  if (a >= v.nextMove && a + 4 < v.leaveAt) {
+    // a dart to another spot nearby (turning to face that way)
+    v.fx = v.x;
+    v.fy = v.y;
+    const reach = (v.hi - v.lo) * (0.25 + rand() * 0.35);
+    let gx = v.x + (rand() < 0.5 ? -1 : 1) * reach;
+    if (gx < v.lo || gx > v.hi) gx = 2 * v.x - gx;
+    v.gx = clamp(gx, v.lo, v.hi);
+    v.gy = v.ylo + rand() * (v.yhi - v.ylo);
+    v.t0 = a;
+    v.dur = dashTime(Math.hypot(v.gx - v.fx, v.gy - v.fy), reduced);
+    v.nextMove = Infinity;
+    v.phase = 0;
+  }
 }
 
 /** Is world (x, y) on the visitor (its box, a finger's width more)? Only while it can be seen. */

@@ -1,13 +1,13 @@
 /**
  * The game's clock rules in several time zones, across midnight and daylight-saving changes: night 19:00-07:00,
- * Halloween from 1 Oct to 2 Nov, the daily requests, the pearl and keepsake days turning over at local midnight
+ * Halloween from 1 Oct to 2 Nov, winter from 1 Dec to 28/29 Feb, the daily requests, the pearl and keepsake days turning over at local midnight
  * (once), and time away measured in real time when a DST change falls inside it.
  *
  * Each zone runs with process.env.TZ set for its tests (Node applies a TZ change at once; vitest runs each test file
  * in a process of its own, so no other file sees it). Dates are built inside the tests, after the zone is set.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { seasonAt, seasonalMorph, activeSeason, GHOST_MORPH } from "./season";
+import { seasonAt, seasonalMorph, activeSeason, FROST_MORPH, GHOST_MORPH } from "./season";
 import { catchUp, createState, dayKey, isNightByClock, loadGame, nextLightChange, pearlCentre, requests, step, tap, type SimEvent, type State } from "./sim";
 
 const SYSTEM_TZ = process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -131,6 +131,31 @@ for (const zone of Object.keys(DST)) {
       }
       // Nov 1 is the US clocks' change day: still in season the whole of it
       for (let t = at(2026, 11, 1); t < at(2026, 11, 3); t += 15 * MIN) expect(seasonAt(t)?.id).toBe("halloween");
+    });
+
+    it("winter: off at Nov 30 23:59, on from Dec 1 00:00, over the new year, to Feb 28 (29 in a leap year) 23:59 (local)", () => {
+      for (const y of [2026, 2027, 2028]) {
+        expect(seasonAt(at(y, 11, 30, 23, 59, 59) + 999)).toBeNull();
+        expect(seasonAt(at(y, 12, 1))?.id).toBe("winter");
+        expect(seasonalMorph(at(y, 12, 1))).toBe(FROST_MORPH);
+        // Dec 31 to Jan 1: still winter on both sides of midnight
+        expect(seasonAt(at(y, 12, 31, 23, 59, 59) + 999)?.id).toBe("winter");
+        expect(seasonAt(at(y + 1, 1, 1))?.id).toBe("winter");
+        // the end of February: the 28th's last moment, then the 29th in a leap year (2028), else March 1st
+        const leap = (y + 1) % 4 === 0;
+        expect(seasonAt(at(y + 1, 2, 28, 23, 59, 59) + 999)?.id).toBe("winter");
+        if (leap) expect(seasonAt(at(y + 1, 2, 29))?.id).toBe("winter");
+        if (leap) expect(seasonAt(at(y + 1, 2, 29, 23, 59, 59) + 999)?.id).toBe("winter");
+        expect(seasonAt(at(y + 1, 3, 1))).toBeNull();
+        expect(seasonalMorph(at(y + 1, 3, 1))).toBeNull();
+        expect(activeSeason(at(y, 12, 1), "", false)).toBeNull();
+        expect(activeSeason(at(y, 7, 1), "?season=winter")?.id).toBe("winter");
+      }
+      // every quarter hour from Feb 28 to Mar 2, in a leap year and the year before: winter until the month turns
+      for (const y of [2027, 2028]) {
+        const end = at(y, 3, 1);
+        for (let t = at(y, 2, 28); t < at(y, 3, 2); t += 15 * MIN) expect(seasonAt(t)?.id ?? null).toBe(t < end ? "winter" : null);
+      }
     });
 
     it("the daily requests turn over once at local midnight, and the pearl comes back once, also on DST nights", () => {

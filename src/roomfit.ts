@@ -5,6 +5,7 @@
  */
 import contract from "./contract.json";
 import type { SeasonId } from "./season";
+import type { Weather } from "./weather";
 
 /** What the room needs from the tank. */
 export interface RoomHost {
@@ -18,18 +19,24 @@ export interface RoomHost {
   gel?(): number;
   /** flip the tank's light switch (the room's lamp is a second one) */
   toggle(): void;
+  /** the weather outside the window (src/weather.ts): rain, snow or none */
+  weather(): Weather | null;
 }
 
 /** What room.ts hands back. */
 export interface RoomView {
   /** lay out for the window's size and show (or hide) */
   show(on: boolean): void;
-  /** called every frame: redraws only when the switch or the season changed */
+  /** called every frame: redraws only when the switch, the season or the weather changed */
   sync(): void;
+  /** the room is on screen now */
+  readonly shown: boolean;
 }
 
 export interface Room {
   sync(): void;
+  /** the room is on screen (a wide window, its art in) */
+  shown(): boolean;
 }
 
 /** Shorter side of the viewport (css px) below which it's a phone, whatever its orientation. */
@@ -48,7 +55,7 @@ export function roomWanted(vw: number, vh: number, left: number, right: number, 
 /** Watch the window's size; load the room the first time it fits, show or hide it as the window changes. */
 export function attachRoom(host: RoomHost): Room {
   const info = (contract as unknown as { room?: { file: string; v: string } }).room;
-  if (!info) return { sync: () => {} }; // a build without the room
+  if (!info) return { sync: () => {}, shown: () => false }; // a build without the room
   const url = new URL(`${info.file}?v=${info.v}`, document.baseURI).href;
   let view: RoomView | null = null;
   let loading = false;
@@ -79,5 +86,5 @@ export function attachRoom(host: RoomHost): Room {
     queued = true;
   });
   check();
-  return { sync: () => view?.sync() };
+  return { sync: () => view?.sync(), shown: () => view?.shown ?? false };
 }

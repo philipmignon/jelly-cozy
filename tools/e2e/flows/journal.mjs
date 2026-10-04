@@ -27,10 +27,11 @@ export const flow = {
     await page.click(".jt-book .next");
     const second = await page.evaluate(() => document.querySelector(".jt-book-name").textContent);
     t.check("journal pages turn (blubber owned)", /blubber/i.test(second), second);
-    // v12: the morph rows: classic and ghost, "???" until raised
+    // v12: the morph rows: classic and ghost, "???" until raised; v16: the Colours section adds a pair's dusk and pearl (ids 4, 5)
     const rows = await page.evaluate(() => [...document.querySelectorAll(".jt-book-morph")].map((r) => r.textContent.replace(/\s+/g, " ").trim()));
     const seen = (await t.st()).journal[1].morphSeen;
-    t.check("journal lists both morphs, unknown as ???", rows.length === 2 && rows.every((r, i) => /\?\?\?/.test(r) === !(seen & (1 << i))), JSON.stringify(rows));
+    const ids = [1, 2, 4, 5];
+    t.check("journal lists the four colours, unknown as ???", rows.length === 4 && rows.every((r, i) => /\?\?\?/.test(r) === !(seen & (1 << (ids[i] - 1)))), JSON.stringify(rows));
     await page.click(".jt-book .prev");
     const ghost = await page.evaluate(() => { const r = document.querySelector(".jt-book-morph.ghost"); return { found: r.classList.contains("found"), text: r.textContent }; });
     t.check("a raised ghost morph shows in the journal", ghost.found && /ghost moon/i.test(ghost.text), JSON.stringify(ghost));

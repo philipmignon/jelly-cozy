@@ -14,6 +14,7 @@ import { createCollectionPage } from "./collection";
 import { captionDate, capture, flash, photoFilename, savePng, toPng } from "./photo";
 import { clearVisit, createBackupPanel, createSharePanel, pendingVisit, showNote, showVisitBar } from "./share";
 import { createOverlay, type JellyCardInfo } from "./overlay";
+import { pairBabyNote } from "./pairs";
 import { createPacer, readBatterySaver, wakes, writeBatterySaver, type Pacer } from "./pace";
 import { registerOffline, updateChip } from "./offline";
 import { activeSeason, readSeasonDecor, seasonalMorph, writeSeasonDecor } from "./season";
@@ -76,7 +77,9 @@ import {
   renameJelly,
   requests,
   MORPH_CLASSIC,
+  MORPH_DUSK,
   MORPH_GHOST,
+  MORPH_PEARL,
   setReducedMotion,
   TRAIT_PHRASES,
   setTab,
@@ -202,6 +205,7 @@ async function main() {
     requests: !READ_ONLY,
     keepsakes: !READ_ONLY, // v13: milestones only count (and keepsakes only unlock) in the player's own tank
     finds: !READ_ONLY, // v16: sea glass and shells only turn up in the player's own tank
+    pairs: !READ_ONLY, // v16: jellies pair up (and have babies together) only in the player's own tank
     ...(READ_ONLY ? {} : { seasonalMorph: (now: number) => seasonalMorph(now, location.search) }),
   });
   const audio = createTankAudio();
@@ -363,10 +367,11 @@ async function main() {
   };
   const cardInfo = (slot: number): JellyCardInfo | null => {
     const i = jellyInfo(state, slot);
-    const morph = i?.morph === MORPH_CLASSIC ? " · rare colour" : i?.morph === MORPH_GHOST ? " · ghost colour" : "";
+    const colour: Record<number, string> = { [MORPH_CLASSIC]: " · rare colour", [MORPH_GHOST]: " · ghost colour", [MORPH_DUSK]: " · dusk colour", [MORPH_PEARL]: " · pearl colour" };
+    const morph = (i && colour[i.morph]) ?? "";
     // ---- temperature ---- `temp`: what water it likes, and how it finds this
     const temp = i ? tempPhrase(i.k, i.temp) : null;
-    return i && { name: i.name, species: `${SPECIES[i.k] ?? ""}${morph}`, stage: STAGES[i.g] ?? "", ageDays: i.ageDays, fullness: i.fullness, mood: i.mood, trait: TRAIT_PHRASES[i.trait], ...(temp ? { temp } : {}), rehome: rehomeInfo(state, slot) };
+    return i && { name: i.name, species: `${SPECIES[i.k] ?? ""}${morph}`, stage: STAGES[i.g] ?? "", ageDays: i.ageDays, fullness: i.fullness, mood: i.mood, trait: TRAIT_PHRASES[i.trait], ...(temp ? { temp } : {}), ...(i.mate ? { pair: `Paired with ${i.mate}` } : {}), rehome: rehomeInfo(state, slot) };
   };
 
   // ---------------------------------------------------------------- buttons in the .riv
@@ -874,6 +879,24 @@ async function main() {
         case "baby":
           audio.play("grow");
           buzz([30, 50, 30]);
+          persist(state);
+          // v16: a pair's baby: a gentle note naming both parents (and its colour, when it has one)
+          if (e.type === "baby" && e.mate !== undefined && e.parent !== undefined && e.slot !== undefined) {
+            const a = state.slots[e.parent];
+            const b = state.slots[e.mate];
+            const baby = state.slots[e.slot];
+            if (a && b && baby) showNote(pairBabyNote(a.name, b.name, baby.morph), 9000);
+          }
+          break;
+        case "paired":
+          // v16: two jellies paired up: a soft chime and their names, over the sparkle between them
+          audio.play("pet");
+          if (e.slot !== undefined && e.mate !== undefined && e.x !== undefined && e.y !== undefined) {
+            const a = state.slots[e.slot];
+            const b = state.slots[e.mate];
+            const at = wclient(e.x, e.y - 40);
+            if (a && b) overlay.nameTag(`${a.name} + ${b.name}`, at.x, at.y);
+          }
           persist(state);
           break;
         case "dug":

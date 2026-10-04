@@ -11,8 +11,9 @@ import { focusReturn } from "./a11y";
 import { captionDate } from "./photo";
 import type { VisitorRow } from "./visitlog";
 import { SPECIES_NAMES } from "./species";
-import { FOOD_NAMES, MORPH_CLASSIC, MORPH_GHOST, favouriteFood, morphSeen, type Species } from "./sim";
+import { FOOD_NAMES, MORPH_CLASSIC, MORPH_DUSK, MORPH_GHOST, MORPH_PEARL, favouriteFood, morphSeen, type Species } from "./sim";
 import { prefWords } from "./temperature";
+import { colourHow } from "./pairs";
 import { traitsIn } from "./traits";
 
 export interface JournalPage {
@@ -58,11 +59,27 @@ const GHOSTS = [
   "Ghost moon", "Ghost blubber", "Ghost upside-down", "Ghost comb", "Ghost fried egg", "Ghost nettle",
   "Ghost crystal", "Ghost flower hat", "Ghost lion's mane",
 ];
-/** v12: the morph rows, in order: id, label, names, portrait key suffix (ART[`${k}${suffix}`]). */
+/** v16: the colours only a pair's baby can have, per species. */
+const DUSKS = [
+  "Dusk moon", "Dusk blubber", "Dusk upside-down", "Dusk comb", "Dusk fried egg", "Dusk nettle",
+  "Dusk crystal", "Dusk flower hat", "Dusk lion's mane",
+];
+const PEARLS = [
+  "Pearl moon", "Pearl blubber", "Pearl upside-down", "Pearl comb", "Pearl fried egg", "Pearl nettle",
+  "Pearl crystal", "Pearl flower hat", "Pearl lion's mane",
+];
+/**
+ * v12: the morph rows, in order: id, label, names, portrait key suffix (ART[`${k}${suffix}`]), the row's class.
+ * v16: the Colours section: classic, ghost, and a pair's dusk and pearl; once raised, how each comes about (colourHow).
+ */
 const MORPH_ROWS = [
-  { id: MORPH_CLASSIC, label: "Rare colour", names: MORPHS, art: "m" },
-  { id: MORPH_GHOST, label: "Ghost colour", names: GHOSTS, art: "g" },
+  { id: MORPH_CLASSIC, label: "Rare", names: MORPHS, art: "m", cls: "" },
+  { id: MORPH_GHOST, label: "Ghost", names: GHOSTS, art: "g", cls: "ghost" },
+  { id: MORPH_DUSK, label: "Dusk", names: DUSKS, art: "d", cls: "dusk" },
+  { id: MORPH_PEARL, label: "Pearl", names: PEARLS, art: "p", cls: "pearl" },
 ] as const;
+/** v16: what an unfound pair colour's row says (how is a secret until one is raised) */
+const PAIR_HINT = "Only a pair's baby";
 
 // the portraits are generated; until they exist the book shows a placeholder dot
 const ART: Record<string, string> = (() => {
@@ -101,11 +118,19 @@ const CSS = `
 .jt-book-stats { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; margin: 0; color: #693c24; text-transform: uppercase; font-size: 11px; }
 .jt-book-stats dd { margin: 0; color: #2b1712; }
 .jt-book-morphs { display: grid; gap: 4px; }
+.jt-book-morphs h4 { margin: 0; font: 11px/1.2 ${FONT}; text-transform: uppercase; color: #693c24; }
+.jt-book-morph > span { display: grid; gap: 1px; min-width: 0; }
+.jt-book-swatch { flex: none; display: flex; justify-content: center; align-items: flex-start; width: 64px; height: 34px; overflow: hidden; }
+.jt-book-swatch:empty, .jt-book-swatch:has(img[hidden]) { width: 0; }
+.jt-book-morph em { font-style: normal; font-size: 10px; text-transform: none; color: #8e5632; }
+.jt-book-morph em:empty { display: none; }
 .jt-book-morphs[hidden] { display: none; }
 .jt-book-morph { display: flex; align-items: center; gap: 8px; min-height: 24px; padding: 4px 8px; border: 2px dashed #d9bf94; border-radius: 6px; font-size: 11px; text-transform: uppercase; color: #8e5632; }
 .jt-book-morph b { font-weight: normal; color: #8e5632; }
 .jt-book-morph.found b { color: #8e5632; }
 .jt-book-morph.ghost.found { border-color: #8f86c8; color: #3c3466; background: #ece8ff; }
+.jt-book-morph.dusk.found { border-color: #a65aa0; color: #4e1f52; background: #f6e2f2; }
+.jt-book-morph.pearl.found { border-color: #a48ca4; color: #4e3a4c; background: #e8e0ea; }
 .jt-book-morph img { image-rendering: pixelated; }
 .jt-book-morph.found { border-style: solid; border-color: #e09a28; color: #6b3a12; background: #fff2c8; }
 .jt-book-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -216,7 +241,7 @@ export function createJournal(pages: () => JournalPage[], keepsakes?: () => Keep
     <h3 class="jt-book-name"></h3>
     <p class="jt-book-fact"></p>
     <dl class="jt-book-stats"></dl>
-    <div class="jt-book-morphs">${MORPH_ROWS.map((m) => `<div class="jt-book-morph${m.id === MORPH_GHOST ? " ghost" : ""}"><img alt=""><span><b>${m.label}:</b> <i></i></span></div>`).join("")}</div>
+    <div class="jt-book-morphs"><h4>Colours</h4>${MORPH_ROWS.map((m) => `<div class="jt-book-morph${m.cls ? ` ${m.cls}` : ""}" data-morph="${m.id}"><span class="jt-book-swatch"><img alt=""></span><span><span><b>${m.label}:</b> <i></i></span><em></em></span></div>`).join("")}</div>
     <div class="jt-keep-page" hidden><h3 class="jt-book-name">Keepsakes</h3>
       <p class="jt-keep-intro">Reach a milestone and a keepsake turns up in your tank.</p><ul class="jt-keep-list"></ul></div>
     <div class="jt-vlog-page" hidden><h3 class="jt-book-name">Visitors</h3>
@@ -370,7 +395,8 @@ export function createJournal(pages: () => JournalPage[], keepsakes?: () => Keep
     $<HTMLElement>(".jt-book-stats").replaceChildren(
       ...stats.flatMap(([k, v]) => [Object.assign(document.createElement("dt"), { textContent: k }), Object.assign(document.createElement("dd"), { textContent: v })]),
     );
-    // v12: one row per morph: its name and portrait once one has been raised, "???" until then
+    // v12: one row per morph: its name and portrait once one has been raised, "???" until then. v16: the Colours
+    // section adds a pair's dusk and pearl, and once a colour is raised, how it comes about
     $<HTMLElement>(".jt-book-morphs").hidden = !known;
     book.querySelectorAll<HTMLElement>(".jt-book-morph").forEach((row, i) => {
       const m = MORPH_ROWS[i]!;
@@ -380,7 +406,9 @@ export function createJournal(pages: () => JournalPage[], keepsakes?: () => Keep
       const mimg = row.querySelector("img") as HTMLImageElement;
       mimg.hidden = !found || !art;
       mimg.src = found && art ? art : "";
+      mimg.alt = found ? m.names[page] ?? "" : "";
       (row.querySelector("i") as HTMLElement).textContent = found ? m.names[page] ?? "" : "???";
+      (row.querySelector("em") as HTMLElement).textContent = found ? colourHow(m.id) : m.id === MORPH_DUSK || m.id === MORPH_PEARL ? PAIR_HINT : "";
     });
     renderDots(all);
     $<HTMLElement>(".jt-book-count").textContent = `${all.filter((q) => q.seen).length} of ${all.length} found`;

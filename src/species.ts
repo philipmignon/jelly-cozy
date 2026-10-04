@@ -614,7 +614,13 @@ export const MORPH_CHANCE = 0.1;
 export const MORPH_NONE = 0;
 export const MORPH_CLASSIC = 1;
 export const MORPH_GHOST = 2;
-export const MORPH_IDS = 3;
+/** v16 (pairs): the colours only a pair's baby can have, dusk (classic x classic) and pearl (classic x ghost):
+ *  ./pairs.ts. Id 3 is reserved for the winter frost morph (another feature). */
+export const MORPH_DUSK = 4;
+export const MORPH_PEARL = 5;
+export const MORPH_IDS = 6;
+/** The morph ids this build knows (anything else under MORPH_IDS, the reserved 3, loads as none). */
+export const MORPH_KNOWN: readonly number[] = [MORPH_NONE, MORPH_CLASSIC, MORPH_GHOST, MORPH_DUSK, MORPH_PEARL];
 /** v12: a morph parent's baby is the same morph this often (otherwise it rolls like a plain parent's). */
 export const MORPH_INHERIT = 0.5;
 /** v12: while a season offers a morph (SimOptions.seasonalMorph), a baby that rolled plain is that morph this often. */
@@ -825,7 +831,11 @@ export function specProps(foodN = K.foodN): string[] {
     out.push(`j${s}healthy`, `j${s}pale`, `j${s}flush`, `j${s}glow`, `j${s}rot`);
     // Halloween's ghost-pale morph palette; quiet nights' bell glow
     out.push(`j${s}ghost`, `j${s}nglow`);
+    // v16 (pairs): the two colours only a pair's baby can have
+    out.push(`j${s}dusk`, `j${s}pearl`);
   }
+  // v16 (pairs): the tiny sparkle a pair shares (world), its twinkle frames one-hot
+  out.push("pairX", "pairY", "pairO", "pairF0", "pairF1", "pairF2");
   // seasonal events: each season's decor prop (evHalloween)
   for (const season of SEASONS) out.push(season.prop);
   out.push("fxX", "fxY", "fxS", "fxO");

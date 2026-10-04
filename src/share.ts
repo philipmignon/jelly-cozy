@@ -159,7 +159,7 @@ export function showVisitBar(): void {
 }
 
 /** A one-off note in the visit bar's style, with an OK button. */
-export function showNote(text: string): void {
+export function showNote(text: string, ms?: number): void {
   const bar = document.createElement("div");
   bar.className = "jt-visit-bar jt-note-bar";
   bar.setAttribute("role", "status");
@@ -167,6 +167,8 @@ export function showNote(text: string): void {
   (bar.querySelector("span") as HTMLElement).textContent = text;
   bar.querySelector("button")!.addEventListener("click", () => bar.remove());
   document.body.append(bar);
+  // v16: a gentle one goes by itself after `ms` (OK still closes it sooner)
+  if (ms) setTimeout(() => bar.remove(), ms);
 }
 
 // ---------------------------------------------------------------- save backup

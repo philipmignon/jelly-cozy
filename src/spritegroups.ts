@@ -34,15 +34,24 @@ export const speciesGroup = (k: number): string => `sp-${SPECIES_KEYS[k] ?? k}`;
 export const eventGroup = (id: SeasonId): string => `ev-${id}`;
 
 /**
+ * v16 (pairs): the colours only a pair's baby can have each ship as a group of their own (gen.py's MO_GROUPS packs
+ * the sprite prefix `mo_dusk_` into `mo-dusk`, `mo_pearl_` into `mo-pearl`), so a tank without one downloads nothing.
+ */
+export const PAIR_MORPH_GROUPS: Readonly<Record<number, string>> = { 4: "mo-dusk", 5: "mo-pearl" };
+
+/**
  * The group a morph's palettes live in when it isn't the species' own: a seasonal morph (2, ghost) is drawn by
  * its season's art (`hw_<Species><Stage>Ghost*`), so it needs that event's group whether or not the season is on.
+ * v16: a pair's colour (4 dusk, 5 pearl) by its own group (PAIR_MORPH_GROUPS).
  */
 export function morphGroup(morph: number): string | null {
+  const pair = PAIR_MORPH_GROUPS[morph];
+  if (pair) return pair;
   const season = SEASONS.find((s) => s.morph !== null && s.morph === morph);
   return season ? eventGroup(season.id) : null;
 }
 
-/** What a jelly's art depends on: its species (k) and its morph id (0 none, 1 classic, 2 ghost). */
+/** What a jelly's art depends on: its species (k) and its morph id (0 none, 1 classic, 2 ghost, 4 dusk, 5 pearl). */
 export interface JellyArt {
   k: number;
   morph?: number;

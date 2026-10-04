@@ -36,6 +36,8 @@ function problem(s: Save, now: number): string {
     if (j.fullness < 0 || j.fullness > 1 || j.affection < 0 || j.affection > 1) return "needs out of 0..1";
     if (cleanName(j.name) !== j.name) return `name ${JSON.stringify(j.name)}`;
     if (j.trait !== undefined && (!Number.isInteger(j.trait) || j.trait < 0 || j.trait > 3)) return `trait ${j.trait}`;
+    if (![0, 1, 2, 4, 5].includes(j.morph)) return `morph ${j.morph}`;
+    if (j.pair !== undefined && (!Number.isInteger(j.pair) || j.pair < 0 || j.pair >= MAX_SLOTS)) return `pair ${j.pair}`;
   }
   if (!Number.isInteger(s.dollars) || s.dollars < 0 || s.dollars > MAX_DOLLARS) return `dollars ${s.dollars}`;
   if (!finite(s.murk) || s.murk < 0 || s.murk > 1) return `murk ${s.murk}`;
@@ -103,8 +105,10 @@ const jellyArb = fc.record(
     name: field(name),
     born: field(time),
     content: field(num),
-    morph: field(fc.oneof(fc.boolean(), fc.integer({ min: 0, max: 3 }))),
+    morph: field(fc.oneof(fc.boolean(), fc.integer({ min: 0, max: 6 }))),
     trait: field(fc.integer({ min: -1, max: 4 })),
+    // v16: a mate's slot (or junk)
+    pair: field(fc.integer({ min: -2, max: 8 })),
   },
   { requiredKeys: [] },
 );

@@ -30,7 +30,9 @@ export function lively(s: State): boolean {
     s.wipe !== null ||
     s.lifted >= 0 || // a decoration being moved
     (s.drawer.e > 0 && s.drawer.e < 1) || // v15: the put-away drawer sliding (after a drop too)
-    s.find !== null // v16: a find rising and flying to the jar
+    s.find !== null || // v16: a find rising and flying to the jar
+    // ---- nursery ---- the bowl zooming open or shut, or food in its water
+    (s.nursery !== null && ((s.nursery.e > 0 && s.nursery.e < 1) || s.nursery.food.some((f) => f.state !== "off")))
     // night visitors are s.visit too; the journal, album and room are HTML/CSS and need no Rive frames
   );
 }

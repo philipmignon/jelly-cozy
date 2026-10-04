@@ -2419,8 +2419,8 @@ describe("v5: view", () => {
     for (const name of want) expect(props.has(name), name).toBe(true);
     expect(props.has("j7on")).toBe(false);
     // v6 adds items 13-17; v11 adds 18-19 (foods) and 20-23 (themes); v13 24 (the bubbler) and 25-30 (keepsakes); 31-33 the
-    // lamp gels, 34-35 the heater and the chiller, 36-37 the sea-glass set rewards; no new tab
-    expect(props.has("own37")).toBe(true);
+    // lamp gels, 34-35 the heater and the chiller, 36-37 the sea-glass set rewards, 38 the nursery; no new tab
+    expect(props.has("own38")).toBe(true);
     expect(props.has(`own${SHOP_ITEMS.length}`)).toBe(false);
     expect(props.has("shopTab5")).toBe(false);
   });

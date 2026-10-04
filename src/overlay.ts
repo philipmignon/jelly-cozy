@@ -21,11 +21,17 @@ export interface JellyCardInfo {
   pair?: string;
   /** whether this jelly can be rehomed, what it pays, and why not */
   rehome: { allowed: boolean; reward: number; reason: string };
+  /** ---- nursery ---- "Move to nursery" / "Move to tank", whether it can now and why not; omitted = no row */
+  move?: { label: string; allowed: boolean; reason: string };
+  /** ---- nursery ---- no rehoming row (a nursery jelly's card) */
+  noRehome?: boolean;
 }
 
 export interface CardHandlers {
   rename(name: string): void;
   rehome(): void;
+  /** ---- nursery ---- the move button was pressed (the card closes after it) */
+  move?(): void;
   /** the card went away (closed, Escape, or after rehoming) */
   closed?(): void;
 }
@@ -111,6 +117,7 @@ const CSS = `
 .jt-btn[disabled] { opacity: 0.55; cursor: default; transform: none; box-shadow: 0 2px 0 #693c24; }
 .jt-btn.warn { background: #ffd6c8; border-color: #a0262a; box-shadow: 0 2px 0 #a0262a; }
 .jt-rehome-row { display: grid; gap: 4px; border-top: 2px dashed #d9bf94; padding-top: 10px; }
+.jt-rehome-row[hidden] { display: none; }
 .jt-tip { width: min(260px, calc(100vw - 40px)); gap: 8px; }
 .jt-tip::after {
   content: ""; position: absolute; left: var(--ax, 50%); width: 14px; height: 14px; margin-left: -9px;
@@ -163,7 +170,11 @@ export function createOverlay(): Overlay {
     <div class="jt-row"><span>Fullness</span><div class="jt-bar jt-food"><i></i></div></div>
     <div class="jt-row"><span>Happy</span><div class="jt-bar jt-mood"><i></i></div></div>
     <div class="jt-hint">Tap the name to rename</div>
-    <div class="jt-rehome-row">
+    <div class="jt-rehome-row jt-move-row" hidden>
+      <button class="jt-btn jt-move" type="button" id="jt-move">Move</button>
+      <div class="jt-hint jt-move-why"></div>
+    </div>
+    <div class="jt-rehome-row jt-rehome-wrap">
       <button class="jt-btn jt-rehome" type="button" id="jt-rehome">Rehome</button>
       <div class="jt-hint jt-rehome-why"></div>
     </div>`);
@@ -177,6 +188,11 @@ export function createOverlay(): Overlay {
   const rehomeBtn = $<HTMLButtonElement>(".jt-rehome");
   const rehomeWhy = $<HTMLElement>(".jt-rehome-why");
   const closeBtn = $<HTMLButtonElement>(".jt-close");
+  // ---- nursery ---- moving between the tank and the nursery bowl
+  const moveRow = $<HTMLElement>(".jt-move-row");
+  const moveBtn = $<HTMLButtonElement>(".jt-move");
+  const moveWhy = $<HTMLElement>(".jt-move-why");
+  const rehomeRow = $<HTMLElement>(".jt-rehome-wrap");
   const cardFocus = focusReturn(card);
   let slot: number | null = null;
   let handlers: CardHandlers | null = null;
@@ -224,6 +240,29 @@ export function createOverlay(): Overlay {
     h.closed?.();
   });
 
+  moveBtn.addEventListener("click", () => {
+    if (!handlers?.move || !last?.move?.allowed) return;
+    const h = handlers;
+    commit();
+    handlers = null;
+    card.hidden = true;
+    slot = null;
+    armed = false;
+    cardFocus.closed();
+    h.move?.();
+    h.closed?.();
+  });
+  const fillMove = (info: JellyCardInfo) => {
+    const m = info.move;
+    moveRow.hidden = !m;
+    rehomeRow.hidden = info.noRehome === true;
+    if (!m) return;
+    moveBtn.textContent = m.label;
+    moveBtn.disabled = !m.allowed;
+    moveWhy.textContent = m.allowed ? "" : m.reason;
+    moveWhy.hidden = m.allowed;
+  };
+
   const fillRehome = (info: JellyCardInfo) => {
     const r = info.rehome;
     rehomeBtn.disabled = !r.allowed;
@@ -253,6 +292,7 @@ export function createOverlay(): Overlay {
     $<HTMLElement>(".jt-food > i").style.width = `${Math.round(info.fullness * 100)}%`;
     $<HTMLElement>(".jt-mood > i").style.width = `${Math.round(info.mood * 100)}%`;
     fillRehome(info);
+    fillMove(info);
   };
 
   // ---------------------------------------------------------------- floaters

@@ -9277,6 +9277,326 @@ sheen_anim = (f'<LinearAnimation loopValue="loop" duration="{SHEEN_DUR}" name="S
               + "".join(keys(i, 13, [(0, x), (SHEEN_DUR, x + CAUSTIC_PERIOD * P)], "linear") for i, x in sheen_keys)
               + "</LinearAnimation>")
 
+# ---- nursery ---- (shop item NUR_ITEM) a small round bowl hung on the hood's lip at the top left of the water, in
+# front of the glass (like the Halloween bat), for raising up to four polyps and ephyrae. Tapped, it zooms out into
+# the open bowl: water, a sand bed with four polyp spots, and JellyComp placed four more times (nested view model
+# properties nj0..nj3, one Jelly instance each, like j0..j6). The host writes (src/sim.ts, its nursery block):
+#   nurBowl     the hanging bowl's opacity (0 until bought, and while the shop is up or the bowl is open)
+#   nurDot{n}   a tiny jelly in it per little one (fainter while that one is hungry); nurReady: one waits to move
+#   nurOpen, nurX, nurY, nurS   the open bowl's opacity, middle (screen) and scale: it zooms out of the hanging one
+#   nurDim      the scrim over the tank behind it
+#   nf{i}x/y/o, nf{i}k0..2      its own pellets (local: about the open bowl's middle; x, y = the pellet's middle)
+#   nr{n}x/y/o  a "ready" tag over a jelly grown enough for the tank and waiting for room
+#   nj{n}{key}  the nursery jellies (local coordinates), every key a tank slot has
+# Nothing in it loops, so it needs no calm states. Palette and constants are NUR_-prefixed.
+NUR_CAP = 4
+NUR_FOOD_N = 6
+NUR_ICON_C = (26, 33)            # the hanging bowl's middle (logical, screen)
+NUR_ICON_R = 13                  # its glass radius
+NUR_HOOK_Y = 11                  # the hook's top: over the hood's lip (WATER_TOP)
+NUR_ICON_BOX = (11, 10, 30, 38)  # its hit box: x, y, w, h (logical, screen)
+NUR_C = (120, 152)               # the open bowl's middle (logical, screen)
+NUR_R = 98                       # its glass, outside
+NUR_RIN = 94                     # and inside
+NUR_RIM = -78                    # the opening's lip (local y)
+NUR_SURFACE = -70                # the water's surface (local y)
+NUR_FLOOR = 62                   # the sand's flat top (local y)
+NUR_ROCK = (-20, 60, 10, 6)      # a pebble the second polyp spot is on: cx, cy, rx, ry (local)
+NUR_ANCHORS = [(-54, NUR_FLOOR), (-20, NUR_ROCK[1] - NUR_ROCK[3] + 1), (18, NUR_FLOOR), (52, NUR_FLOOR)]  # polyp spots (local)
+NUR_SWIM = (-62, -50, 62, 35)    # where an ephyra's middle may go: x0, y0, x1, y1 (local)
+NUR_DOTS = [(-7, 1), (-2, 3), (3, -1), (7, 2)]  # the little ones in the hanging bowl (local to it)
+NUR_GLASS_EDGE = hx("1c4656", 235)
+NUR_GLASS = hx("c4f2ff", 70)
+NUR_GLASS_LIT = hx("ffffff", 215)
+NUR_WATER_TOP = hx("8ce4f4")
+NUR_WATER_DEEP = hx("1f6fb0")
+NUR_SURF = hx("e2fbff", 220)
+NUR_GLOW = hx("ffd2ef")
+NUR_NIGHT = hx("08103a", 150)
+NUR_L = (-0.6, -0.8)             # light from the upper left
+
+
+def nur_glass(px, R, rim, thick=None):
+    """A round glass bowl's wall (radius R, origin = its middle), open above `rim`: a dark outline, faint glass, a
+    lit arc to the upper left and a lip along the opening."""
+    thick = thick or max(2, round(R * 0.045))
+    for y in range(rim, R + 1):
+        for x in range(-R, R + 1):
+            d = math.hypot(x + 0.5, y + 0.5)
+            if d > R or d < R - thick:
+                continue
+            lit = ((x + 0.5) * NUR_L[0] + (y + 0.5) * NUR_L[1]) / max(d, 1)
+            if d > R - 1 or d < R - thick + 1:
+                px.put(x, y, NUR_GLASS_EDGE if lit < 0.55 else hx("5aa8c0", 235))
+            else:  # lit to the upper left; a little light bounces back on the lower right
+                px.put(x, y, NUR_GLASS_LIT if lit > 0.82 else hx("9fe2f2", 150) if lit < -0.8 else NUR_GLASS)
+    half = math.sqrt(max(0, R * R - rim * rim))
+    for x in range(-round(half) - 1, round(half) + 2):  # the lip: a rolled edge round the opening
+        for y in (rim - 1, rim):
+            px.put(x, y, NUR_GLASS_EDGE if y == rim - 1 or abs(x) > half else hx("e8fbff", 230))
+    return px
+
+
+def nur_streaks(px, R, a0=200, a1=232, w=0.07):
+    """Two curved specular streaks on the glass, upper left."""
+    for y in range(-R, R + 1):
+        for x in range(-R, R + 1):
+            d = math.hypot(x + 0.5, y + 0.5)
+            ang = math.degrees(math.atan2(y + 0.5, x + 0.5)) % 360
+            if a0 <= ang <= a1 and R * (0.8 - w) <= d <= R * 0.8:
+                px.over(x, y, hx("ffffff", 120))
+            elif a0 + 38 <= ang <= a0 + 44 and R * 0.72 <= d <= R * 0.78:
+                px.over(x, y, hx("ffffff", 80))
+    return px
+
+
+def nur_water(px, Rin, surface, floor, seed=5):
+    """The water inside the glass: aqua at the surface to deep blue, deeper towards the glass (it's round), with a
+    faint net of caustic light that fades with depth."""
+    tau = 2 * math.pi / 32
+    for y in range(surface, Rin + 1):
+        for x in range(-Rin, Rin + 1):
+            d = math.hypot(x + 0.5, y + 0.5) / Rin
+            if d > 1 or y > floor + 2:
+                continue
+            t = (y - surface) / max(1, Rin - surface)
+            c = mix(NUR_WATER_TOP, NUR_WATER_DEEP, shade_index(min(1, t * 1.1), 10, x, y, 0.5) / 9)  # 10 dithered bands
+            if d > 0.8:  # the curve of the glass: deeper colour at the edge
+                c = mix(c, NUR_WATER_DEEP, min(1, (d - 0.8) / 0.2) * 0.45)
+            if Rin > 20 and y < floor - 3:
+                v = math.sin(3 * tau * x + 0.31 * y + seed) + math.sin(2 * tau * x - 0.47 * y + 1.3) + 0.6 * math.sin(4 * tau * x + 0.2 * y + 2.1)
+                a = math.exp(-(v / 0.38) ** 2) * max(0.0, 1 - t * 1.3)
+                if a > 0.25:
+                    c = mix(c, hx("e8fbff"), 0.22 * a)
+            px.put(x, y, c)
+    half = math.sqrt(max(0, Rin * Rin - surface * surface))
+    for x in range(-round(half), round(half) + 1):  # the surface, catching the light
+        px.put(x, surface, NUR_SURF)
+        if x % 5 and abs(x) < half - 2:
+            px.put(x, surface + 1, hx("b8f0ff", 200))
+    return px
+
+
+def nur_sand(px, Rin, floor, rock=None, seed=9):
+    """The sand bed: flat on top (the polyp spots sit on it), a pebble, a tuft of seagrass and a shell."""
+    r2 = random.Random(seed)
+    for y in range(floor, Rin + 1):
+        for x in range(-Rin, Rin + 1):
+            if math.hypot(x + 0.5, y + 0.5) > Rin:
+                continue
+            t = 0.75 - (y - floor) / 30 + 0.12 * math.sin(x * 0.7 + y)
+            c = R_SAND[4] if y == floor else R_SAND[1 + shade_index(t, 3, x, y, 0.7)]
+            if r2.random() < 0.03 and y > floor + 1:
+                c = R_SAND[0]
+            px.put(x, y, c)
+    if Rin > 20:  # where the sand meets the curving glass, a shadowed band
+        for y in range(floor, Rin + 1):
+            for x in range(-Rin, Rin + 1):
+                d = math.hypot(x + 0.5, y + 0.5)
+                if Rin - 3 < d <= Rin and px.has(x, y):
+                    px.put(x, y, R_SAND[1] if d > Rin - 1.5 else R_SAND[2])
+    if rock:
+        cx, cy, rx, ry = rock
+        blob(px, cx, cy, rx, ry, R_ROCK[1:], rough=0.3, seed=3)
+        for dx, dy, c in ((-rx + 2, ry - 1, R_SAND[2]), (rx - 2, ry - 1, R_SAND[2])):  # tucked into the sand
+            px.put(cx + dx, cy + dy, c)
+    return px
+
+
+def nur_icon_art():
+    """The hanging bowl (origin = its middle): a brass hook over the hood's lip, two straps, the round glass with
+    water and a strip of sand."""
+    px = Px()
+    R, rim = NUR_ICON_R, -9
+    nur_water(px, R - 1, rim + 2, 7, seed=2)
+    nur_sand(px, R - 1, 7, seed=4)
+    nur_glass(px, R, rim, thick=2)
+    nur_streaks(px, R, w=0.12)
+    hook = NUR_HOOK_Y - NUR_ICON_C[1]  # local y of the hook's top
+    half = round(math.sqrt(R * R - rim * rim))
+    for side in (-1, 1):  # the straps, from the lip's ends up to the hook
+        x0, y0, x1, y1 = side * (half - 1), rim - 1, side * 1, hook + 3
+        n = max(abs(x1 - x0), abs(y1 - y0))
+        for k in range(n + 1):
+            x = round(x0 + (x1 - x0) * k / n)
+            y = round(y0 + (y1 - y0) * k / n)
+            px.put(x, y, R_GOLD[1] if side > 0 else R_GOLD[3])
+    for x, y, c in ((-1, hook + 2, R_GOLD[2]), (0, hook + 2, R_GOLD[3]), (1, hook + 2, R_GOLD[2]), (0, hook + 1, R_GOLD[4]),
+                    (0, hook, R_GOLD[4]), (1, hook, R_GOLD[3]), (2, hook, R_GOLD[2]), (2, hook + 1, R_GOLD[1]), (2, hook + 2, R_GOLD[1]),
+                    (-1, hook + 3, R_GOLD[0]), (1, hook + 3, R_GOLD[0])):
+        px.put(x, y, c)
+    return px
+
+
+def nur_dot():
+    """A little one in the hanging bowl, seen from across the room: a tiny pink bell and two wisps under it."""
+    px = Px()
+    for x, y, c in ((0, -1, "ffd2ef"), (1, -1, "f49ad4"), (-1, 0, "f49ad4"), (0, 0, "ffd2ef"), (1, 0, "f49ad4"), (2, 0, "c766ae"),
+                    (-1, 1, "c766ae"), (2, 1, "c766ae"), (0, 1, "f7a6dc"), (1, 2, "f7a6dc")):
+        px.put(x, y, hx(c))
+    return px
+
+
+def nur_ready_badge():
+    """One waiting to move: a little gold up-arrow on a dark round tag, at the bowl's shoulder."""
+    px = Px()
+    for y in range(-4, 5):
+        for x in range(-4, 5):
+            d = math.hypot(x, y)
+            if d <= 4.4:
+                px.put(x, y, R_GOLD[0] if d > 3.6 else hx("2a1a12"))
+    for x, y in ((0, -2), (-1, -1), (0, -1), (1, -1), (-2, 0), (0, 0), (2, 0), (0, 1), (0, 2)):
+        px.put(x, y, R_GOLD[4] if y < 0 else R_GOLD[3])
+    return px
+
+
+def nur_ready_tag():
+    """Over a ready jelly in the open bowl: a parchment tag, an up arrow and READY (origin = its bottom middle)."""
+    px = Px()
+    tw = text_width("READY")
+    w, h = tw + 12, 9
+    x0, y0 = -w // 2, -h
+    m = round_rect_mask(w, h, 2)
+    for x, y in m:
+        px.put(x0 + x, y0 + y, R_WOOD[1] if edge4(m, x, y) else R_CREAM[4] if y == 1 else R_CREAM[3])
+    ax = x0 + 4
+    for x, y in ((0, 2), (-1, 3), (0, 3), (1, 3), (0, 4), (0, 5), (0, 6)):
+        px.put(ax + x, y0 + y, hx("2a8a4a"))
+    draw_text(px, "READY", x0 + 8, y0 + 2, INK)
+    for x in (-1, 0, 1):  # a nib pointing down at the jelly
+        px.put(x, 0, R_WOOD[1] if x else R_CREAM[3])
+    px.put(0, 1, R_WOOD[1])
+    return px
+
+
+def nur_back_art():
+    """The open bowl behind its jellies: water and the sand bed with its pebble (origin = the bowl's middle)."""
+    px = Px()
+    nur_water(px, NUR_RIN, NUR_SURFACE, NUR_FLOOR)
+    nur_sand(px, NUR_RIN, NUR_FLOOR, NUR_ROCK)
+    for k, (gx, lean) in enumerate(((29, 0.3), (31, -0.15), (33, 0.35), (35, 0.1), (37, -0.25), (39, 0.2))):  # seagrass between the spots
+        hgt = 15 + (k * 7) % 9
+        for t in range(hgt):
+            sx = gx + round(math.sin(t * 0.3 + k) * lean * 5)
+            c = R_SEAGRASS[1 + min(4, 1 + t * 4 // hgt)]
+            px.put(sx, NUR_FLOOR - 1 - t, c)
+            if t < hgt - 3:
+                px.put(sx + 1, NUR_FLOOR - 1 - t, R_SEAGRASS[1])
+    for k, (bx, by, ang, ln) in enumerate(((66, NUR_FLOOR - 1, -100, 9), (66, NUR_FLOOR - 5, -60, 6), (65, NUR_FLOOR - 4, -135, 5))):
+        for t in range(ln):  # a sprig of coral against the glass, right
+            a = math.radians(ang)
+            x, y = bx + math.cos(a) * t, by + math.sin(a) * t
+            px.put(x, y, R_CORAL[3] if t < ln - 1 else R_CORAL[5])
+            px.put(x - 1, y, R_CORAL[2])
+    for x, y, c in ((-38, NUR_FLOOR + 3, R_SHELL[3]), (-37, NUR_FLOOR + 3, R_SHELL[4]), (-36, NUR_FLOOR + 3, R_SHELL[2]),
+                    (-37, NUR_FLOOR + 2, R_SHELL[3]), (-38, NUR_FLOOR + 4, R_SHELL[1]), (-36, NUR_FLOOR + 4, R_SHELL[1])):
+        px.put(x, y, c)
+    return px
+
+
+def nur_front_art():
+    """The open bowl in front of its jellies: the glass, its streaks and the wooden stand with its name plate."""
+    px = Px()
+    nur_glass(px, NUR_R, NUR_RIM)
+    nur_streaks(px, NUR_R)
+    top, bot = NUR_R - 10, NUR_R + 7  # the stand: a turned wooden ring the bowl sits in
+    for y in range(top, bot):
+        hw = 30 + (y - top) // 2
+        for x in range(-hw, hw + 1):
+            edge = x in (-hw, hw) or y in (top, bot - 1)
+            t = 0.75 - abs(x) / hw * 0.4 + 0.05 * math.sin(x * 0.8 + y * 0.3)
+            px.put(x, y, R_WOOD[0] if edge else R_WOOD[5] if y == top + 1 else R_WOOD[1 + shade_index(t, 4, x, y, 0.5)])
+    tw = text_width("NURSERY")
+    pw, ph = tw + 6, 9
+    m = round_rect_mask(pw, ph, 2)
+    for x, y in m:
+        px.put(-pw // 2 + x, top + 4 + y, R_GOLD[0] if edge4(m, x, y) else R_GOLD[4] if y == 1 else R_GOLD[2])
+    draw_text(px, "NURSERY", -tw // 2, top + 6, hx("4a2a10"))
+    return px
+
+
+def nur_shop_icon():
+    """The shop card's icon: the bowl on its little stand, a polyp and an ephyra inside (origin = bottom middle)."""
+    px = Px()
+    R = 12
+    ball = Px()
+    nur_water(ball, R - 1, -6, 6, seed=3)
+    nur_sand(ball, R - 1, 6, seed=6)
+    for x, y, c in ((-4, 5, "f49ad4"), (-4, 4, "f49ad4"), (-4, 3, "ffd2ef"), (-5, 2, "ffd2ef"), (-3, 2, "ffd2ef"),  # a polyp
+                    (3, -2, "f7a6dc"), (2, -1, "f7a6dc"), (4, -1, "f7a6dc"), (3, -1, "ffd2ef"), (3, 0, "f7a6dc"), (1, -2, "f7a6dc"), (5, -2, "f7a6dc")):
+        ball.put(x, y, hx(c))
+    nur_glass(ball, R, -8, thick=2)
+    nur_streaks(ball, R, w=0.14)
+    for (x, y), c in ball.d.items():
+        px.put(x, y - R - 4, c)
+    for y in range(-5, 0):  # the stand
+        hw = 7 + (y + 5) // 2
+        for x in range(-hw, hw + 1):
+            px.put(x, y, R_WOOD[0] if x in (-hw, hw) or y in (-5, -1) else R_WOOD[4] if y == -4 else R_WOOD[2 + (x + y) % 2])
+    return px
+
+
+nurslot_pid = [nid() for _ in range(NUR_CAP)]  # Tank > nj{n}: the nursery's nested Jelly properties
+nurslot_vmi = [nid() for _ in range(NUR_CAP)]
+for _n in range(NUR_CAP):
+    for key in _jorder:  # the host writes flat names (nj2k5), like the tank's j{s}
+        props[f"nj{_n}{key}"] = (None, "jelly", jprops[key][1])
+        _order.append(f"nj{_n}{key}")
+
+
+def nur_jelly(n):
+    """Nursery slot n: JellyComp again, bound to Tank > nj{n} (x, y local to the open bowl)."""
+    via = lambda key: f"{VM}-{nurslot_pid[n]}-{jprops[key][0]}"
+    return (f'<NestedArtboard artboardId="{JAB}" dataBindPathIds="{VM}-{nurslot_pid[n]}" x="0" y="0" opacity="0" name="Nursling{n}">'
+            f'{bind(via("on"), 18)}{bind(via("x"), 13)}{bind(via("y"), 14)}'
+            f'<NestedSimpleAnimation animationId="{JSHEEN}" isPlaying="true" name="Sheen">'
+            f'{bind(prop("calm"), 199, INVERT_CONV)}</NestedSimpleAnimation></NestedArtboard>')
+
+
+def nursery_nodes():
+    """The scrim, the open bowl and the hanging bowl (screen space, over the tank's frame; back to front)."""
+    dim = rect_shape("NurDim", 0, WATER_TOP * P, W, (CAB_TOP - WATER_TOP) * P, solid(hx("0a0c1c")), opacity=0,
+                     binds=[bind(prop("nurDim"), 18)])
+    food = []
+    for i in range(NUR_FOOD_N):  # the bowl's pellets: the tank's sprites, middle on the origin
+        kinds = [image("FoodFlake", food_art(), lx=-1, ly=-1, node_name=f"NurFlake{i}", binds=[bind(prop(f"nf{i}k0", default=1), 18)]),
+                 image("FoodShrimp", food_shrimp_art(), lx=-1, ly=-1, node_name=f"NurShrimp{i}", opacity=0, binds=[bind(prop(f"nf{i}k1"), 18)]),
+                 image("FoodPlankton", food_plankton_art(), lx=-1, ly=-1, node_name=f"NurPlankton{i}", opacity=0, binds=[bind(prop(f"nf{i}k2"), 18)])]
+        food.append(node(f"NurFood{i}", list(reversed(kinds)), opacity=0,
+                         binds=[bind(prop(f"nf{i}x"), 13), bind(prop(f"nf{i}y"), 14), bind(prop(f"nf{i}o"), 18)]))
+    tags = [node(f"NurTag{n}", [image("NurReadyTag", nur_ready_tag())], opacity=0,
+                 binds=[bind(prop(f"nr{n}x"), 13), bind(prop(f"nr{n}y"), 14), bind(prop(f"nr{n}o"), 18)]) for n in range(NUR_CAP)]
+    night = ellipse_shape("NurNight", 0, 0, 2 * NUR_RIN * P, 2 * NUR_RIN * P, solid(NUR_NIGHT), opacity=0, binds=[bind(prop("nightShade"), 18)])
+    kids = [image("NurBack", nur_back_art()), night] + food + [nur_jelly(n) for n in range(NUR_CAP)] + tags + [image("NurFront", nur_front_art())]
+    view = node("NurseryView", list(reversed(kids)), x=NUR_C[0] * P, y=NUR_C[1] * P, opacity=0,
+                binds=[bind(prop("nurX", default=NUR_C[0] * P), 13), bind(prop("nurY", default=NUR_C[1] * P), 14),
+                       bind(prop("nurS", default=1), 16), bind(prop("nurS", default=1), 17), bind(prop("nurOpen"), 18)])
+    dots = [image("NurDot", nur_dot(), lx=dx, ly=dy, node_name=f"NurDot{n}", opacity=0, binds=[bind(prop(f"nurDot{n}"), 18)])
+            for n, (dx, dy) in enumerate(NUR_DOTS)]
+    badge = image("NurReadyBadge", nur_ready_badge(), lx=NUR_ICON_R - 1, ly=-NUR_ICON_R + 3, opacity=0, binds=[bind(prop("nurReady"), 18)])
+    bowl = node("NurseryBowl", list(reversed([image("NurBowl", nur_icon_art())] + dots + [badge])), x=NUR_ICON_C[0] * P, y=NUR_ICON_C[1] * P,
+                opacity=0, binds=[bind(prop("nurBowl"), 18)])
+    for name in ("nurDim", "nurOpen", "nurX", "nurY", "nurS", "nurBowl", "nurReady"):
+        prop(name)
+    return [dim, view, bowl]
+
+
+def nur_contract(c):
+    """What the logic needs to know (src/nursery.ts reads it, with matching fallbacks)."""
+    x, y, w, h = NUR_ICON_BOX
+    c["nursery"] = {
+        "cap": NUR_CAP, "foodN": NUR_FOOD_N, "item": NUR_ITEM,
+        "icon": {"x": x * P, "y": y * P, "w": w * P, "h": h * P}, "iconC": {"x": NUR_ICON_C[0] * P, "y": NUR_ICON_C[1] * P},
+        "cx": NUR_C[0] * P, "cy": NUR_C[1] * P, "r": NUR_RIN * P, "closedScale": round(NUR_ICON_R / NUR_R, 4),
+        "surface": NUR_SURFACE * P, "floor": NUR_FLOOR * P,
+        "anchors": [{"x": ax * P, "y": ay * P} for ax, ay in NUR_ANCHORS],
+        "swim": {"x0": NUR_SWIM[0] * P, "y0": NUR_SWIM[1] * P, "x1": NUR_SWIM[2] * P, "y1": NUR_SWIM[3] * P},
+        "nested": {"pattern": "^nj([0-3])(.+)$", "path": "nj{n}/{key}", "viewModel": "Jelly"},
+        "origin": "nursery jellies, pellets and tags are local to the open bowl's middle (cx, cy on screen at nurS = 1)",
+    }
+# ---- end nursery ----
+
+
 # ---- shop panel: covers the tank; slides on shopY (closed = 1500, off the artboard).
 # Three tabs (JELLIES / DECOR / HELPERS). Each tab's cards live in a group whose y is bound to
 # tab{t}Y: 0 when active, 3000 when not (moved away, so hidden cards can't be clicked).
@@ -9301,6 +9621,9 @@ ITEMS += [("WARM GEL", "LAMP GEL|GOLDEN|LIGHT", 60), ("BLUE GEL", "LAMP GEL|DEEP
 ITEMS += [("HEATER", "WARMS THE|WATER|SHELF UNIT", 90), ("CHILLER", "COOLS THE|WATER|SHELF UNIT", 110)]  # ---- temperature ---- 34, 35
 ITEMS += [(nm, how, 0) for nm, how in SG_ITEMS]  # ---- sea glass ---- 36, 37 (the collection's set rewards)
 assert len(ITEMS) == SG_ITEM_IDS[-1] + 1
+NUR_ITEM = len(ITEMS)  # ---- nursery ---- (src/species.ts NURSERY_ITEM: 38)
+ITEMS.append(("NURSERY", "RAISE 4|LITTLE ONES", 120))  # ---- nursery ----
+assert NUR_ITEM == 38
 # shop item -> the species it sells (polyps)
 JELLY_ITEM = {0: 1, 1: 2, 2: 3, 13: 4, 14: 5, 15: 6, 16: 7, 17: 8}
 TANK_ITEMS, HELPER_ITEMS = (11, 12), (8, 9, 10)
@@ -9313,7 +9636,7 @@ NEEDS = [(12, "needs12", ["NEEDS", "MEDIUM"]), (15, "needs15", ["NEEDS", "MEDIUM
 TABS = [("JELLIES", [0, 13, 1, 14, 2, 15, 16, 17], "DRAG TO SEE MORE JELLIES"),
         ("DECOR", [3, 4, 5, 6, 7, 24] + list(KEEP_ITEM_IDS[:-1]) + list(SG_ITEM_IDS), "TAP YOURS TO PUT AWAY. HOLD ONE TO MOVE"),  # ---- put away ---- (---- sea glass ----)
         ("SUPPLIES", [8, 9, 10, 18, 19, 34, 35], "NEW THINGS WAIT ON THE SHELF"),  # ---- temperature ----
-        ("TANK", [11, 12, 20, 21, 22, 23, KEEP_THEME_ITEM] + list(GEL_ITEMS), "TAP AN OWNED THEME OR GEL TO USE IT")]  # ---- lamp gels ----
+        ("TANK", [11, 12, NUR_ITEM, 20, 21, 22, 23, KEEP_THEME_ITEM] + list(GEL_ITEMS), "TAP AN OWNED THEME OR GEL TO USE IT")]  # ---- nursery ---- ---- lamp gels ----
 TAB_W, TAB_H, TAB_GAP, TAB_Y, TAB_LIFT = 50, 15, 4, 55, 3
 TAB_X = [14 + t * (TAB_W + TAB_GAP) for t in range(len(TABS))]
 RULE_Y = TAB_Y + TAB_H  # the shelf line the tabs stand on
@@ -9366,6 +9689,8 @@ def item_icon(i):
         return temp_icon(i), 14
     if i in SG_ITEM_IDS:  # ---- sea glass ----
         return sg_icon(i), 14
+    if i == NUR_ITEM:  # ---- nursery ----
+        return nur_shop_icon(), 14
     if i in TANK_ITEMS:
         return tank_icon(i - 10), 14
     if i in THEME_ITEMS:
@@ -9534,7 +9859,7 @@ def card_art(i):
         col = R_WOOD[1] if edge else hx("8fe0f0") if y == 1 else mix(hx("3ab4e0"), hx("125fa6"), t) if bay(x, y) * 0.2 + t < 0.85 or jelly else R_SAND[3]
         if not edge and not jelly and y >= wh - 7:
             col = R_SAND[4] if y == wh - 7 else R_SAND[3]
-        if not edge and (i in TANK_ITEMS or i in THEME_ITEMS):  # tanks sit in a room: papered wall, a wooden floor
+        if not edge and (i in TANK_ITEMS or i in THEME_ITEMS or i == NUR_ITEM):  # tanks (---- nursery ---- and the bowl) sit in a room: papered wall, a wooden floor
             col = (R_WOOD[4] if y == wh - 7 else R_WOOD[2] if (x + (y // 3) * 5) % 9 else R_WOOD[1]) if y >= wh - 7 else \
                 (R_CREAM[2] if x % 6 == 0 else R_CREAM[3]) if y > 1 else R_CREAM[4]
         px.put(wx + x, wy + y, col)
@@ -9857,6 +10182,7 @@ btf.append(node("Lamp", gel_lamp_parts() + [image("LampStrip", lamp),  # ---- la
                                     lin_grad(0, 0, 0, 40 * P, [(0, hx("fff2b0", 90)), (1, hx("fff2b0", 0))]), blend="screen")],
                 binds=[bind(prop("daylight", default=1), 18)]))
 
+btf.extend(nursery_nodes())  # ---- nursery ---- over the frame (its hook rides the hood's lip), under the cabinet
 btf.append(image("Cabinet", cabinet_art()))
 # v9: the meters live in the hood strip (logical x 50..166, y 1..11), between the counter and the HTML hood buttons
 BAR_W = 21
@@ -10116,6 +10442,9 @@ for name in _order:
 for s_ in range(SLOTS):
     vm_props.append(f'<ViewModelPropertyViewModel viewModelReferenceId="{JVM}" name="j{s_}" id="{jslot_pid[s_]}"/>')
     vm_vals.append(f'<ViewModelInstanceViewModel propertyValue="{jslot_vmi[s_]}" viewModelPropertyId="{jslot_pid[s_]}"/>')
+for _n in range(NUR_CAP):  # ---- nursery ---- nj0..nj3
+    vm_props.append(f'<ViewModelPropertyViewModel viewModelReferenceId="{JVM}" name="nj{_n}" id="{nurslot_pid[_n]}"/>')
+    vm_vals.append(f'<ViewModelInstanceViewModel propertyValue="{nurslot_vmi[_n]}" viewModelPropertyId="{nurslot_pid[_n]}"/>')
 vm = (f'<ViewModel defaultInstanceId="{VMI}" name="Tank" id="{VM}">{"".join(vm_props)}'
       f'<ViewModelInstance exports="true" name="Default" id="{VMI}">{"".join(vm_vals)}</ViewModelInstance></ViewModel>')
 
@@ -10131,6 +10460,7 @@ jvm = (f'<ViewModel defaultInstanceId="{JVMI}" name="Jelly" id="{JVM}">'
        + jelly_instance("Default", JVMI, {"on": 1})
        + "".join(jelly_instance(f"j{s_}", jslot_vmi[s_], {"on": 1 if s_ == 0 else 0, "x": SLOT_XY[s_][0], "y": SLOT_XY[s_][1]})
                  for s_ in range(SLOTS))
+       + "".join(jelly_instance(f"nj{_n}", nurslot_vmi[_n], {"on": 0}) for _n in range(NUR_CAP))  # ---- nursery ----
        + "</ViewModel>")
 jsheen_layer = (f'<StateMachineLayer name="Sheen" id="{nid()}"><AnyState x="0" y="-100"/><ExitState x="200" y="-100"/>'
                 f'<EntryState><StateTransition stateToId="{(_jst := nid())}"/></EntryState>'
@@ -10243,6 +10573,7 @@ nv_contract(contract, NV_SPOTS)  # ---- night visitors ----
 contract["buttons"] += [{"name": "gel", "x": GEL_HIT[0] * P, "y": GEL_HIT[1] * P, "w": GEL_HIT[2] * P, "h": GEL_HIT[3] * P}] + temp_button_rects()
 gel_contract(contract)  # ---- lamp gels ----
 temp_contract(contract)  # ---- temperature ----
+nur_contract(contract)  # ---- nursery ----
 # ---- asset groups: each group's PNGs packed into one file (base64 in JSON, a type every host serves and
 # compresses); the contract lists them with a content hash the host adds to the URL so a new build busts caches
 SPRITE_DIR = ROOT / "public" / "sprites"

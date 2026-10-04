@@ -507,7 +507,9 @@ export type ShopItem =
   | { name: string; price: number; kind: "theme"; theme: number; keepsake?: number }
   // ---- lamp gels ---- a coloured filter for the lamp (./gels.ts); ---- temperature ---- the heater (+1), the chiller (-1)
   | { name: string; price: number; kind: "gel"; gel: number }
-  | { name: string; price: number; kind: "climate"; dir: 1 | -1 };
+  | { name: string; price: number; kind: "climate"; dir: 1 | -1 }
+  // ---- nursery ---- the nursery bowl (bought once)
+  | { name: string; price: number; kind: "nursery" };
 export const SHOP_ITEMS: readonly ShopItem[] = [
   { name: "BLUE BLUBBER", price: 40, kind: "polyp", k: BLUBBER },
   { name: "UPSIDE-DOWN", price: 70, kind: "polyp", k: UPSIDE },
@@ -554,6 +556,8 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
   { name: "SEA-GLASS CHIME", price: 0, kind: "decor", d: 11, collection: 0 },
   { name: "SHELL GROTTO", price: 0, kind: "decor", d: 12, collection: 1 },
   // ---- end sea glass ----
+  // ---- nursery ---- shop id 38. Nothing hard-codes the index: it is NURSERY_ITEM here, and gen.py finds its card by kind
+  { name: "NURSERY", price: 120, kind: "nursery" },
 ];
 /** v13: the milestone that earns shop item `it` (./keepsakes.ts), or -1 for anything the shop sells. */
 export const keepsakeOf = (it: ShopItem | undefined): number => (it && (it.kind === "decor" || it.kind === "theme") ? it.keepsake ?? -1 : -1);
@@ -563,6 +567,8 @@ export const collectionOf = (it: ShopItem | undefined): number => (it && it.kind
 export const foodItem = (f: number) => SHOP_ITEMS.findIndex((it) => it.kind === "food" && it.f === f);
 /** The shop item for theme n (20 REEF .. 23 ARCTIC). */
 export const themeItem = (n: number) => SHOP_ITEMS.findIndex((it) => it.kind === "theme" && it.theme === n);
+/** ---- nursery ---- the shop item that sells the nursery bowl */
+export const NURSERY_ITEM = SHOP_ITEMS.findIndex((it) => it.kind === "nursery");
 /** The shop item that upgrades to tier t (11 MEDIUM, 12 LARGE). */
 export const tankItem = (t: number) => SHOP_ITEMS.findIndex((it) => it.kind === "tank" && it.tier === t);
 /** v13: decorations 0..4 are sold, 5..9 are keepsakes (from KEEP_DECOR0), 10 is the bubbler (sold, shop item 24);
@@ -583,7 +589,7 @@ export const TAB_ITEMS: readonly (readonly number[])[] = [
   [0, 13, 1, 14, 2, 15, 16, 17], // JELLIES scrolls (contract.shopScroll)
   [3, 4, 5, 6, 7, 24, 25, 26, 27, 28, 29, 36, 37], // v13: the bubbler, then the keepsakes (v16: and the collection's rewards); DECOR and TANK scroll too (contract.shopScrollTabs)
   [8, 9, 10, 18, 19, 34, 35], // ---- temperature ---- the heater and the chiller
-  [11, 12, 20, 21, 22, 23, 30, 31, 32, 33], // ---- lamp gels ---- after the themes
+  [11, 12, NURSERY_ITEM, 20, 21, 22, 23, 30, 31, 32, 33], // ---- nursery ---- beside the tank sizes; ---- lamp gels ---- after the themes
 ];
 export const TAB_N = TAB_ITEMS.length;
 /** A tab's card group sits at y 0 when active and this far away when not (so hidden cards can't be hit). */
@@ -821,19 +827,7 @@ export function specProps(foodN = K.foodN): string[] {
   for (const c of ["jar", "bottle"]) out.push(`${c}X`, `${c}Y`, `${c}O`, `${c}F0`, `${c}F1`);
   out.push("toolShrimp", "toolPlankton", "haveShrimp", "havePlankton", "b4y", "b5y");
   for (let t = 0; t < THEME_N; t++) out.push(`theme${t}`);
-  for (let s = 0; s < MAX_SLOTS; s++) {
-    out.push(`j${s}on`, `j${s}x`, `j${s}y`, `j${s}morph`);
-    for (let i = 0; i < SPECIES_N; i++) out.push(`j${s}k${i}`);
-    for (let i = 0; i < 4; i++) out.push(`j${s}g${i}`);
-    // v10: 8 pulse frames and 8 tentacle ripple frames (4-frame stages use the first four)
-    for (const g of ["bf", "tf"]) for (let i = 0; i < 8; i++) out.push(`j${s}${g}${i}`);
-    for (let i = 0; i < TRAIL_N; i++) out.push(`j${s}tr${i}`);
-    out.push(`j${s}healthy`, `j${s}pale`, `j${s}flush`, `j${s}glow`, `j${s}rot`);
-    // Halloween's ghost-pale morph palette; quiet nights' bell glow
-    out.push(`j${s}ghost`, `j${s}nglow`);
-    // v16 (pairs): the two colours only a pair's baby can have
-    out.push(`j${s}dusk`, `j${s}pearl`);
-  }
+  for (let s = 0; s < MAX_SLOTS; s++) for (const key of JELLY_KEYS) out.push(`j${s}${key}`);
   // v16 (pairs): the tiny sparkle a pair shares (world), its twinkle frames one-hot
   out.push("pairX", "pairY", "pairO", "pairF0", "pairF1", "pairF2");
   // seasonal events: each season's decor prop (evHalloween)
@@ -868,12 +862,55 @@ export function specProps(foodN = K.foodN): string[] {
   for (let i = 0; i < (Array.isArray(octoSpots) && octoSpots.length ? octoSpots.length : 1); i++) out.push(`octoS${i}`);
   // ---- lamp gels ---- the tint layers (one-hot), the wheel by the switch, the UV light and what fluoresces under it
   for (let g = 0; g < GEL_N; g++) out.push(`gel${g}`);
-  out.push("haveGel", "gelPress", "uvLight");
-  for (let s = 0; s < MAX_SLOTS; s++) out.push(`j${s}uv`);
+  out.push("haveGel", "gelPress", "uvLight"); // (each jelly's own `uv` is one of JELLY_KEYS)
   // ---- temperature ---- the hood thermometer (two digits, one-hot; its colour by zone) and the shelf's two units
   for (let p = 0; p < 2; p++) for (let d = 0; d < 10; d++) out.push(`tc${p}n${d}`);
   out.push("tmpCool", "tmpRoom", "tmpWarm", "haveHeat", "haveCool", "heatOn", "coolOn", "heatPress", "coolPress");
   // optional: the art's "NEEDS MEDIUM" note on the large card, written only if the contract has it
   for (const n of ["needs12", "needs15", "needs17", "shopScroll", "shopScrollBar"]) if (K.props.includes(n)) out.push(n);
+  out.push(...nurseryProps()); // ---- nursery ----
   return out;
 }
+
+/** What one placed jelly writes after its prefix (j{s}{key} in the tank; nj{n}{key} in the nursery). */
+export const JELLY_KEYS: readonly string[] = (() => {
+  const out = ["on", "x", "y", "morph"];
+  for (let i = 0; i < SPECIES_N; i++) out.push(`k${i}`);
+  for (let i = 0; i < 4; i++) out.push(`g${i}`);
+  // v10: 8 pulse frames and 8 tentacle ripple frames (4-frame stages use the first four)
+  for (const g of ["bf", "tf"]) for (let i = 0; i < 8; i++) out.push(`${g}${i}`);
+  for (let i = 0; i < TRAIL_N; i++) out.push(`tr${i}`);
+  out.push("healthy", "pale", "flush", "glow", "rot");
+  // Halloween's ghost-pale morph palette; quiet nights' bell glow
+  out.push("ghost", "nglow");
+  // v16 (pairs): the two colours only a pair's baby can have (in the nursery too: a pair's baby can be born there)
+  out.push("dusk", "pearl");
+  // ---- lamp gels ---- how strongly the jelly fluoresces under the UV gel (the nursery bowl hangs in the same light)
+  out.push("uv");
+  return out;
+})();
+
+// ---- nursery ---- (shop item NURSERY_ITEM) a small bowl hung on the hood's lip, for raising polyps and ephyrae
+
+/** How many little ones the bowl holds, and its pellet pool (nf0..5). */
+export const NUR_CAP = 4;
+export const NUR_FOOD_N = 6;
+
+/**
+ * The nursery's view props: the open bowl (nurOpen; its centre nurX, nurY and scale nurS while it zooms out of the
+ * hanging bowl; the scrim nurDim), the hanging bowl (nurBowl; nurDot{n} a tiny jelly per resident, nurReady when one is
+ * waiting to move), its pellets (nf{i}x/y/o, nf{i}k0..2), the "ready to move" tags (nr{n}x/y/o) and its jellies
+ * (nj{n}{key}: nested Jelly instances, like j{s}).
+ */
+export function nurseryProps(): string[] {
+  const out = ["nurOpen", "nurX", "nurY", "nurS", "nurDim", "nurBowl", "nurReady"];
+  for (let n = 0; n < NUR_CAP; n++) out.push(`nurDot${n}`);
+  for (let i = 0; i < NUR_FOOD_N; i++) {
+    out.push(`nf${i}x`, `nf${i}y`, `nf${i}o`);
+    for (let k = 0; k < FOOD_KINDS; k++) out.push(`nf${i}k${k}`);
+  }
+  for (let n = 0; n < NUR_CAP; n++) out.push(`nr${n}x`, `nr${n}y`, `nr${n}o`);
+  for (let n = 0; n < NUR_CAP; n++) for (const key of JELLY_KEYS) out.push(`nj${n}${key}`);
+  return out;
+}
+// ---- end nursery ----

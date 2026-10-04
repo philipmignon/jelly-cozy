@@ -202,6 +202,8 @@ export function createTestHost(q: TestQuery): TestHost {
       Math.abs(shopY(s) - s.shop.to) < 0.5 &&
       (s.drawer.e === 0 || s.drawer.e === 1) &&
       s.focus.e === (s.focus.on ? 1 : 0) &&
+      (s.nursery === null || s.nursery.e === (s.nursery.open ? 1 : 0)) && // ---- nursery ---- the bowl's zoom
+
       !camMoving(s) &&
       s.wall === null &&
       s.wipe === null &&
@@ -234,7 +236,7 @@ export function createTestHost(q: TestQuery): TestHost {
         if (!virtual) await until(() => !c.fading(), "the jellies' art", 15_000);
         await until(() => !document.getElementById("loading"), "the loading screen to go");
       },
-      /** Resolves when nothing is mid-way: the shop, the drawer, the close-up, the camera, the wall, the night fade,
+      /** Resolves when nothing is mid-way: the shop, the drawer, the close-up, the nursery bowl, the camera, the wall, the night fade,
        *  the pan hints, a jelly fading in, and the HTML overlays' CSS transitions. Virtual: steps frames until then. */
       async idle(timeout = 20_000): Promise<void> {
         if (c.fading()) await artIn();

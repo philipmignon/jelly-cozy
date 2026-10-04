@@ -30,6 +30,7 @@ import {
 import { COMB, JUVENILE, TAB_ITEMS, collectionOf, keepsakeOf } from "./species";
 import { GEL_NAMES } from "./gels";
 import { tempReading } from "./temperature";
+import { NURSERY } from "./nursery";
 import { MILESTONES } from "./keepsakes";
 import { FIND_SETS } from "./finds";
 import { SCRUB_STEP_MAX } from "./dirt";
@@ -88,6 +89,11 @@ export interface KeyboardHost {
   /** buy shop item i as a tap on its card would (sounds, saving); null when the shop isn't open */
   buy(i: number): BuyResult | null;
   journal: { readonly isOpen: boolean; open(): void; close(): void };
+  /**
+   * ---- nursery ---- the bowl (once bought): open it (false: there's none; its HTML strip then takes the keys, see
+   * busy()), what it holds in words, and nursery slot n's name and kind for the announcements
+   */
+  nursery?: { open(): boolean; words(): string; name(n: number): { name: string; k: number; g: number } | null };
 }
 
 export interface Keyboard {
@@ -145,11 +151,14 @@ const BUTTON_LABEL: Record<string, string> = {
   gel: "Gel wheel", // ---- lamp gels ----
   heater: "Heater", // ---- temperature ----
   chiller: "Chiller",
+  nursery: "Nursery", // ---- nursery ---- the hanging bowl (not a .riv button: its box is contract.nursery.icon)
 };
 /** ---- lamp gels ---- ---- temperature ---- the buttons that only show once their thing is bought */
 const owns = (s: State, name: string): boolean =>
   name === "shrimp" || name === "plankton" ? hasTool(s, name) : name === "gel" ? anyGelOf(s) : name === "heater" ? s.climate.heater : name === "chiller" ? s.climate.chiller : true;
 const anyGelOf = (s: State) => s.gels.owned.some((o, i) => o && i > 0);
+/** ---- nursery ---- the hanging bowl as a focus target */
+const NURSERY_BUTTON = "nursery";
 /** The shelf button that picks up each tool. */
 const BUTTON_OF: Record<Exclude<Tool, "none">, ButtonName> = { food: "feed", sponge: "clean", shrimp: "shrimp", plankton: "plankton" };
 const TOOL_WORDS: Record<Exclude<Tool, "none">, string> = { food: "Food can", sponge: "Sponge", shrimp: "Brine shrimp jar", plankton: "Plankton bottle" };
@@ -198,7 +207,7 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
     "Tab moves between the jellies, the pearl, visitors and the shelf, and arrows jump to the nearest one that way. " +
     "Enter pets a jelly or presses a button, N opens a jelly's card. F feeds, S scrubs the glass, 1 to 4 pick up the foods and the sponge, " +
     "L flips the light, G changes the lamp's gel, H and C switch the heater and the chiller, " +
-    "B opens the shop, J the journal, the square brackets look left and right, M mutes, Escape puts things down. " +
+    "B opens the shop, J the journal, U the nursery, the square brackets look left and right, M mutes, Escape puts things down. " +
     "In the shop, Enter on a decoration you own puts it away, or places it again.";
   document.body.append(help);
   canvas.tabIndex = 0;
@@ -243,7 +252,10 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
       jellies: state.slots.flatMap((j, slot) => (j ? [{ slot, x: j.x }] : [])),
       pearl: pearlShowing(state),
       visitor: (visitorInfo(state)?.on ?? 0) > 0.5,
-      buttons: BUTTONS.filter((b) => owns(state, b.name)),
+      buttons: [
+        ...BUTTONS.filter((b) => owns(state, b.name)),
+        ...(state.nursery ? [{ name: NURSERY_BUTTON, x: NURSERY.icon.x }] : []), // ---- nursery ----
+      ],
     });
 
   /** The target's box in artboard (screen) coordinates. */
@@ -267,6 +279,10 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
       const v = visitorInfo(state);
       if (!v || v.on <= 0.5) return null;
       return { x0: worldToScreen(state, v.x - 54), x1: worldToScreen(state, v.x + 54), y0: worldToScreenY(state, v.y - 48), y1: worldToScreenY(state, v.y + 48) };
+    }
+    if (t.name === NURSERY_BUTTON) {
+      const r = NURSERY.icon; // ---- nursery ----
+      return state.nursery ? { x0: r.x, y0: r.y, x1: r.x + r.w, y1: r.y + r.h } : null;
     }
     const b = BUTTONS.find((x) => x.name === t.name);
     return b ? { x0: b.x, y0: b.y, x1: b.x + b.w, y1: b.y + b.h } : null;
@@ -300,6 +316,7 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
       return v ? `${/^[aeiou]/i.test(v.name) ? "An" : "A"} ${v.name}, visiting. Enter to say hello.` : "";
     }
     const label = BUTTON_LABEL[t.name] ?? t.name;
+    if (t.name === NURSERY_BUTTON) return h.nursery?.words() ?? label; // ---- nursery ----
     if (t.name === "lamp") return `${label}, ${state.nightTarget ? "night" : "day"}.`;
     // ---- lamp gels ----
     if (t.name === "gel") return `${label}: ${GEL_NAMES[state.gels.on] ?? "Clear"}${state.gels.on ? " gel" : ""} on the lamp. Enter for the next.`;
@@ -521,6 +538,10 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
           const v = visitorInfo(state);
           if (v) h.tapWorld(v.x, v.y);
         } else {
+          if (t.name === NURSERY_BUTTON) {
+            h.nursery?.open(); // ---- nursery ---- its strip takes the focus and the keys
+            return true;
+          }
           const tool = (Object.keys(BUTTON_OF) as Exclude<Tool, "none">[]).find((k) => BUTTON_OF[k] === t.name);
           if (tool) {
             pick(tool);
@@ -571,6 +592,10 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
         return true;
       case "hold":
         pick(HOLD_KEYS[a.n] ?? "food");
+        return true;
+      case "nursery":
+        // ---- nursery ---- U: the bowl, if there is one
+        if (!h.nursery?.open()) tell(state.nursery ? "The nursery can't open while the shop is up." : "There's no nursery yet. The shop's Tank tab sells one.");
         return true;
       case "escape":
         if (state.tool !== "none") {
@@ -655,7 +680,8 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
     event(e) {
       const w = eventWords(
         e,
-        (slot) => {
+        (slot, nursery) => {
+          if (nursery) return h.nursery?.name(slot) ?? null; // ---- nursery ---- a nursery slot
           const i = jellyInfo(state, slot);
           return i && { name: i.name, k: i.k, g: i.g };
         },

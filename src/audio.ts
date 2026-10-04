@@ -7,7 +7,7 @@
 export type SoundName =
   | "feed" | "plop" | "eat" | "pet" | "tap" | "clean" | "cleaned"
   | "lampOn" | "lampOff" | "pulse" | "grow" | "unlock" | "buy" | "ui"
-  | "pour" | "scrub" | "pickup" | "putdown" | "switch" | "shutter";
+  | "pour" | "scrub" | "pickup" | "putdown" | "switch" | "shutter" | "chime";
 
 export interface TankAudio {
   /** Call from the first user gesture (pointerdown). Creates/resumes the AudioContext, starts ambience. Idempotent. */
@@ -59,6 +59,7 @@ export const SOUND_SPEC: Record<SoundName, { gap: number; len: number }> = {
   buy: { gap: 0.15, len: 0.45 }, ui: { gap: 0.04, len: 0.1 },
   pour: { gap: 0.09, len: 0.25 }, scrub: { gap: 0.11, len: 0.2 }, pickup: { gap: 0.1, len: 0.2 },
   putdown: { gap: 0.1, len: 0.2 }, switch: { gap: 0.08, len: 0.12 }, shutter: { gap: 0.3, len: 0.15 },
+  chime: { gap: 0.6, len: 1.4 },
 };
 
 /** Debounce + voice cap. admit() returns false if the sound fired too recently or too many are ringing. */
@@ -451,6 +452,10 @@ export function createTankAudio(): TankAudio {
       noise({ type: "bandpass", f: 3200, q: 1.5, d: 0.018, g: 0.06 });
       noise({ type: "bandpass", f: 1500, q: 1.2, at: 0.06, d: 0.03, g: 0.05 });
       tone({ f: 420, f2: 300, glide: 0.03, at: 0.06, d: 0.04, g: 0.035, lp: 1400 });
+    },
+    // v16 a find (sea glass or a shell): a soft glassy chime, three quiet bells drifting down (E6, B5, G#5), slow to fade.
+    chime() {
+      [1318.5, 987.77, 830.61].forEach((f, i) => bell(f * jitter(0.01), i * 0.11, 0.032 - i * 0.006, 1.1));
     },
   };
 

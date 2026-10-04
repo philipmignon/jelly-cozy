@@ -6,6 +6,7 @@
  */
 import { SPECIES_NAMES } from "./species";
 import { MILESTONES } from "./keepsakes";
+import { FIND_ITEMS, FIND_SETS } from "./finds";
 import { VISITORS, VISITOR_NAMES, nightVisitor } from "./visitors";
 
 // ---------------------------------------------------------------- keys
@@ -222,8 +223,11 @@ export interface SayEvent {
   keepsake?: number;
   /** v13 "rode": the bubbler was on screen */
   seen?: boolean;
-  /** v14 "visitorArrived": the first time this kind ever came */
+  /** v14 "visitorArrived": the first time this kind ever came; v16 "found": the first of its kind */
   first?: boolean;
+  /** v16 "found": which find (FIND_ITEMS); "setDone": which set (FIND_SETS) */
+  find?: number;
+  set?: number;
 }
 
 /** v14: how each night visitor's arrival is said (they're rare: worth a line of their own). */
@@ -296,6 +300,19 @@ export function eventWords(
     case "rode":
       // only a ride you could see (the bubbler on screen), and now and then: rides are frequent
       return j && e.seen ? { text: `${j.name} rode the bubbler.`, low: true } : null;
+    case "found": {
+      // v16: sea glass or a shell turned up and went in the jar
+      const it = FIND_ITEMS[e.find ?? -1];
+      if (!it) return null;
+      const name = `${it.set === 0 ? "piece of " : ""}${it.name.toLowerCase()}`; // "a piece of red sea glass"
+      return e.first
+        ? { text: `You found ${article(name)} ${name}! New in your collection.`, low: false }
+        : { text: `You found another ${name}${e.amount ? `: ${plus(e.amount)}` : ""}.`, low: false };
+    }
+    case "setDone": {
+      const st = FIND_SETS[e.set ?? -1];
+      return st ? { text: `${st.title} complete! ${st.reward.charAt(0).toUpperCase()}${st.reward.slice(1)} is in your tank.`, low: false } : null;
+    }
   }
   return null;
 }

@@ -29,7 +29,7 @@ export const flow = {
     await t.eval(() => [[130, 330], [360, 250], [590, 330], [180, 590], [430, 520], [620, 650], [330, 800]].forEach(([x, y], i) => window.__jt.place(i, x, y)));
     await t.advance(1500);
     const s = await t.st();
-    t.check("visual: the full tank has 7 jellies and 11 decorations", s.slots.filter(Boolean).length === 7 && s.owned.every(Boolean), JSON.stringify({ n: s.slots.filter(Boolean).length, owned: s.owned }));
+    t.check("visual: the full tank has 7 jellies and 11 decorations", s.slots.filter(Boolean).length === 7 && s.owned.slice(0, 11).every(Boolean), JSON.stringify({ n: s.slots.filter(Boolean).length, owned: s.owned }));
     await snap(t, "full-tank");
     await done(t);
 

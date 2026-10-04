@@ -954,8 +954,8 @@ describe("shop v3", () => {
     run(s, 0.5);
     openShop(s);
     expect(s.tab).toBe(0);
-    // every item on exactly one tab
-    expect([...TAB_ITEMS.flat()].sort((a, b) => a - b)).toEqual(SHOP_ITEMS.map((_, i) => i));
+    // every item on exactly one tab (v16: but the ids held for features merged in later)
+    expect([...TAB_ITEMS.flat()].sort((a, b) => a - b)).toEqual(SHOP_ITEMS.flatMap((it, i) => (it.kind === "reserved" ? [] : [i])));
   });
 });
 

@@ -14,6 +14,11 @@ export interface KeepNoteEntry {
   /** the milestone's journal line and its keepsake, for the summary list */
   title: string;
   reward: string;
+  /** v16: another portrait than keep{m} (journal-art key: the collection's rewards are sgr0, sgr1), the note's
+   *  heading ("A keepsake!") and where "See journal" opens the book (passed to the `journal` callback) */
+  art?: string;
+  heading?: string;
+  place?: string;
 }
 
 export interface KeepNote {
@@ -65,7 +70,7 @@ const CSS = `
 `;
 
 /** A portrait scaled by a whole number (every art pixel stays square) to fit maxW x maxH. */
-function portrait(m: number, maxW: number, maxH: number): HTMLImageElement {
+function portrait(key: string, maxW: number, maxH: number): HTMLImageElement {
   const img = new Image();
   img.alt = "";
   img.onload = () => {
@@ -73,12 +78,12 @@ function portrait(m: number, maxW: number, maxH: number): HTMLImageElement {
     img.style.width = `${img.naturalWidth * k}px`;
     img.style.height = `${img.naturalHeight * k}px`;
   };
-  img.src = ART[`keep${m}`] ?? "";
+  img.src = ART[key] ?? "";
   return img;
 }
 
-/** `journal`: the "See journal" button (opens it on the Keepsakes page). */
-export function createKeepNote(journal: () => void): KeepNote {
+/** `journal`: the "See journal" button (opens it on the Keepsakes page; v16: on the entry's `place` when it has one). */
+export function createKeepNote(journal: (place?: string) => void): KeepNote {
   const style = document.createElement("style");
   style.textContent = CSS;
   document.head.append(style);
@@ -105,12 +110,12 @@ export function createKeepNote(journal: () => void): KeepNote {
         card.replaceChildren();
         const h = document.createElement("h2");
         h.id = "jt-keep-note-title";
-        h.textContent = one ? "A keepsake!" : "Keepsakes for you";
+        h.textContent = one ? entries[0]!.heading ?? "A keepsake!" : "Keepsakes for you";
         card.append(h);
         if (one) {
           const plate = document.createElement("div");
           plate.className = "jt-keep-plate";
-          plate.append(portrait(entries[0]!.m, 240, 104));
+          plate.append(portrait(entries[0]!.art ?? `keep${entries[0]!.m}`, 240, 104));
           const p = document.createElement("p");
           p.textContent = entries[0]!.note;
           card.append(plate, p);
@@ -123,7 +128,7 @@ export function createKeepNote(journal: () => void): KeepNote {
             const li = document.createElement("li");
             const art = document.createElement("span");
             art.className = "art";
-            art.append(portrait(e.m, 36, 30));
+            art.append(portrait(e.art ?? `keep${e.m}`, 36, 30));
             const text = document.createElement("span");
             const b = document.createElement("b");
             b.textContent = e.title;
@@ -152,7 +157,7 @@ export function createKeepNote(journal: () => void): KeepNote {
         ok.onclick = close;
         see.onclick = () => {
           close();
-          journal();
+          journal(entries.length === 1 ? entries[0]!.place : undefined);
         };
       });
     },

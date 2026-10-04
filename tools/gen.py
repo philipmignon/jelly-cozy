@@ -6422,6 +6422,412 @@ def keep_contract(c):
 # ---- end keepsakes ----
 
 
+# ---- sea glass ----
+# v16: sea glass and shells (src/finds.ts). Scrubbing a spot, sifting the sand with the sponge, the crab's digs and
+# a bubbler ride now and then turn up a find: a little sprite (sg{i}, one-hot) rises from where it was found and
+# flies into the jar in the hood (screen space: sgX/sgY/sgO/sgS, a soft glow sgGlow; the jar sgJar, its bump
+# sgJarS; tapping the jar fires `finds`, which opens the journal's Collection page). Two sets: every colour of sea
+# glass leaves a wind chime hanging from the hood (decoration 11, shop item 36), all five shells a shell grotto
+# (decoration 12, shop item 37). Shop items 31..35 belong to other v16 features: placeholders here (no card).
+# All embedded and small (~30 sprites). Everything sea-glass-specific lives here; the scene, the shop and the
+# contract pick it up through a few marked lines.
+
+SG_ITEM_IDS = (36, 37)                     # the set rewards' shop items
+SG_RESERVED = tuple(range(31, 36))         # other v16 features' shop ids (placeholders until they merge)
+SG_LIGHT = (-0.55, -0.75, 0.45)
+# frosted glass: a dark rim, the frosted body, pale frost, a highlight
+SG_GREEN = ramp("1d4630", "3a7a4c", "66a86c", "9ed49c", "d8f2d0")
+SG_BROWN = ramp("3a1c0c", "6a3816", "9c602a", "c8945a", "eed0a2")
+SG_WHITE = ramp("6c7e8a", "9cb2bc", "c4d8de", "e2eef0", "ffffff")
+SG_COBALT = ramp("0e1650", "1e3698", "3c62d2", "7c9ef2", "cadaff")
+SG_RED = ramp("480a14", "8a1a28", "c6363e", "ea7c78", "ffd2ca")
+SG_COWRIE = ramp("4a2a1a", "8a5a34", "c89a62", "ead2a2", "fff6e2")
+SG_SCALLOP = ramp("5a1e24", "a2443a", "e0785a", "f6aa86", "ffe0cc")
+SG_CONCH = ramp("4a3428", "8c6a52", "c8a684", "ecd8bc", "fffaf0")
+SG_PINK = ramp("7a2a40", "c25a72", "f08aa0", "ffc4cc", "fff0f2")
+SG_FOSSIL = ramp("3e3830", "6c6252", "9a8e78", "c6baa0", "eae2cc")
+SG_NAUT = ramp("4a3226", "8e6e56", "cfb79a", "f0e2cc", "fffaf2")
+SG_RUST = hx("8a3a1c")
+SG_CORD = hx("d8c8a4")
+SG_DRIFT = ramp("2e2018", "5a4232", "86684e", "b0947a", "d6c2a8")
+# where the jar sits in the hood strip (logical): between the meters (x 49..164) and the HTML requests note
+SG_JAR_X, SG_JAR_BASE = 178, 13
+SG_JAR_HIT = nid()  # the jar's click target (trigger `finds`)
+
+
+def sg_poly(pts):
+    """The pixels whose middles fall inside a polygon of logical points."""
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    out = set()
+    for y in range(math.floor(min(ys)) - 1, math.ceil(max(ys)) + 1):
+        for x in range(math.floor(min(xs)) - 1, math.ceil(max(xs)) + 1):
+            cx, cy, inside = x + 0.5, y + 0.5, False
+            for (ax, ay), (bx, by) in zip(pts, pts[1:] + pts[:1]):
+                if (ay > cy) != (by > cy) and cx < ax + (cy - ay) * (bx - ax) / (by - ay):
+                    inside = not inside
+            if inside:
+                out.add((x, y))
+    return out
+
+
+def sg_round(mask):
+    """Knock the corners off a mask: a pixel with fewer than two neighbours in it goes (tumbled smooth)."""
+    return {p for p in mask if sum((p[0] + a, p[1] + b) in mask for a, b in ((1, 0), (-1, 0), (0, 1), (0, -1))) >= 2}
+
+
+SG_SHAPES = [  # tumbled shards: green, brown, white, cobalt, red
+    [(-5, -1), (-3, -4), (2, -4.5), (5.5, -2), (5, 2.5), (1, 4), (-4.5, 3)],
+    [(-6.5, 0), (-4, -3.5), (3, -3.5), (6.5, -1), (4.5, 3), (-3.5, 3.5)],
+    [(-4.5, -4), (3, -3.5), (5.5, 2), (0.5, 4.5), (-5, 2)],
+    [(-4.5, -2), (-1, -4.5), (4, -3.5), (5.5, 1), (2, 4.5), (-3.5, 3.5)],
+    [(-4, -1), (-2, -4), (2.5, -4), (4.5, -0.5), (2, 3.5), (-2.5, 3.5)],
+]
+
+
+def sg_glass(i, s=1.0):
+    """Sea glass piece i: a tumbled shard, frosted, lit from the upper left. Light comes through it, so the far
+    (lower right) side glows a little inside the rim. Origin = its middle."""
+    rmp = [SG_GREEN, SG_BROWN, SG_WHITE, SG_COBALT, SG_RED][i]
+    mask = sg_round(sg_poly([(x * s, y * s) for x, y in SG_SHAPES[i]]))
+    px = nv_pillow(mask, rmp, R=2.6, light=SG_LIGHT)
+    r2 = random.Random(70 + i)
+    for (x, y) in mask:  # frost: a few paler grains
+        if r2.random() < 0.06 and px.get(x, y) == rmp[2]:
+            px.put(x, y, rmp[3])
+    for (x, y) in mask:  # light through the glass, glowing inside the far rim
+        if (x + 1, y + 1) not in mask and (x - 1, y - 1) in mask and (x - 2, y - 2) in mask and x + y > 0:
+            px.put(x - 1, y - 1, rmp[3])
+    x0 = min(x for x, _ in mask)
+    y0 = min(y for _, y in mask)
+    for dx, dy in ((2, 1), (3, 1), (1, 2)):  # a soft highlight
+        if (x0 + dx, y0 + dy) in mask and (x0 + dx + 1, y0 + dy + 1) in mask:
+            px.put(x0 + dx, y0 + dy, rmp[4])
+    return px
+
+
+def sg_cowrie(s=1.0):
+    """A cowrie: a glossy egg of a shell, cream with brown speckles, the toothed slit just showing underneath."""
+    mask = nv_ellipse(0, 0, 5.4 * s, 3.8 * s)
+    r2 = random.Random(75)
+    spots = {(r2.randint(-4, 3), r2.randint(-3, 1)) for _ in range(9)}
+    px = nv_pillow(mask, SG_COWRIE, R=3.2, light=SG_LIGHT, bias=lambda x, y: -0.35 if (x, y) in spots else 0)
+    for x in range(-3, 4):  # the slit, low on the shell, with its little teeth
+        if (x, 2) in mask:
+            px.put(x, 2, SG_COWRIE[0] if x % 2 else SG_COWRIE[1])
+    px.put(-2, -2, SG_COWRIE[4])
+    px.put(-1, -2, SG_COWRIE[4])
+    px.put(-2, -1, SG_COWRIE[4])
+    return px
+
+
+def sg_scallop(s=1.0):
+    """A scallop: a fan of ribs from the hinge, coral pink, a scalloped edge and two little ears."""
+    mask = set()
+    hx_, hy = 0, 4.5
+    for y in range(-8, 6):
+        for x in range(-8, 9):
+            dx, dy = x + 0.5 - hx_, y + 0.5 - hy
+            a = math.atan2(dy, dx)
+            if not (-math.pi * 0.8 < a < -math.pi * 0.2):
+                continue
+            r = math.hypot(dx, dy)
+            if r <= (7.4 + 0.45 * math.cos(a * 16)) * s:
+                mask.add((x, y))
+    hy_i = math.floor(hy)
+    for x in range(-3, 3):  # the ears either side of the hinge
+        mask.add((x, hy_i))
+        mask.add((x, hy_i - 1))
+    mask = sg_round(mask)
+    rib = lambda x, y: -0.22 if math.sin(math.atan2(y + 0.5 - hy, x + 0.5 - hx_) * 16) < -0.3 else 0.05
+    return nv_pillow(mask, SG_SCALLOP, R=2.4, light=SG_LIGHT, bias=rib)
+
+
+def sg_conch(s=1.0):
+    """A conch: a knobbly spire to the left, the body swelling right into a flared pink lip."""
+    mask = nv_ellipse(0.5, 0.5, 4.6 * s, 3.4 * s, 0.25) | sg_poly([(-3, -1.5), (-7.5, -0.5), (-3, 2.5)])
+    for (x, y) in ((-4, -2), (-2, -3), (0, -4), (2, -4)):  # knobs along the shoulder
+        mask.add((x, y))
+    bands = lambda x, y: -0.28 if (x - y) % 4 == 0 and x < 3 else 0
+    px = nv_pillow(mask, SG_CONCH, R=2.6, light=SG_LIGHT, bias=bands)
+    lip = sg_round(nv_ellipse(4.2, 1.2, 2.4 * s, 3.4 * s, -0.3))
+    for (x, y) in lip:  # the flared lip, glossy pink inside
+        inner = all((x + a, y + b) in lip for a, b in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+        px.put(x, y, SG_PINK[3] if inner and x < 5 else SG_PINK[2] if inner else SG_PINK[1])
+    px.put(4, 0, SG_PINK[4])
+    px.put(3, 1, SG_PINK[4])
+    return px
+
+
+def sg_fossil(s=1.0):
+    """A sand dollar fossil: a flat disc of stone with the five-petal flower pressed into it."""
+    mask = nv_ellipse(0, 0, 5.3 * s, 4.9 * s)
+    petal = set()
+    for k in range(5):
+        a = -math.pi / 2 + k * 2 * math.pi / 5
+        for t in (1.6, 2.3, 3.0, 3.6):
+            w = 0.6 if t in (1.6, 3.6) else 1.0
+            for side in (-w, w):
+                petal.add((math.floor(t * math.cos(a) - side * math.sin(a) * 0.9), math.floor(t * math.sin(a) + side * math.cos(a) * 0.9)))
+    px = nv_pillow(mask, SG_FOSSIL, R=2.2, light=SG_LIGHT, bias=lambda x, y: -0.32 if (x, y) in petal else 0)
+    px.put(-1, -1, SG_FOSSIL[1])
+    px.put(0, -1, SG_FOSSIL[1])
+    r2 = random.Random(77)
+    for _ in range(6):  # pits in the stone
+        x, y = r2.randint(-4, 3), r2.randint(-3, 3)
+        if (x, y) in mask and (x, y) not in petal:
+            px.put(x, y, SG_FOSSIL[2])
+    return px
+
+
+def sg_nautilus(s=1.0):
+    """A nautilus: a coiled shell, cream with rust tiger stripes sweeping back from the opening on the right."""
+    mask = nv_ellipse(0, 0, 5.6 * s, 5.0 * s)
+    stripe = lambda x, y: (-0.42 if math.sin(math.atan2(y + 0.5, x + 0.5) * 4 + math.hypot(x + 0.5, y + 0.5) * 0.9) > 0.35
+                           and x < 2 and math.hypot(x + 0.5, y + 0.5) > 1.8 else 0)
+    px = nv_pillow(mask, SG_NAUT, R=3.0, light=SG_LIGHT, bias=stripe)
+    for (x, y) in mask:
+        if stripe(x, y) and px.get(x, y) not in (SG_NAUT[0], SG_NAUT[1]):
+            px.put(x, y, SG_RUST if (x + y) % 3 else SG_NAUT[1])
+    for (x, y) in nv_ellipse(3.6, 0.6, 1.8, 3.4):  # the opening: dark inside a pearly lip
+        if (x, y) in mask:
+            px.put(x, y, SG_NAUT[0] if x >= 4 else SG_NAUT[4])
+    px.put(-1, 0, SG_NAUT[1])  # the coil's eye
+    px.put(0, 0, SG_NAUT[0])
+    return px
+
+
+def sg_item(i, s=1.0):
+    """Find i (src/finds.ts FIND_ITEMS order): five colours of sea glass, then the five shells. Origin = middle."""
+    return sg_glass(i, s) if i < 5 else [sg_cowrie, sg_scallop, sg_conch, sg_fossil, sg_nautilus][i - 5](s)
+
+
+SG_N = 10
+
+
+def sg_bead(i):
+    """A small bead of sea glass for the wind chime (about 4x5)."""
+    rmp = [SG_GREEN, SG_BROWN, SG_WHITE, SG_COBALT, SG_RED][i]
+    mask = sg_round(sg_poly([(x * 0.62, y * 0.72) for x, y in SG_SHAPES[i]]))
+    px = nv_pillow(mask, rmp, R=1.8, light=SG_LIGHT)
+    x0 = min(x for x, _ in mask)
+    y0 = min(y for _, y in mask)
+    if (x0 + 1, y0 + 1) in mask:
+        px.put(x0 + 1, y0 + 1, rmp[4])
+    return px
+
+
+# the wind chime (decoration 11): a driftwood bar on a cord from the hood, five strands of sea glass below it.
+# Logical, origin = the base point (the lowest bead's bottom): the hood's edge is SG_CHIME_H above it.
+SG_CHIME_H = 48
+SG_BAR_Y = -SG_CHIME_H + 9
+SG_STRANDS = [(-11, 15), (-6, 23), (0, 31), (6, 21), (11, 13)]  # (x, cord length below the bar)
+
+
+def sg_chime_bar():
+    """The driftwood bar and the cords up to the hood."""
+    px = Px()
+    for x in range(-14, 15):  # the bar: weathered wood, lit along the top, knotted
+        t = 0.6 + 0.12 * math.sin(x * 1.3)
+        px.put(x, SG_BAR_Y - 1, SG_DRIFT[3] if x > -14 else SG_DRIFT[2])
+        px.put(x, SG_BAR_Y, SG_DRIFT[1 + shade_index(t, 2, x, 0)])
+        px.put(x, SG_BAR_Y + 1, SG_DRIFT[0] if x % 5 else SG_DRIFT[1])
+    for x in (-14, 14):
+        px.put(x, SG_BAR_Y - 2, SG_DRIFT[2])
+    for k in range(1, 9):  # two cords from a knot under the hood down to the bar's ends
+        f = k / 9
+        px.put(round(-12 * f), -SG_CHIME_H + k, SG_CORD)
+        px.put(round(12 * f), -SG_CHIME_H + k, SG_CORD)
+    px.put(0, -SG_CHIME_H, SG_DRIFT[1])
+    px.put(0, -SG_CHIME_H + 1, SG_CORD)
+    return px
+
+
+def sg_strand(k):
+    """Strand k: a cord from the bar and its bead at the end (the middle one has a little shell above it).
+    Origin = where it ties on to the bar."""
+    x0, length = SG_STRANDS[k]
+    px = Px()
+    for y in range(0, length - 2):
+        px.put(0, y, SG_CORD if y % 6 else hx("b8a684"))
+    bead = sg_bead([3, 1, 4, 0, 2][k])
+    bx0, by0, bx1, by1 = bead.bbox()
+    for (x, y), c in bead.d.items():
+        px.put(x - (bx0 + bx1) // 2, y - by0 + length - 3, c)
+    if k == 2:  # a cowrie tied on halfway down
+        cw = sg_cowrie(0.5)
+        for (x, y), c in cw.d.items():
+            px.put(x, y + 13, c)
+    return px
+
+
+def sg_chime_art():
+    """The whole chime, still (the shop card, the journal, the overlap outline and its hit box)."""
+    px = sg_chime_bar()
+    for k, (x0, _) in enumerate(SG_STRANDS):
+        for (x, y), c in sg_strand(k).d.items():
+            px.put(x + x0, y + SG_BAR_Y + 2, c)
+    return px
+
+
+def sg_chime_inner():
+    """What sits in the chime's Lift node: the bar, and each strand swaying a pixel either way on its own stepped
+    timeline (SgChimeSway{k}, held still while calm)."""
+    kids = [image("SgChimeBar", sg_chime_bar())]
+    for k, (x0, _) in enumerate(SG_STRANDS):
+        sid = nid()
+        kids.append(node(f"SgStrand{k}", [image(f"SgStrand{k}", sg_strand(k))], x=x0 * P, y=(SG_BAR_Y + 2) * P, node_id=sid))
+        dur = [228, 252, 276, 240, 264][k]
+        ph = [0, 70, 30, 110, 150][k]
+        q = dur // 4
+        sway = lambda f, dur=dur, ph=ph, q=q: [0, 1, 0, -1][((f - ph) % dur) // q % 4]  # rest, right, rest, left
+        frames = sorted({0} | {(m * q + ph) % dur for m in range(4)})
+        add_anim(f"SgChimeSway{k}", dur, [keys(sid, 13, [(f, (x0 + sway(f)) * P) for f in frames] + [(dur, (x0 + sway(0)) * P)])])
+    return list(reversed(kids))
+
+
+# the shell grotto (decoration 12): a mound of reef rock with a dark little cave, its mouth lined with shells.
+def sg_grotto_art():
+    """Origin = base centre on the sand."""
+    rock = set()
+    for y in range(-30, 1):
+        for x in range(-27, 28):
+            u, v = (x + 0.5) / 26.5, (y + 0.5) / 30
+            wob = 0.05 * math.sin(x * 0.7) + 0.04 * math.sin(x * 1.9 + 1)
+            if u * u + v * v <= 1 + wob:
+                rock.add((x, y))
+    mouth = {(x, y) for x in range(-10, 10) for y in range(-15, 1) if ((x + 0.5) / 9.5) ** 2 + ((y + 0.5) / 15) ** 2 <= 1}
+    r2 = random.Random(78)
+    px = nv_pillow(rock - mouth, R_ROCK, R=5, light=SG_LIGHT, bias=lambda x, y: -0.15 if r2.random() < 0.1 else 0)
+    for (x, y) in mouth:  # the cave: dark, a little lighter low down, sand on its floor
+        d = -y / 15
+        c = R_ROCK[0] if d > 0.35 or abs(x + 0.5) > 6 else hx("10142a")
+        px.put(x, y, c)
+    for x in range(-8, 8):
+        for y in range(-1, 1):
+            px.put(x, y, R_SAND[3] if (x + y) % 3 else R_SAND[2])
+    for x, y in ((-2, -6), (1, -4)):  # a glint of sea glass at the back
+        px.put(x, y, SG_COBALT[3])
+    px.put(-1, -6, SG_GREEN[3])
+    for (x, y) in list(rock):  # moss on the lit shoulders
+        if (x, y - 1) not in rock and y < -8 and r2.random() < 0.5:
+            px.put(x, y, R_KELP[3] if x < 0 else R_KELP[2])
+    # shells set into the rock round the mouth
+    for i, (sx, sy, sc) in ((6, (-15, -9, 0.8)), (5, (-11, -19, 0.75)), (9, (0, -22, 0.8)), (7, (11, -18, 0.75)), (8, (15, -8, 0.75))):
+        for (x, y), c in sg_item(i, sc).d.items():
+            px.put(x + sx, y + sy, c)
+    for i, (sx, sy) in enumerate(((-22, -2), (21, -1), (-6, -26))):  # a few loose pebbles of glass about it
+        for (x, y), c in sg_bead([0, 2, 1][i]).d.items():
+            px.put(x + sx, y + sy, c)
+    sand_mound(px, -30, 30, 2, seed=79)
+    return px
+
+
+# ---- the jar in the hood (screen space): a little glass jar with a cork, a few finds in the bottom
+def sg_jar_art():
+    """Origin = the base centre."""
+    px = Px()
+    body = {(x, y) for x in range(-4, 5) for y in range(-9, 0) if not ((x in (-4, 4)) and y in (-9, -1))}
+    for (x, y) in body:
+        edge = (x + 1, y) not in body or (x - 1, y) not in body or (x, y + 1) not in body
+        px.put(x, y, R_GLASS[5] if x == -3 and y < -2 else R_GLASS[3] if edge else hx("8fd0e0", 120))
+    for (x, y, c) in ((-2, -2, SG_GREEN[3]), (-1, -2, SG_GREEN[2]), (1, -2, SG_COBALT[3]), (2, -2, SG_RED[3]), (0, -3, SG_WHITE[3]),
+                      (-2, -3, SG_BROWN[3]), (1, -3, SG_SCALLOP[3]), (2, -3, SG_SCALLOP[2]), (0, -2, SG_COWRIE[3]), (-1, -4, SG_GREEN[3])):
+        px.put(x, y, c)
+    for x in range(-3, 4):  # the neck and the cork
+        px.put(x, -10, R_GLASS[2])
+        px.put(x, -11, R_WOOD[4] if x < 0 else R_WOOD[3])
+        px.put(x, -12, R_WOOD[5] if x < 1 else R_WOOD[4])
+    px.put(-3, -11, R_WOOD[3])
+    px.put(3, -12, R_WOOD[2])
+    return px
+
+
+def sg_jar_node():
+    """The hood's jar: shown in the player's own tank (sgJar), bumped as a find lands (sgJarS), tapped: `finds`."""
+    hit = rect_shape("SgJarHit", -10 * P, -SG_JAR_BASE * P, 20 * P, 14 * P, solid(hx("ffffff", 1)), sid=SG_JAR_HIT)
+    jar = node("SgJarArt", [image("SgJar", sg_jar_art())], binds=[bind(prop("sgJarS", default=1), 16), bind(prop("sgJarS", default=1), 17)])
+    return node("SgJar", [jar, hit], x=SG_JAR_X * P, y=SG_JAR_BASE * P, opacity=0, binds=[bind(prop("sgJar"), 18)])
+
+
+def sg_find_node():
+    """The find on its way to the jar (screen space, over the tank and the hood)."""
+    glow = ellipse_shape("SgGlow", 0, 0, 34 * P, 34 * P, rad_grad(0, 0, 17 * P, [(0, hx("fffbe0", 190)), (0.35, hx("dff8ff", 90)), (1, hx("dff8ff", 0))]),
+                         blend="screen", opacity=0, binds=[bind(prop("sgGlow"), 18)])
+    kinds = [image(f"Sg{i}", sg_item(i), node_name=f"SgFind{i}", opacity=0, binds=[bind(prop(f"sg{i}"), 18)]) for i in range(SG_N)]
+    return node("SgFind", list(reversed(kinds)) + [glow], x=-300, y=-300, opacity=0,
+                binds=[bind(prop("sgX", default=-300), 13), bind(prop("sgY", default=-300), 14), bind(prop("sgO"), 18),
+                       bind(prop("sgS", default=1), 16), bind(prop("sgS", default=1), 17)])
+
+
+# ---- the shop: the set rewards' cards, with a sea-green COLLECT ribbon where a price would be
+SG_ITEMS = [("WIND CHIME", "ALL 5|SEA GLASS|COLOURS"), ("SHELL GROTTO", "ALL 5|SHELLS|FOUND")]
+SG_RIBBON = ramp("12403a", "1e6a5e", "34a08a", "6cd2b4", "c6f6e6")
+
+
+def sg_card_plate(px):
+    """A set reward's card plate: a sea-green ribbon, a bead of sea glass and COLLECT."""
+    pm = round_rect_mask(46, 14, 3)
+    for x, y in pm:
+        px.put(50 + x, 48 + y, SG_RIBBON[0] if edge4(pm, x, y) else SG_RIBBON[4] if y <= 1 else SG_RIBBON[1] if y >= 11 else SG_RIBBON[2])
+    for (x, y), c in sg_bead(3).d.items():
+        px.put(56 + x, 55 + y, c)
+    draw_text(px, "COLLECT", 61, 53, hx("fffaf0"), shadow=SG_RIBBON[0])
+
+
+def sg_icon(i):
+    """Shop icon (and journal portrait) for set reward item i."""
+    return sg_chime_art() if i == SG_ITEM_IDS[0] else sg_grotto_art()
+
+
+# name, x, base y (logical), art: appended to the scene's DECOR as decor 11 (the chime, hanging) and 12 (the grotto)
+SG_DECOR = [("SgChime", 192, WATER_TOP + SG_CHIME_H, sg_chime_art), ("SgGrotto", 168, 349, sg_grotto_art)]
+
+
+def sg_contract(c, decor0):
+    """Sea glass entries in contract.json: the jar (screen), the finds, the rewards; the chime hangs."""
+    c["seaGlass"] = {"jar": {"x": SG_JAR_X * P, "y": (SG_JAR_BASE - 6) * P, "hit": {"x": (SG_JAR_X - 10) * P, "y": 0, "w": 20 * P, "h": 14 * P}},
+                     "items": ["green", "brown", "white", "cobalt", "red", "cowrie", "scallop", "conch", "fossil", "nautilus"],
+                     "decor": [decor0, decor0 + 1], "shopItems": list(SG_ITEM_IDS), "reserved": list(SG_RESERVED)}
+    c["decor"][decor0]["hang"] = True
+
+
+def sg_portraits():
+    """The journal's Collection drawer: each find (sg{i}), the two rewards (sgr0, sgr1) and the jar."""
+    out = {f"sg{i}": data_url(sg_item(i)) for i in range(SG_N)}
+    out["sgr0"] = data_url(sg_chime_art())
+    out["sgr1"] = data_url(sg_grotto_art())
+    out["sgjar"] = data_url(sg_jar_art())
+    return out
+
+
+def sg_preview(path):
+    """SG_PREVIEW=1: a contact sheet of the finds, the jar and the rewards at 8x, for looking at."""
+    arts = [sg_item(i) for i in range(SG_N)] + [sg_jar_art(), sg_chime_art(), sg_grotto_art()]
+    S, pad = 8, 4
+    sheet, x = {}, pad
+    H = max(a.bbox()[3] - a.bbox()[1] + 1 for a in arts) + 2 * pad
+    for a in arts:
+        x0, y0, x1, y1 = a.bbox()
+        for yy in range(H):
+            for xx in range(x - pad // 2, x + x1 - x0 + 1 + pad // 2):
+                for k in range(S):
+                    for m in range(S):
+                        sheet[(xx * S + k, yy * S + m)] = hx("1f6fae") if yy < H - 6 else hx("e3c088")
+        for (px_, py_), c in a.d.items():
+            for k in range(S):
+                for m in range(S):
+                    X, Y = (x + px_ - x0) * S + k, (pad + py_ - y0) * S + m
+                    b = sheet.get((X, Y), (0, 0, 0, 255))
+                    al = c[3] / 255
+                    sheet[(X, Y)] = tuple(round(c[j] * al + b[j] * (1 - al)) for j in range(3)) + (255,)
+        x += x1 - x0 + 1 + pad
+    write_png(path, x * S, H * S, sheet)
+
+
+# ---- end sea glass ----
+
+
 # ---- room ----
 # The room the tank stands in, shown beside it on wide screens (src/room.ts; phones never fetch any of it).
 # Room space is logical px at the tank's scale (P=3 on screen): the tank covers x ROOM_SIDE..ROOM_SIDE+LW and
@@ -7364,7 +7770,7 @@ STORE_X, STORE_Y = (LW - STORE_W) // 2, CAB_TOP - 9  # its top-left once it's up
 STORE_SLIDE = 8  # how far below that it starts (the host's storeY, logical)
 # where a drop puts it away (logical): below the water's bottom edge, a good way either side of the drawer
 STORE_DROP = (LW // 2 - 48, WATER_BOT + 1, 96, LH - WATER_BOT - 1)
-DECOR_ITEMS = (3, 4, 5, 6, 7, 24) + KEEP_ITEM_IDS[:-1]  # the shop cards that sell (or award) a decoration
+DECOR_ITEMS = (3, 4, 5, 6, 7, 24) + KEEP_ITEM_IDS[:-1] + SG_ITEM_IDS  # the shop cards that sell (or award) a decoration (v16: sea glass)
 R_RING = "ffb07a"  # the overlap outline: a warm coral that reads against water, sand and rock
 
 
@@ -7535,7 +7941,7 @@ def calm_x(name):
 
 def calm_speed(anim):
     """The speed anim plays at while calm (0: held still on its first frame), or None to leave it alone."""
-    if re.fullmatch(r"Caustics|Shafts\w*|Dapple\d+|BubblerShimmer|ChestGlow|CoralGlow|PearlGlow|CaveBreath|CaveTwinkle", anim):
+    if re.fullmatch(r"Caustics|Shafts\w*|Dapple\d+|BubblerShimmer|ChestGlow|CoralGlow|PearlGlow|CaveBreath|CaveTwinkle|SgChimeSway\d+", anim):  # ---- sea glass ---- the chime hangs still
         return 0  # flicker, drifting light and pulsing glows: still
     if re.fullmatch(r"Bubble\d+|BubblerBub\d+|School\d+(Tail)?|Kelp\w+|Seagrass|Anemones|Snow|Snowfall|LighthouseBeam", anim):
         return 0.3  # things that live in the water (and the lighthouse beam): slower
@@ -7732,6 +8138,9 @@ KEEP_DECOR0 = len(DECOR)  # 5
 DECOR += KEEP_DECOR  # ---- keepsakes ---- decor 5..9
 BUBBLER_D = len(DECOR)  # 10
 DECOR.append(("Bubbler", BUB_X, BUB_BASE, bubbler_art))  # ---- bubbler ---- (v13) decor 10
+SG_DECOR0 = len(DECOR)  # ---- sea glass ---- decor 11 (the wind chime) and 12 (the shell grotto)
+assert SG_DECOR0 == 11
+DECOR += SG_DECOR
 
 
 LIFT = 6  # logical px a picked-up decoration rises (18 artboard units)
@@ -7768,6 +8177,9 @@ def decor_node(n):
     elif name == "Bubbler":  # ---- bubbler ---- the volcano and its column (bubbles left out of the hit box)
         inner = bubbler_inner()
         boxes = [sprites[name]]
+    elif name == "SgChime":  # ---- sea glass ---- the bar and its swaying strands; the box is the still chime's
+        inner = sg_chime_inner()
+        boxes = [(None, *sg_chime_art().bbox())]
     else:
         inner = [image(name, art)]
         boxes = [sprites[name]]
@@ -7781,7 +8193,7 @@ def decor_node(n):
                            rad_grad(0, 0, round(hw * 0.85) * P, [(0, hx("1a0e08", 150)), (0.6, hx("1a0e08", 70)), (1, hx("1a0e08", 0))]),
                            opacity=0, binds=[bind(prop(f"dec{n}lift"), 18)])
     lift = node("Lift", inner, binds=[bind(prop(f"dec{n}lift"), 14, LIFT_CONV)])
-    return node(f"Dec{n}{name}", [lift, shadow], x=x * P, y=y * P, opacity=0,
+    return node(f"Dec{n}{name}", [lift] if name == "SgChime" else [lift, shadow], x=x * P, y=y * P, opacity=0,  # ---- sea glass ---- no shadow in mid-water
                 binds=[bind(prop(f"dec{n}"), 18), bind(prop(f"dec{n}x", default=x * P), 13), bind(prop(f"dec{n}y", default=y * P), 14)])
 
 
@@ -7927,6 +8339,8 @@ for n in (1, 2, 3, 4):
 for n in range(KEEP_DECOR0, KEEP_DECOR0 + len(KEEP_DECOR)):  # ---- keepsakes ----
     world.append(decor_node(n))
 world.append(decor_node(BUBBLER_D))  # ---- bubbler ---- in front of the other decorations, behind the jellies
+for n in (SG_DECOR0, SG_DECOR0 + 1):  # ---- sea glass ---- the wind chime and the grotto
+    world.append(decor_node(n))
 # the sea turtle swims across at mid depth: in front of the scenery, behind the jellies (WorldMid)
 world.append(visitor_node("turtle", "Turtle", turtle_art, 120 * P, 170 * P))
 
@@ -8372,6 +8786,8 @@ ITEMS = [("BLUE BLUBBER", "POLYP", 40), ("UPSIDE-DOWN", "POLYP", 70), ("COMB JEL
          ("CORAL GARDEN", "THEME|TROPICAL|CORALS", 170), ("ARCTIC", "THEME|ICE AND|SNOW", 200),
          ("BUBBLER", "BUBBLES|TO RIDE", 80)]  # ---- bubbler ---- (v13: item 24, decoration 10)
 ITEMS += [(nm, how, 0) for nm, how in KEEP_ITEMS]  # ---- keepsakes ---- 25..30
+ITEMS += [("", "", 0) for _ in SG_RESERVED] + [(nm, how, 0) for nm, how in SG_ITEMS]  # ---- sea glass ---- 31..35 held, 36..37
+assert len(ITEMS) == SG_ITEM_IDS[-1] + 1
 # shop item -> the species it sells (polyps)
 JELLY_ITEM = {0: 1, 1: 2, 2: 3, 13: 4, 14: 5, 15: 6, 16: 7, 17: 8}
 TANK_ITEMS, HELPER_ITEMS = (11, 12), (8, 9, 10)
@@ -8382,7 +8798,7 @@ THEME_ITEMS = tuple(range(THEME_ITEM0, THEME_ITEM0 + 4)) + (KEEP_THEME_ITEM,)  #
 # a card locked because of the tank size: (item, prop, note lines)
 NEEDS = [(12, "needs12", ["NEEDS", "MEDIUM"]), (15, "needs15", ["NEEDS", "MEDIUM"]), (17, "needs17", ["NEEDS", "LARGE"])]
 TABS = [("JELLIES", [0, 13, 1, 14, 2, 15, 16, 17], "DRAG TO SEE MORE JELLIES"),
-        ("DECOR", [3, 4, 5, 6, 7, 24] + list(KEEP_ITEM_IDS[:-1]), "TAP YOURS TO PUT AWAY. HOLD ONE TO MOVE"),  # ---- put away ----
+        ("DECOR", [3, 4, 5, 6, 7, 24] + list(KEEP_ITEM_IDS[:-1]) + list(SG_ITEM_IDS), "TAP YOURS TO PUT AWAY. HOLD ONE TO MOVE"),  # ---- put away ---- (---- sea glass ----)
         ("SUPPLIES", [8, 9, 10, 18, 19], "NEW FOOD WAITS ON THE SHELF"),
         ("TANK", [11, 12, 20, 21, 22, 23, KEEP_THEME_ITEM], "TAP AN OWNED THEME TO USE IT")]
 TAB_W, TAB_H, TAB_GAP, TAB_Y, TAB_LIFT = 50, 15, 4, 55, 3
@@ -8431,6 +8847,8 @@ def item_icon(i):
     """Mini sprite for shop item i, origin = where it sits in its window (centre x, y)."""
     if i in KEEP_ITEM_IDS:  # ---- keepsakes ----
         return keep_icon(i), 14
+    if i in SG_ITEM_IDS:  # ---- sea glass ----
+        return sg_icon(i), 14
     if i in TANK_ITEMS:
         return tank_icon(i - 10), 14
     if i in THEME_ITEMS:
@@ -8626,6 +9044,9 @@ def card_art(i):
     if i in KEEP_ITEM_IDS:  # ---- keepsakes ---- never priced: a ribbon instead
         keep_card_plate(px)
         return px
+    if i in SG_ITEM_IDS:  # ---- sea glass ---- a set reward: never priced
+        sg_card_plate(px)
+        return px
     if price == 0:  # the Reef theme
         draw_text(px, "FREE", 50 + (46 - text_width("FREE")) // 2, 53, INK, shadow=R_CREAM[3])
         return px
@@ -8724,7 +9145,7 @@ def shop_node():
             _, x0, y0 = CARD_POS[i]
             g.append(image(f"Card{i}", card_art(i), lx=x0, ly=y0))
             lock = (image("KeepLock", keep_lock_overlay(), lx=x0, ly=y0, node_name=f"Lock{i}", opacity=0, binds=[bind(prop(f"lock{i}"), 18)])
-                    if i in KEEP_ITEM_IDS else  # ---- keepsakes ---- a lighter lock: the card says how to earn it
+                    if i in KEEP_ITEM_IDS + SG_ITEM_IDS else  # ---- keepsakes ---- a lighter lock: the card says how to earn it
                     image("CardLock", lock_overlay(), lx=x0, ly=y0, node_name=f"Lock{i}", opacity=0, binds=[bind(prop(f"lock{i}"), 18)]))
             g.append(lock)
             if i in DECOR_ITEMS:  # ---- put away ---- IN TANK (own{i}) or STORED (away{i}); a tap swaps them
@@ -8961,6 +9382,7 @@ for p_ in range(4):
                              opacity=1 if (p_, d) == (0, 0) else 0,
                              binds=[bind(prop(f"cd{p_}n{d}", default=1 if (p_, d) == (0, 0) else 0), 18)]))
 btf.append(node("Counter", list(reversed(counter))))
+btf.append(sg_jar_node())  # ---- sea glass ---- the jar in the hood, right of the meters
 
 BTN_Y = 366
 BTN_GAP = 8
@@ -9130,6 +9552,9 @@ hit = rect_shape("ShopHit", 0, 0, BTN_W * P, (BTN_H + 2) * P, solid(hx("ffffff",
 btf.append(node("ShopButton", [hit, press, image("BtnShadow", button_shadow(), node_name="ShopShadow")], x=BTN_X[SHOP_BTN] * P, y=BTN_Y * P))
 add_anim("HeldGlow", 120, [keys(g, 18, [(0, 0.6), (60, 1), (120, 0.6)], "cubic") for g in shelf_glow_ids])
 btf.append(store_node())  # ---- put away ---- the drawer, over the cabinet while a decoration is carried
+btf.append(sg_find_node())  # ---- sea glass ---- a find flying to the jar, over everything but the held item
+TRIGGERS.append("finds")  # ---- sea glass ---- the jar opens the journal's Collection
+hit_ids.append((SG_JAR_HIT, "finds"))
 btf.append(node("Cursor", [sponge_node, can_node, jar_node, bottle_node]))  # topmost: the held can / jar / bottle / sponge
 
 # ---------------------------------------------------------------- assemble
@@ -9285,6 +9710,7 @@ contract = {
 }
 hw_contract(contract)  # ---- Halloween event ----
 keep_contract(contract)  # ---- keepsakes ----
+sg_contract(contract, SG_DECOR0)  # ---- sea glass ----
 store_contract(contract)  # ---- put away ----
 nv_contract(contract, NV_SPOTS)  # ---- night visitors ----
 # ---- asset groups: each group's PNGs packed into one file (base64 in JSON, a type every host serves and
@@ -9348,6 +9774,9 @@ for k in range(len(SPECIES)):
 for m, i in enumerate(KEEP_ITEM_IDS):  # ---- keepsakes ---- the journal's keepsakes page: milestone m's reward
     journal_art[f"keep{m}"] = data_url(keep_icon(i))
 journal_art.update(nv_portraits())  # ---- night visitors ---- the visitor log
+journal_art.update(sg_portraits())  # ---- sea glass ---- the Collection drawer
+if __import__("os").environ.get("SG_PREVIEW"):  # ---- sea glass ----
+    sg_preview(ROOT / "rive" / "build" / "sg-preview.png")
 (ROOT / "src" / "journal-art.json").write_text(json.dumps(journal_art, indent=1))
 
 

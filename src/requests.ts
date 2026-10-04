@@ -12,13 +12,14 @@
  *   "visitor"  -1; a visitor tapped                                                    (10)
  *   "ride"     -1; a jelly rode the bubbler to the top while it was on screen (only with the bubbler) (8)
  *   "night"    -1; a night visitor spotted (it came into view; only planned at night, by the clock)    (12)
+ *   "seaglass" -1; a piece of sea glass found (v16; only where finds turn up, planned before 20:00)    (8)
  * Unfinished requests don't carry over: a new day (or a day away) replaces them.
  */
 import { FOOD_KINDS, FOOD_NAMES, SPECIES_N, SPECIES_NAMES, favouriteFood, type FoodKind, type Species } from "./species";
 import { rng } from "./dirt";
 
-export type RequestKind = "feed" | "scrub" | "pet" | "pearl" | "sprinkle" | "visitor" | "ride" | "night";
-export const REQUEST_KINDS: readonly RequestKind[] = ["feed", "scrub", "pet", "pearl", "sprinkle", "visitor", "ride", "night"];
+export type RequestKind = "feed" | "scrub" | "pet" | "pearl" | "sprinkle" | "visitor" | "ride" | "night" | "seaglass";
+export const REQUEST_KINDS: readonly RequestKind[] = ["feed", "scrub", "pet", "pearl", "sprinkle", "visitor", "ride", "night", "seaglass"];
 
 export interface Request {
   kind: RequestKind;
@@ -53,6 +54,8 @@ export interface RequestTank {
   bubbler?: boolean;
   /** v14: it's night by the clock with hours of it left (night visitors can turn up) */
   night?: boolean;
+  /** v16: sea glass can turn up here (the player's own tank) with enough of the day left to find a piece */
+  seaglass?: boolean;
 }
 
 /** Something the player did that a request may count. */
@@ -64,7 +67,8 @@ export type Deed =
   | { kind: "sprinkle"; decor: number; n: number }
   | { kind: "visitor" }
   | { kind: "ride" }
-  | { kind: "night" };
+  | { kind: "night" }
+  | { kind: "seaglass" };
 
 /** At most this many a day. */
 export const REQUESTS_PER_DAY = 2;
@@ -75,8 +79,8 @@ export const PET_N = 5;
 export const SPRINKLE_N = 8;
 /** A pellet counts as "by" a decoration within this many px (world x) of its base. */
 export const SPRINKLE_NEAR = 100;
-// v13: the keepsakes (decorations 5..9), then the bubbler (10)
-const DECOR_NAMES = ["castle", "anchor", "dive helmet", "giant clam", "glow coral", "bottle", "lighthouse", "jelly lantern", "ship's wheel", "postbox", "bubbler"];
+// v13: the keepsakes (decorations 5..9), then the bubbler (10); v16: the collection's wind chime (11) and grotto (12)
+const DECOR_NAMES = ["castle", "anchor", "dive helmet", "giant clam", "glow coral", "bottle", "lighthouse", "jelly lantern", "ship's wheel", "postbox", "bubbler", "wind chime", "shell grotto"];
 
 /** Sand dollars a request pays: 5..15, more for the fussier ones. */
 export function rewardOf(r: Pick<Request, "kind" | "target" | "n">): number {
@@ -96,6 +100,8 @@ export function rewardOf(r: Pick<Request, "kind" | "target" | "n">): number {
       return 8;
     case "night":
       return 12;
+    case "seaglass":
+      return 8;
   }
 }
 
@@ -122,6 +128,8 @@ export function requestText(r: Request): string {
       return "Watch a jelly ride the bubbler";
     case "night":
       return "Spot a night visitor";
+    case "seaglass":
+      return "Find a piece of sea glass";
   }
 }
 
@@ -164,6 +172,7 @@ export function planRequests(day: string, t: RequestTank): DailyRequests {
   pool.push([1, () => req("visitor", 1)]);
   if (t.bubbler) pool.push([2, () => req("ride", 1)]);
   if (t.night) pool.push([1, () => req("night", 1)]);
+  if (t.seaglass) pool.push([1, () => req("seaglass", 1)]);
   const items: Request[] = [];
   while (items.length < REQUESTS_PER_DAY && pool.length) {
     const total = pool.reduce((a, p) => a + p[0], 0);

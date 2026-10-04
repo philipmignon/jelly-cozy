@@ -27,8 +27,9 @@ import {
   type SayEvent,
   type Target,
 } from "./a11y";
-import { COMB, JUVENILE, TAB_ITEMS, keepsakeOf } from "./species";
+import { COMB, JUVENILE, TAB_ITEMS, collectionOf, keepsakeOf } from "./species";
 import { MILESTONES } from "./keepsakes";
+import { FIND_SETS } from "./finds";
 import { SCRUB_STEP_MAX } from "./dirt";
 import {
   K,
@@ -334,6 +335,11 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
       case "keepsake": {
         const m = MILESTONES[keepsakeOf(it)];
         return m ? `${name} is a keepsake, not for sale. To earn it: ${m.title.toLowerCase()}.` : `${name} is a keepsake.`;
+      }
+      case "collection": {
+        // v16: a collection set's reward
+        const st = FIND_SETS[collectionOf(it)];
+        return st ? `${name} isn't for sale. Complete the ${st.title} in your collection: ${st.hint.toLowerCase()}.` : `${name} isn't for sale.`;
       }
     }
     return "";

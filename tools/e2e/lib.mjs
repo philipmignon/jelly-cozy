@@ -20,6 +20,10 @@ mkdirSync(SHOTS, { recursive: true });
 
 /** The phone-ish viewport most flows use (as the old single-script e2e did). */
 export const VIEW = { width: 480, height: 856 };
+/** Every flow's browser runs in this time zone (the reference screenshots were rendered in it). */
+export const TZ = process.env.E2E_TZ ?? "America/Los_Angeles";
+// ...and so does this process: flows build their scenes' times (`now=`, saves' dates) from local dates here
+process.env.TZ = TZ;
 /** The virtual clock's start for every flow: a June noon, local time (no season, daytime). */
 export const NOW = new Date(2026, 5, 15, 12, 0, 0).getTime();
 export const DAY = 86_400_000;
@@ -182,6 +186,9 @@ export class Flow {
     const page = await ctx.newPage();
     page.setDefaultTimeout(20_000);
     page.setDefaultNavigationTimeout(30_000);
+    // one time zone on every machine: scenes start at a local time and the dirt is seeded from that instant,
+    // so a CI runner in UTC would otherwise lay out a different tank than a Mac in Pacific time
+    await page.emulateTimezone(TZ);
     page.on("pageerror", (e) => this.errors.push(String(e)));
     page.on("error", (e) => this.diag.push({ page: "renderer crashed", error: String(e?.message ?? e) }));
     await page.setViewport({ ...view, deviceScaleFactor: dpr });

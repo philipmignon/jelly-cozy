@@ -36,8 +36,10 @@ export const eventGroup = (id: SeasonId): string => `ev-${id}`;
 /**
  * v16 (pairs): the colours only a pair's baby can have each ship as a group of their own (gen.py's MO_GROUPS packs
  * the sprite prefix `mo_dusk_` into `mo-dusk`, `mo_pearl_` into `mo-pearl`), so a tank without one downloads nothing.
+ * Winter's frost morph (3) too, `mo_frost_` into `mo-frost`: with its iced tentacles it's the heaviest morph, so a
+ * winter visit loads it only when a frost jelly is in the tank, not for the season's snow and decor.
  */
-export const PAIR_MORPH_GROUPS: Readonly<Record<number, string>> = { 4: "mo-dusk", 5: "mo-pearl" };
+export const PAIR_MORPH_GROUPS: Readonly<Record<number, string>> = { 3: "mo-frost", 4: "mo-dusk", 5: "mo-pearl" };
 
 /**
  * The group a morph's palettes live in when it isn't the species' own: a seasonal morph (2, ghost) is drawn by

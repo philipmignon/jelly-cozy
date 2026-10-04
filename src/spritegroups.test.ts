@@ -31,7 +31,7 @@ describe("morphs", () => {
     expect(jellyGroups({ k: 1, morph: 1 })).toEqual(["sp-blubber"]);
   });
   it("v16: every morph id past classic has a group in this build: ghost, frost, dusk, pearl", () => {
-    const want: Record<number, string> = { 2: "ev-halloween", 3: "ev-winter", 4: "mo-dusk", 5: "mo-pearl" };
+    const want: Record<number, string> = { 2: "ev-halloween", 3: "mo-frost", 4: "mo-dusk", 5: "mo-pearl" };
     for (const id of MORPH_KNOWN) {
       if (id < 2) continue;
       expect(morphGroup(id), `morph ${id}`).toBe(want[id]);

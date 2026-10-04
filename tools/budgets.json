@@ -38,18 +38,18 @@
   },
   "bytes": {
     "bytes.critical.new": {
-      "budget": 2112960,
+      "budget": 2170967,
       "tol": 0.1,
       "unit": "B",
       "about": "what a new tank fetches before its first frame: page + main bundle + wasm + .riv + moon sprites"
     },
     "bytes.html": {
-      "budget": 1319,
+      "budget": 1316,
       "tol": 0.1,
       "unit": "B"
     },
     "bytes.js.main": {
-      "budget": 159643,
+      "budget": 159683,
       "tol": 0.1,
       "unit": "B"
     },
@@ -64,7 +64,7 @@
       "unit": "B"
     },
     "bytes.riv": {
-      "budget": 914092,
+      "budget": 972062,
       "tol": 0.1,
       "unit": "B"
     },
@@ -79,17 +79,17 @@
       "unit": "B"
     },
     "bytes.sprites.all": {
-      "budget": 1114676,
+      "budget": 1352570,
       "tol": 0.1,
       "unit": "B"
     },
     "bytes.sw": {
-      "budget": 2751,
+      "budget": 2771,
       "tol": 0.1,
       "unit": "B"
     },
     "bytes.total": {
-      "budget": 4153251,
+      "budget": 4507141,
       "tol": 0.1,
       "unit": "B"
     }

@@ -201,7 +201,9 @@ def sprite(name, px):
 # its group, and the host fetches that file when a jelly of the species (or the event) shows up. Everything else
 # (tank, decor, shop, helpers, visitors) stays embedded. A new species or event needs nothing more than a line here.
 EVENT_GROUPS = {"hw_": "ev-halloween", "wn_": "ev-winter"}  # sprite-name prefix -> group (wn_: ---- winter ----)
-MO_GROUPS = {"mo_dusk_": "mo-dusk", "mo_pearl_": "mo-pearl"}  # ---- pair colours ---- a pair's colours, one group each
+# ---- pair colours ---- a pair's colours, one group each; winter's frost morph too (its iced tentacles made it the
+# heaviest morph, so it loads only for a frost jelly, not for every winter visit's snow and decor)
+MO_GROUPS = {"mo_dusk_": "mo-dusk", "mo_pearl_": "mo-pearl", "mo_frost_": "mo-frost"}
 
 
 def asset_group(name):
@@ -1783,7 +1785,9 @@ def ntf(g, tr):
 
 def species_tent(k, g, f, tr=TR_NEUTRAL, p="h"):
     """Tentacles / arms, sway frame f of ntf(g, tr). p = "m" gives a morph's own tentacles (only for MORPH_TENT
-    species, juvenile and adult)."""
+    species, juvenile and adult); p = "w" the frost morph's, the healthy ones iced (every species and stage)."""
+    if p == "w":
+        return wn_frost_tent(species_tent(k, g, f, tr, "h"))
     if g == 0:
         return polyp_motes(f)
     if g == 1:
@@ -4510,9 +4514,21 @@ WN_FROST_FADE = 0.62  # the usual tentacles' opacity under a frost bell
 WN_FADE_CONV = nid()  # DataConverterRangeMapper frost 0..1 -> 1..WN_FROST_FADE (appended last: the list is positional)
 
 
-def wn_frost_tents(tents):
-    """The stage's tentacles, a little faded while the frost palette shows (the bell is the ice)."""
-    return [node("FrostFade", tents, binds=[bind(jprop("frost"), 18, WN_FADE_CONV)])]
+def wn_frost_tent(px):
+    """A tentacle frame recoloured for the frost morph: every pixel onto the ice ramp by its lightness, as the
+    frost bell's palette is, the darkest as the bell's ice-blue outline. So no brown or red arms hang under an ice
+    bell (the lion's mane's were the worst)."""
+    out = Px()
+    for (x, y), c in px.d.items():
+        lum = (0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]) / 255
+        out.d[(x, y)] = wn_frostify("out" if lum < 0.16 else "body", c, alpha=0.92)
+    return out
+
+
+def wn_frost_tents(tents, frost_set):
+    """The stage's tentacles under a frost bell: the usual ones hide and an iced copy shows (wn_ sprites, so they
+    come with the ev-winter group). WN_FADE_CONV, the old fade's converter, stays declared: the list is positional."""
+    return [node("FrostHide", tents, binds=[bind(jprop("frost"), 18, INVERT_CONV)]), frost_set()]
 
 
 def wn_frost_halo(gcy, gw, gh):
@@ -9583,8 +9599,8 @@ def sprite_name(k, g, part):
         return f"hw_{SPECIES[k].capitalize()}{STAGES[g].capitalize()}Ghost"
     if part in MO_PARTS:  # ---- pair colours ---- mo_dusk_ / mo_pearl_ prefix (their own groups)
         return f"{MO_PARTS[part][0]}{SPECIES[k].capitalize()}{STAGES[g].capitalize()}{MO_PARTS[part][1]}"
-    if part in ("Frost", "FrostGlint"):  # ---- winter ---- event art: wn_ prefix
-        return f"wn_{SPECIES[k].capitalize()}{STAGES[g].capitalize()}{part}"
+    if part in ("Frost", "FrostGlint", "FrostTent"):  # ---- winter ---- the frost morph: its own group (MO_GROUPS)
+        return f"mo_frost_{SPECIES[k].capitalize()}{STAGES[g].capitalize()}{part}"
     if k == 0 and g == 3:  # the v1 moon jelly keeps its asset names
         return {"Tent": "Tent", "Healthy": "BellHealthy", "Pale": "BellPale", "Flush": "BellFlush", "Morph": "BellMorph",
                 "MorphTent": "TentMorph", "Glint": "BellGlint"}[part]
@@ -9701,7 +9717,8 @@ def stage_node(k, g):
     else:
         tents = [tent_set("Tentacles", "Tent", "h")]
     tents = hw_ghost_tents(tents)  # Halloween: they fade back under a ghost bell
-    tents = wn_frost_tents(tents)  # ---- winter ---- and a little under a frost bell
+    # ---- winter ---- under a frost bell the usual tentacles give way to iced ones
+    tents = wn_frost_tents(tents, lambda: tent_set("FrostTentacles", "FrostTent", "w", opacity=0, binds=[bind(jprop("frost"), 18)]))
     parts = [None, None] + tents  # [glow, morph halo] + tentacles, then the palettes (back to front)
     for pk, pn, pprop in PAL_NAMES:
         # v10: 8 pulse frames for juvenile/adult bells; the pale palette keeps 4 drawn ones (PALE_OF)

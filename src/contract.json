@@ -3181,15 +3181,21 @@
   },
   "ev-winter": {
    "file": "sprites/ev-winter.json",
-   "v": "0ef5382d5e",
-   "sprites": 372,
-   "bytes": 195931
+   "v": "ab9dc36855",
+   "sprites": 20,
+   "bytes": 19335
   },
   "mo-dusk": {
    "file": "sprites/mo-dusk.json",
    "v": "3895e4d0d2",
    "sprites": 244,
    "bytes": 177219
+  },
+  "mo-frost": {
+   "file": "sprites/mo-frost.json",
+   "v": "21b64e739f",
+   "sprites": 848,
+   "bytes": 583776
   },
   "mo-pearl": {
    "file": "sprites/mo-pearl.json",

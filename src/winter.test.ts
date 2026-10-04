@@ -64,11 +64,11 @@ const run = (s: State, seconds: number, dt = 1 / 30) => {
 };
 
 describe("winter: the frost morph", () => {
-  it("is morph 3, drawn from the winter art, and the view writes frost = 1 (pale overrides it)", () => {
+  it("is morph 3, drawn from its own art group, and the view writes frost = 1 (pale overrides it)", () => {
     expect(MORPH_FROST).toBe(3);
     expect(FROST_MORPH).toBe(MORPH_FROST);
-    expect(morphGroup(MORPH_FROST)).toBe(eventGroup("winter"));
-    expect(jellyGroups({ k: 8, morph: 3 })).toEqual(["sp-lionsmane", "ev-winter"]);
+    expect(morphGroup(MORPH_FROST)).toBe("mo-frost"); // not the winter event's group: that holds the snow and decor
+    expect(jellyGroups({ k: 8, morph: 3 })).toEqual(["sp-lionsmane", "mo-frost"]);
     const s = createState(tank([jelly(0, 3, { morph: 3 }), jelly(0, 3, { morph: 2 }), jelly(0, 3)]), seeded());
     let v = view(s);
     expect([v.j0frost, v.j0ghost, v.j0healthy, v.j0pale]).toEqual([1, 0, 0, 0]);
@@ -83,19 +83,20 @@ describe("winter: the frost morph", () => {
     expect([v.j0frost, v.j0pale]).toEqual([0, 1]);
   });
 
-  it("has a palette group per species and stage in the winter pack, and none in a species pack", () => {
+  it("has a frost palette, glints and iced tentacles per species and stage in the frost pack, and none elsewhere", () => {
     const groups = (contract as unknown as { assetGroups: Record<string, { file: string }> }).assetGroups;
-    const winter = JSON.parse(readFileSync(`public/${groups["ev-winter"]!.file}`, "utf8")) as { sprites: Record<string, string> };
+    const frost = JSON.parse(readFileSync(`public/${groups["mo-frost"]!.file}`, "utf8")) as { sprites: Record<string, string> };
     for (const sp of contract.species)
       for (const st of contract.stages) {
-        const name = `wn_${sp[0]!.toUpperCase()}${sp.slice(1)}${st[0]!.toUpperCase()}${st.slice(1)}Frost0`;
-        expect(winter.sprites[name], name).toBeDefined();
-        expect(winter.sprites[`wn_${sp[0]!.toUpperCase()}${sp.slice(1)}${st[0]!.toUpperCase()}${st.slice(1)}FrostGlint0`]).toBeDefined();
+        const stem = `mo_frost_${sp[0]!.toUpperCase()}${sp.slice(1)}${st[0]!.toUpperCase()}${st.slice(1)}`;
+        expect(frost.sprites[`${stem}Frost0`], `${stem}Frost0`).toBeDefined();
+        expect(frost.sprites[`${stem}FrostGlint0`], `${stem}FrostGlint0`).toBeDefined();
+        expect(Object.keys(frost.sprites).some((n) => n.startsWith(`${stem}FrostTent`)), `${stem}FrostTent*`).toBe(true);
       }
     for (const [g, info] of Object.entries(groups)) {
-      if (g === "ev-winter") continue;
       const pack = readFileSync(`public/${info.file}`, "utf8");
-      expect(pack.includes('"wn_'), g).toBe(false);
+      if (g !== "mo-frost") expect(pack.includes('"mo_frost_'), g).toBe(false);
+      if (g !== "ev-winter") expect(pack.includes('"wn_'), g).toBe(false);
     }
   });
 

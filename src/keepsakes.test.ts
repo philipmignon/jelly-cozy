@@ -233,7 +233,8 @@ describe("v13 keepsakes: share codes and the shop's scrolling tabs", () => {
   it("DECOR and TANK scroll now that the keepsakes joined them; taps outside the window don't count", () => {
     expect(SHOP_SCROLLS[1]?.max ?? 0).toBeGreaterThan(0);
     expect(SHOP_SCROLLS[3]?.max ?? 0).toBeGreaterThan(0);
-    expect(SHOP_SCROLLS[2]).toBeNull();
+    // ---- temperature ---- SUPPLIES scrolls too since the heater and the chiller joined it
+    expect(SHOP_SCROLLS[2]?.max ?? 0).toBeGreaterThan(0);
     const s = createState(tank([jelly(0, 3)]), seeded());
     openShop(s);
     setTab(s, 1);
@@ -245,7 +246,8 @@ describe("v13 keepsakes: share codes and the shop's scrolling tabs", () => {
     setTab(s, 2);
     expect(s.shopScroll).toBe(0);
     scrollShop(s, -100);
-    expect(s.shopScroll).toBe(0); // SUPPLIES fits: no scrolling
-    expect(inShopView(s, 0)).toBe(true);
+    expect(s.shopScroll).toBe(Math.min(100, SHOP_SCROLLS[2]!.max)); // each tab scrolls its own list
+    expect(inShopView(s, SHOP_SCROLLS[2]!.viewTop + 1)).toBe(true);
+    expect(inShopView(s, SHOP_SCROLLS[2]!.viewTop - 1)).toBe(false);
   });
 });

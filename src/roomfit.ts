@@ -14,6 +14,8 @@ export interface RoomHost {
   lit(): boolean;
   /** the seasonal event showing in the tank (state.event), or null */
   season(): SeasonId | null;
+  /** ---- lamp gels ---- the gel on the tank's lamp (0 Clear .. 3 UV; src/gels.ts): its light on the wall takes the colour */
+  gel?(): number;
   /** flip the tank's light switch (the room's lamp is a second one) */
   toggle(): void;
 }

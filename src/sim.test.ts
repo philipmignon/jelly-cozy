@@ -2418,7 +2418,9 @@ describe("v5: view", () => {
     for (let j = 0; j < 7; j++) want.push(`j${j}on`, `j${j}x`, `j${j}y`, `j${j}k3`, `j${j}g3`, `j${j}bf3`, `j${j}tf3`, `j${j}tr4`, `j${j}glow`);
     for (const name of want) expect(props.has(name), name).toBe(true);
     expect(props.has("j7on")).toBe(false);
-    expect(props.has("own31")).toBe(false); // v6 adds items 13-17; v11 adds 18-19 (foods) and 20-23 (themes); v13 24 (the bubbler) and 25-30 (keepsakes), no new tab
+    // v6 adds items 13-17; v11 adds 18-19 (foods) and 20-23 (themes); v13 24 (the bubbler) and 25-30 (keepsakes); 31-33 the
+    // lamp gels, 34-35 the heater and the chiller; no new tab
+    expect(props.has("own36")).toBe(false);
     expect(props.has("shopTab5")).toBe(false);
   });
 

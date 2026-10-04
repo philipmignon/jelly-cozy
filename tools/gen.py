@@ -7500,6 +7500,353 @@ def store_contract(c):
 # ---- end put away ----
 
 
+# ---- lamp gels ---- coloured filters for the tank's lamp (shop items 31 Warm amber, 32 Deep blue, 33 UV; src/gels.ts).
+# The host writes gel0..gel3 one-hot. Each gel is a pair of smooth screen-space layers over the water, drawn after
+# the Night layer (so over the scenery, its shafts and caustics, and under the jellies, like night is): a multiply
+# that colours the water and a screen glow falling from the lamp. Both sit in a node bound to daylight: a gel only
+# colours the lamp's light, so with the lamp off at night it's moonlight as before. The hood's lamp strip takes the
+# gel's colour too. Under UV (uvLight, j{s}uv) the crystal and comb jellies, the glow coral and the jelly lantern
+# fluoresce green/cyan (their own art, recoloured and screen-blended); every other jelly gets a faint violet rim
+# and lets more of the violet through. A gel wheel above the light switch (shown once one is bought, `gel` trigger)
+# steps through the owned ones.
+GEL_COMB = 3
+# gel: its layers over the water, back to front: (blend, [(position, colour, alpha), ...] top to bottom)
+GEL_TINT = {
+    1: [("color", [(0, "ff9a1e", 150), (1, "e07a10", 120)]),                        # warm amber: golden water, honey light
+        ("screen", [(0, "ffaa30", 130), (0.5, "ff9a20", 45), (1, "ff9a20", 0)])],
+    2: [("multiply", [(0, "a8c0ff", 255), (1, "6a80e8", 255)]),                     # deep blue: cobalt
+        ("screen", [(0, "3a6cff", 80), (0.55, "3a6cff", 24), (1, "3a6cff", 0)])],
+    3: [("multiply", [(0, "6e4ab4", 255), (1, "38236e", 255)]),                     # UV: dark violet, a purple glow
+        ("screen", [(0, "8a4aff", 90), (0.55, "8a4aff", 27), (1, "8a4aff", 0)])],
+}
+GEL_LAMP = {1: ("ffb648", "ffe2a0", "ffb648"), 2: ("3a6cff", "c4d8ff", "6a94ff"), 3: ("8a4aff", "e0c4ff", "a46aff")}  # glow, strip lit, strip dark
+GEL_FLUO = {6: ("2eff6a", "b4ffcc"), GEL_COMB: ("1ee4ff", "aaf6ff")}  # what fluoresces under UV: (glow, hot core)
+GEL_RIM = "b07aff"  # the faint rim the other jellies get under UV
+GEL_LENS = {0: ("e8f4ff", 150), 1: ("ffb03c", 230), 2: ("3a64ff", 230), 3: ("8a3cff", 230)}  # the wheel's lens per gel
+GEL_DIM = 0.72  # a jelly that doesn't fluoresce shows at this opacity under full UV (the violet shows through it)
+GEL_DIM_CONV = nid()  # DataConverterRangeMapper j{s}uv 0..1 -> 1..GEL_DIM (appended last: the list is positional)
+GEL_WHEEL = (16, 366, 7)  # the wheel's centre and radius (logical), above the light switch
+GEL_HIT = (4, 357, 24, 16)  # its tap box: clear of the switch's (which starts at y 373)
+GEL_ITEMS = (31, 32, 33)
+
+
+def gel_tint_node():
+    """Screen space, after the Night layer: the gel's colour over the water while the lamp is lit."""
+    kids = []
+    for n, layers in GEL_TINT.items():
+        kids.append(node(f"Gel{n}", [rect_shape(f"Gel{n}{blend.capitalize()}", water_x, water_y, water_w, water_h,
+                                                lin_grad(0, 0, 0, water_h, [(p, hx(c, a)) for p, c, a in stops]), blend=blend)
+                                     for blend, stops in layers][::-1], opacity=0, binds=[bind(prop(f"gel{n}"), 18)]))
+    return node("GelLight", kids[::-1], binds=[bind(prop("daylight", default=1), 18)])
+
+
+def gel_lamp_parts():
+    """Inside the Lamp node (bound to daylight): the strip and its glow in the gel's colour, over the clear ones."""
+    out = []
+    for n, (gc, lit, dark) in GEL_LAMP.items():
+        strip = Px()
+        for x in range(20, LW - 20):
+            strip.put(x, HOOD - 2, hx(lit))
+            strip.put(x, HOOD - 1, hx(dark))
+        out.append(node(f"LampGel{n}", [rect_shape("LampGelGlow", water_x, water_y, water_w, 40 * P,
+                                                   lin_grad(0, 0, 0, 40 * P, [(0, hx(gc, 110)), (1, hx(gc, 0))]), blend="screen"),
+                                        image(f"LampStripGel{n}", strip)][::-1], opacity=0, binds=[bind(prop(f"gel{n}"), 18)]))
+    return out
+
+
+def gel_fluo(px, col, hot, floor=0.35):
+    """Recolour a sprite as fluorescent light: its bright parts glow hottest, its faint parts still a little."""
+    out = Px()
+    for (x, y), c in px.d.items():
+        lum = (0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]) / 255
+        a = c[3] / 255
+        t = min(1.0, lum * 1.15)
+        out.put(x, y, mix(hx(col), hx(hot), max(0.0, t - 0.75) / 0.25)[:3] + (round(255 * min(1.0, floor + (1 - floor) * a) * (0.4 + 0.6 * t)),))
+    return out
+
+
+def gel_uv_parts(k, g, gcy, gw, gh):
+    """In the jelly component, one stage's UV look (all bound to j{s}uv): a crystal or comb jelly's body fluorescing
+    frame by frame with a halo (the crystal's photophore ring too: the night ring's own sprites); any other jelly a
+    faint violet rim."""
+    uv = jprop("uv")
+    if k not in GEL_FLUO:
+        rim = ellipse_shape("UvRim", 0, gcy, round(gw * 0.78), round(gh * 0.78),
+                            rad_grad(0, 0, round(gw * 0.39), [(0, hx(GEL_RIM, 0)), (0.6, hx(GEL_RIM, 0)), (0.82, hx(GEL_RIM, 70)), (1, hx(GEL_RIM, 0))]),
+                            blend="screen")
+        return [node("Uv", [rim], opacity=0, binds=[bind(uv, 18)])]
+    col, hot = GEL_FLUO[k]
+    NB = nbf(k, g)
+
+    def frames(blend):  # the same sprites twice: "color" turns the glassy body green/cyan, "screen" makes it glow
+        return [frame_image(f"{sprite_name(k, g, 'Uv')}{f}", lambda f=f: gel_fluo(species_body(k, g, f, "h"), col, hot), blend=blend,
+                            **dict(opacity=1 if f == 0 else 0, binds=[bind(jprop(f"bf{f}", default=1 if f == 0 else 0), 18)])) for f in range(NB)]
+    kids = [ellipse_shape("UvHalo", 0, gcy, round(gw * 0.9), round(gh * 0.9),
+                          rad_grad(0, 0, round(gw * 0.45), [(0, hx(col, 120)), (0.5, hx(col, 45)), (1, hx(col, 0))]), blend="screen"),
+            node("UvTint", frames("color")[::-1], **SCALED),
+            node("UvBody", frames("screen")[::-1], opacity=0.8, **SCALED)]
+    if k == 6 and g >= 2:  # the crystal's ring of photocytes, as at night (the same sprites)
+        sc = 1.0 if g == 3 else 0.6
+        kids.append(node("UvRing", [frame_image(f"{sprite_name(k, g, 'Ring')}{f}", lambda f=f: crystal_glow(f, sc, "b8ffd8", "5dffa0"), blend="screen",
+                                                opacity=1 if f == 0 else 0, binds=[bind(jprop(f"bf{f}", default=1 if f == 0 else 0), 18)])
+                                    for f in range(NB)][::-1], **SCALED))
+    return [node("Uv", kids[::-1], opacity=0, binds=[bind(uv, 18)])]
+
+
+def gel_dim(k, parts):
+    """A jelly that doesn't fluoresce lets the violet through under UV: its stage's parts (back to front) in a node
+    faded by j{s}uv."""
+    if k in GEL_FLUO:
+        return parts
+    return [node("UvDim", parts[::-1], binds=[bind(jprop("uv"), 18, GEL_DIM_CONV)])]
+
+
+def gel_uv_decor(n, name, light, halo_y, halo_w, halo_h, col, hot):
+    """WorldMid: decoration n fluorescing under UV (its night light recoloured), following it like its night glow."""
+    _, x, y, _ = DECOR[n]
+    kids = [ellipse_shape(f"{name}UvHalo", 0, halo_y * P, halo_w * P, halo_h * P,
+                          rad_grad(0, 0, halo_w // 2 * P, [(0, hx(col, 130)), (0.45, hx(col, 50)), (1, hx(col, 0))]), blend="screen"),
+            image(f"{name}Uv", lambda: gel_fluo(light(), col, hot, floor=0.6), blend="screen")]
+    inner = node(f"{name}UvOn", kids[::-1], opacity=0, binds=[bind(prop("uvLight"), 18)])
+    return node(f"Dec{n}Uv", [node("Lift", [inner], binds=[bind(prop(f"dec{n}lift"), 14, LIFT_CONV)])], x=x * P, y=y * P, opacity=0,
+                binds=[bind(prop(f"dec{n}"), 18), bind(prop(f"dec{n}x", default=x * P), 13), bind(prop(f"dec{n}y", default=y * P), 14)])
+
+
+def gel_wheel_art(n):
+    """The gel wheel: a brass ring round a lens of the gel on the lamp (Clear: pale glass), lit from the top left."""
+    px = Px()
+    cx, cy, r = GEL_WHEEL
+    lens, la = GEL_LENS[n]
+    for y in range(cy - r - 1, cy + r + 2):
+        for x in range(cx - r - 1, cx + r + 2):
+            d = math.hypot(x + 0.5 - cx - 0.5, y + 0.5 - cy - 0.5)
+            if d > r + 0.4:
+                continue
+            if d > r - 0.6:
+                px.put(x, y, hx("1a0e08"))
+            elif d > r - 2.1:  # a dark iron ring, knurled, catching the light at the top left
+                t = 0.45 - 0.4 * ((x - cx) + (y - cy)) / r + (0.1 if (round(math.atan2(y - cy, x - cx) * 4)) % 2 else 0)
+                px.put(x, y, R_IRON[shade_index(t, 4, x, y, 0.4)])
+            else:  # the lens: the gel's colour over the dark of the cubby wall, a highlight at the top left
+                base = mix(hx("2b1712"), hx(lens), la / 255)
+                lit = ((x - cx) + (y - cy)) < -2
+                px.put(x, y, mix(base, hx("ffffff"), 0.35) if lit else base)
+    for dx, dy in ((-2, -3), (-3, -2), (-2, -2)):  # glint
+        px.put(cx + dx, cy + dy, hx("ffffff", 220))
+    px.put(cx + r - 1, cy - r + 1, R_GOLD[4])  # a little tab on the rim to turn it by
+    px.put(cx + r, cy - r + 2, R_GOLD[3])
+    return px
+
+
+def gel_wheel_node():
+    """Cabinet, above the light switch: the wheel (haveGel), its lens showing gel0..3, bobbing on gelPress; its tap box
+    is moved away until a gel is bought (AWAY_CONV)."""
+    hit = rect_shape("GelHit", GEL_HIT[0] * P, GEL_HIT[1] * P, GEL_HIT[2] * P, GEL_HIT[3] * P, solid(hx("ffffff", 1)), sid=GEL_HIT_ID)
+    lenses = [image(f"GelWheel{n}", gel_wheel_art(n), opacity=1 if n == 0 else 0, binds=[bind(prop(f"gel{n}", default=1 if n == 0 else 0), 18)])
+              for n in range(4)]
+    return node("GelWheel", [node("GelWheelHitBox", [hit], y=3000, binds=[bind(prop("haveGel"), 14, AWAY_CONV)]),
+                             node("GelWheelArt", [node("GelPress", lenses[::-1], binds=[bind(prop("gelPress"), 14)])], opacity=0,
+                                  binds=[bind(prop("haveGel"), 18)])])
+
+
+GEL_HIT_ID = nid()
+
+
+def gel_icon(n):
+    """Shop card: a little lamp shining down through a gel sheet in a black card frame, its light coloured below."""
+    px = Px()
+    lens, _ = GEL_LENS[n]
+    x0, y0, w, h = -11, -34, 22, 20
+    for y in range(-52, -42):  # the lamp: a dark shade with a warm bulb under it
+        half = 3 + (y + 52) // 2
+        for x in range(-half, half + 1):
+            px.put(x, y, hx("2a2430") if y < -44 else hx("fff2b0") if abs(x) < half - 1 else hx("3a3442"))
+    for y in range(-42, 0):  # its light, coloured once it's through the gel, pooling on the sand
+        half = 4 + (y + 42) * 0.3
+        for x in range(-round(half), round(half) + 1):
+            a = (110 if y < y0 else 190) * (1 - abs(x) / (half + 1)) * (1 - (y + 42) / 80)
+            px.over(x, y, (hx("fff6d0") if y < y0 else mix(hx(lens), hx("ffffff"), 0.25))[:3] + (max(0, round(a)),))
+    for y in range(y0, y0 + h):
+        for x in range(x0, x0 + w):
+            edge = x in (x0, x0 + w - 1) or y in (y0, y0 + h - 1)
+            frame = x < x0 + 2 or x > x0 + w - 3 or y < y0 + 2 or y > y0 + h - 3
+            if edge:
+                px.put(x, y, hx("0e0a10"))
+            elif frame:
+                px.put(x, y, hx("2a2430") if (x + y) % 5 else hx("3a3442"))
+            else:
+                t = (x - x0) / w * 0.5 + (y - y0) / h * 0.5
+                c = mix(hx(lens), hx("ffffff"), 0.45 * (1 - t) if (x - x0) - (y - y0) > 4 else 0.08)
+                px.put(x, y, c[:3] + (235,))
+    for k in range(5):  # a streak of light through the film
+        px.put(x0 + 4 + k, y0 + 4 + k, hx("ffffff", 200))
+    if n == 3:  # UV: a little crystal jelly glowing green in its light
+        for x in range(-4, 4):
+            for y in range(-11, -7):
+                if (x + 0.5) ** 2 / 16 + (y + 7.5) ** 2 / 12 <= 1:
+                    px.put(x, y, hx("b4ffcc") if y == -11 or abs(x + 0.5) > 2.6 else hx("2eff6a", 220))
+        for x in (-3, -1, 1, 3):
+            px.put(x, -7, hx("2eff6a", 170))
+            px.put(x, -6, hx("2eff6a", 110))
+    return px
+
+
+def gel_contract(c):
+    """Lamp-gel entries in contract.json: the shop items and the wheel's tap box (also in `buttons` as "gel")."""
+    c["gels"] = {"items": list(GEL_ITEMS), "names": ["Clear", "Warm amber", "Deep blue", "UV"], "fluoresce": sorted(GEL_FLUO)}
+
+
+# ---- end lamp gels ----
+
+
+# ---- temperature ---- the heater and the chiller (shop items 34, 35; src/temperature.ts) are units fixed to the back
+# wall of the tool shelf's cubby, above the sponge; tapping one switches it on or off (triggers `heater`, `chiller`).
+# haveHeat/haveCool show them (their tap boxes are moved away until then), heatOn/coolOn light their pilot lamps and
+# a soft glow, heatPress/coolPress bob them. A stick-on thermometer on the front glass (top right, under the hood:
+# the hood's right end belongs to the HTML gear and request note on phones) shows two digits (tc1 tens, tc0 ones,
+# one-hot) and a bulb coloured by the water's zone (tmpCool / tmpRoom / tmpWarm).
+TEMP_UNIT_Y = 366  # the units' top (logical); the sponge's tap box starts below them
+TEMP_UNITS = [("Heater", "heater", 142, "haveHeat", "heatOn", "heatPress"), ("Chiller", "chiller", 160, "haveCool", "coolOn", "coolPress")]
+TEMP_UNIT_W, TEMP_UNIT_H = 16, 25
+TEMP_SPONGE_TOP = TEMP_UNIT_Y + TEMP_UNIT_H + 2  # 393
+# the thermometer: a stick-on LCD strip on the front glass, top right, below the hood and clear of its HTML buttons
+# (the gear and the request note reach ~27 logical px down on a 360 px phone)
+TEMP_STICK = (207, 31)  # its top-left (logical)
+TEMP_STICK_W, TEMP_STICK_H = 25, 11
+TEMP_BULB = {"tmpCool": "4cc3ff", "tmpRoom": "7ee08a", "tmpWarm": "ff6a4a"}
+R_TEMP_STEEL = ramp("15161f", "2c3044", "4c5270", "7c84a4", "b8c0d8", "eef2ff")
+R_TEMP_WHITE = ramp("2a3448", "5a6c88", "9cb0c8", "d4e2ee", "f6fbff")
+TEMP_HIT_IDS = {key: nid() for _, key, *_ in TEMP_UNITS}
+
+
+def temp_unit_art(kind, on):
+    """A small unit on the cubby's back wall, origin = its top-left. Heater: dark steel, a cream dial with a red tick,
+    a window onto its coil (glowing when on), a red pilot. Chiller: white enamel, a round fan grille, a snowflake,
+    a blue pilot. Two brass screws hold it to the wall."""
+    px = Px()
+    w, h = TEMP_UNIT_W, TEMP_UNIT_H
+    m = round_rect_mask(w, h, 3)
+    heat = kind == "Heater"
+    rmp = R_TEMP_STEEL if heat else R_TEMP_WHITE
+    for x, y in m:
+        edge = any((x + a, y + b) not in m for a, b in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+        t = 0.75 - 0.4 * y / h - 0.25 * x / w
+        c = hx("0a0a12") if edge else rmp[(len(rmp) - 2) if (x <= 1 or y <= 1) else 1 + shade_index(t, len(rmp) - 3, x, y, 0.5)]
+        px.put(x, y, c)
+    for sx, sy in ((2, 2), (w - 3, h - 3)):  # screws
+        px.put(sx, sy, R_GOLD[2])
+    cx = w // 2
+    if heat:
+        for y in range(4, 9):  # the dial
+            for x in range(cx - 3, cx + 3):
+                if (x + 0.5 - cx) ** 2 + (y + 0.5 - 6.5) ** 2 <= 7.5:
+                    px.put(x, y, R_CREAM[3] if y < 6 else R_CREAM[2])
+        px.put(cx, 5, hx("d0302a")); px.put(cx + 1, 4, hx("d0302a"))
+        for y in range(11, 19):  # the coil window
+            for x in range(cx - 3, cx + 3):
+                win = x in (cx - 3, cx + 2) or y in (11, 18)
+                coil = (y - 12) % 2 == 0 and not win
+                px.put(x, y, hx("0a0a12") if win else (hx("ff8a2a") if on else hx("6a3a24")) if coil else (hx("5a1a10") if on else hx("1a1418")))
+    else:
+        for y in range(4, 15):  # the fan grille
+            for x in range(cx - 5, cx + 5):
+                d = (x + 0.5 - cx) ** 2 + (y + 0.5 - 9.5) ** 2
+                if d <= 26:
+                    px.put(x, y, hx("1a2232") if d > 20 or (x + y) % 2 == 0 else R_TEMP_WHITE[1])
+        for dx, dy in ((0, -2), (0, -1), (0, 0), (0, 1), (0, 2), (-2, 0), (-1, 0), (1, 0), (2, 0), (-1, -1), (1, 1), (1, -1), (-1, 1)):
+            px.put(cx + dx, 9 + dy, hx("bff4ff") if on else hx("dce8f4"))
+        for x in range(cx - 4, cx + 4):  # vents
+            px.put(x, 17, R_TEMP_WHITE[0])
+            px.put(x, 19, R_TEMP_WHITE[0])
+    led = (hx("ff4a3a") if heat else hx("4ad8ff")) if on else hx("2a2a34")
+    px.put(w - 4, h - 4, led)
+    px.put(w - 5, h - 4, led if on else hx("3a3a46"))
+    if on:
+        px.put(w - 4, h - 5, hx("ffffff", 200))
+    return px
+
+
+def temp_units_node():
+    """The cubby's two units. Each: shown once bought (have*), switched off / on art (*On), a glow while on, a bob
+    when tapped; the tap box away until bought."""
+    kids = []
+    for kind, key, x0, have, on, press in TEMP_UNITS:
+        y0 = TEMP_UNIT_Y
+        glow_c = "ff7a3a" if kind == "Heater" else "6ad8ff"
+        glow = ellipse_shape(f"{kind}Glow", (x0 + TEMP_UNIT_W // 2) * P, (y0 + TEMP_UNIT_H // 2) * P, (TEMP_UNIT_W + 22) * P, (TEMP_UNIT_H + 18) * P,
+                             rad_grad(0, 0, (TEMP_UNIT_W // 2 + 11) * P, [(0, hx(glow_c, 200)), (0.45, hx(glow_c, 120)), (1, hx(glow_c, 0))]),
+                             blend="screen", opacity=0, binds=[bind(prop(on), 18)])
+        art = node(f"{kind}Press", [
+            image(f"{kind}On", temp_unit_art(kind, True), lx=x0, ly=y0, opacity=0, binds=[bind(prop(on), 18)]),
+            image(f"{kind}Off", temp_unit_art(kind, False), lx=x0, ly=y0, binds=[bind(prop(on), 18, INVERT_CONV)]),
+        ], binds=[bind(prop(press), 14)])
+        hit = rect_shape(f"{kind}Hit", (x0 - 1) * P, (y0 - 1) * P, (TEMP_UNIT_W + 2) * P, (TEMP_UNIT_H + 2) * P, solid(hx("ffffff", 1)), sid=TEMP_HIT_IDS[key])
+        kids.append(node(kind, [node(f"{kind}HitBox", [hit], y=3000, binds=[bind(prop(have), 14, AWAY_CONV)]),
+                                node(f"{kind}Unit", [art, glow], opacity=0, binds=[bind(prop(have), 18)])]))
+    return node("TempUnits", kids)
+
+
+def temp_button_rects():
+    return [{"name": key, "x": (x0 - 1) * P, "y": (TEMP_UNIT_Y - 1) * P, "w": (TEMP_UNIT_W + 2) * P, "h": (TEMP_UNIT_H + 2) * P}
+            for _, key, x0, *_ in TEMP_UNITS]
+
+
+def temp_thermo_node():
+    """On the front glass, top right under the hood: a stick-on LCD thermometer (screen space, over the vignette) with a
+    tube whose bulb is coloured by zone and the water's whole degrees; dimmed at night with the room."""
+    x0, y0 = TEMP_STICK
+    w, h = TEMP_STICK_W, TEMP_STICK_H
+    m = round_rect_mask(w, h, 2)
+    plate = Px()
+    for x, y in m:
+        edge = any((x + a, y + b) not in m for a, b in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+        plate.put(x0 + x, y0 + y, hx("dfe8f0", 200) if edge else hx("10201c", 215) if y > 1 else hx("1c302a", 215))
+    for x in range(x0 + 2, x0 + w - 2):  # a glint along the top of the sticker's film
+        plate.put(x, y0 + 1, hx("6a8a80", 215))
+    tx, ty = x0 + 3, y0 + 2
+    for y in range(ty, ty + 5):  # the glass tube
+        plate.put(tx, y, hx("8aa8a0"))
+        plate.put(tx + 2, y, hx("8aa8a0"))
+        plate.put(tx + 1, y, hx("24403a"))
+    kids = [image("ThermoPlate", plate)]
+    for key, col in TEMP_BULB.items():  # the mercury and bulb, by zone
+        b = Px()
+        for y in range(ty + (2 if key == "tmpCool" else 1 if key == "tmpRoom" else 0), ty + 5):
+            b.put(tx + 1, y, hx(col))
+        for x, y in ((tx, ty + 5), (tx + 1, ty + 5), (tx + 2, ty + 5), (tx, ty + 6), (tx + 1, ty + 6), (tx + 2, ty + 6), (tx + 1, ty + 7)):
+            b.put(x, y, hx(col))
+        b.put(tx, ty + 5, mix(hx(col), hx("ffffff"), 0.5))
+        kids.append(image(f"ThermoBulb{key[3:]}", b, opacity=1 if key == "tmpRoom" else 0, binds=[bind(prop(key, default=1 if key == "tmpRoom" else 0), 18)]))
+    for p_, dx in ((1, 7), (0, 12)):  # tens, ones (the counter's digit glyphs)
+        for d in range(10):
+            on = (p_, d) == (1, 2) or (p_, d) == (0, 2)
+            kids.append(image(f"Digit{d}", lambda d=d: big_digit(d), lx=x0 + dx, ly=y0 + 2, node_name=f"tc{p_}n{d}", opacity=1 if on else 0,
+                              binds=[bind(prop(f"tc{p_}n{d}", default=1 if on else 0), 18)]))
+    deg = Px()
+    for x, y in ((1, 0), (0, 1), (2, 1), (1, 2)):
+        deg.put(x0 + w - 5 + x, y0 + 2 + y, hx("fff2c8"))
+    kids.append(image("ThermoDegree", deg))
+    dark = Px()
+    for x, y in m:
+        dark.put(x0 + x, y0 + y, hx("08103a", 130))
+    kids.append(image("ThermoNight", dark, opacity=0, binds=[bind(prop("nightShade"), 18)]))
+    return node("Thermometer", kids[::-1])
+
+
+def temp_icon(i):
+    """Shop card: the unit, switched on, standing on the sand."""
+    return standing(temp_unit_art("Heater" if i == 34 else "Chiller", True), 0, -1)
+
+
+def temp_contract(c):
+    """Temperature entries in contract.json: the shop items, the units' tap boxes (also in `buttons`) and the thermometer."""
+    c["temperature"] = {"items": [34, 35], "units": temp_button_rects(),
+                        "thermometer": {"x": TEMP_STICK[0] * P, "x1": (TEMP_STICK[0] + TEMP_STICK_W) * P, "y": TEMP_STICK[1] * P, "h": TEMP_STICK_H * P}}
+
+
+# ---- end temperature ----
+
+
 # ---------------------------------------------------------------- build the scene (back to front)
 
 btf = []    # screen space, back to front
@@ -8027,6 +8374,7 @@ btf.append(node("World", list(reversed(world)), binds=cam_bind()))
 
 btf.append(rect_shape("Night", water_x, water_y, water_w, water_h, lin_grad(0, 0, 0, water_h, [
     (0, hx("0a1440", 150)), (1, hx("040a24", 215))]), opacity=0, binds=[bind(prop("nightShade"), 18)]))
+btf.append(gel_tint_node())  # ---- lamp gels ---- the gel's light over the scenery, while the lamp is on
 
 # glow coral's night light: shown when owned (dec4) x host-driven dec4glow
 _, gx_, gy_, _ = DECOR[4]
@@ -8053,6 +8401,9 @@ add_anim("CoralGlow", 300, [keys(gpulse, 18, [(0, 0.6), (150, 1), (300, 0.6)], "
 # ---- keepsakes ---- the lighthouse's lamp and beam, and the jelly lantern, light up at night
 mid.append(keep_glow_node(6, "Lighthouse", keep_lighthouse_light(), -45, 40, 32, "ffe080", beam=True))
 mid.append(keep_glow_node(7, "Lantern", keep_lantern_light(), -19, 46, 40, "ff9ac8"))
+# ---- lamp gels ---- under UV the glow coral and the jelly lantern fluoresce
+mid.append(gel_uv_decor(4, "GlowCoral", mushroom_art, -7, 64, 40, "2eff8a", "b4ffd8"))
+mid.append(gel_uv_decor(7, "Lantern", keep_lantern_light, -19, 44, 38, "1ee4ff", "aaf6ff"))
 
 # the cave's light: over the Night layer, screen-blended. Always on softly; at night (nightShade) it comes
 # up to full through a range mapper (0.45 -> 1). Dots twinkle in three groups; the heart of the cave breathes.
@@ -8310,6 +8661,7 @@ def stage_node(k, g):
             rings.append(node(nm, [node("NightRing", list(reversed(ring)), opacity=0, binds=[bind(prop("nightShade"), 18)], **SCALED)], **kw))
         parts.append(node("Rings", rings))
     parts[0] = glow
+    parts = gel_dim(k, parts) + gel_uv_parts(k, g, gcy, gw, gh)  # ---- lamp gels ---- under UV: dimmed, or fluorescing
     return node(STAGES[g].capitalize(), list(reversed(parts)), **on(f"g{g}", 1 if g == 3 else 0))
 
 
@@ -8372,6 +8724,9 @@ ITEMS = [("BLUE BLUBBER", "POLYP", 40), ("UPSIDE-DOWN", "POLYP", 70), ("COMB JEL
          ("CORAL GARDEN", "THEME|TROPICAL|CORALS", 170), ("ARCTIC", "THEME|ICE AND|SNOW", 200),
          ("BUBBLER", "BUBBLES|TO RIDE", 80)]  # ---- bubbler ---- (v13: item 24, decoration 10)
 ITEMS += [(nm, how, 0) for nm, how in KEEP_ITEMS]  # ---- keepsakes ---- 25..30
+ITEMS += [("WARM GEL", "LAMP GEL|GOLDEN|LIGHT", 60), ("BLUE GEL", "LAMP GEL|DEEP|COBALT", 80),  # ---- lamp gels ---- 31..33
+          ("UV GEL", "LAMP GEL|SOME|JELLIES|GLOW", 150)]
+ITEMS += [("HEATER", "WARMS THE|WATER|SHELF UNIT", 90), ("CHILLER", "COOLS THE|WATER|SHELF UNIT", 110)]  # ---- temperature ---- 34, 35
 # shop item -> the species it sells (polyps)
 JELLY_ITEM = {0: 1, 1: 2, 2: 3, 13: 4, 14: 5, 15: 6, 16: 7, 17: 8}
 TANK_ITEMS, HELPER_ITEMS = (11, 12), (8, 9, 10)
@@ -8383,8 +8738,8 @@ THEME_ITEMS = tuple(range(THEME_ITEM0, THEME_ITEM0 + 4)) + (KEEP_THEME_ITEM,)  #
 NEEDS = [(12, "needs12", ["NEEDS", "MEDIUM"]), (15, "needs15", ["NEEDS", "MEDIUM"]), (17, "needs17", ["NEEDS", "LARGE"])]
 TABS = [("JELLIES", [0, 13, 1, 14, 2, 15, 16, 17], "DRAG TO SEE MORE JELLIES"),
         ("DECOR", [3, 4, 5, 6, 7, 24] + list(KEEP_ITEM_IDS[:-1]), "TAP YOURS TO PUT AWAY. HOLD ONE TO MOVE"),  # ---- put away ----
-        ("SUPPLIES", [8, 9, 10, 18, 19], "NEW FOOD WAITS ON THE SHELF"),
-        ("TANK", [11, 12, 20, 21, 22, 23, KEEP_THEME_ITEM], "TAP AN OWNED THEME TO USE IT")]
+        ("SUPPLIES", [8, 9, 10, 18, 19, 34, 35], "NEW THINGS WAIT ON THE SHELF"),  # ---- temperature ----
+        ("TANK", [11, 12, 20, 21, 22, 23, KEEP_THEME_ITEM] + list(GEL_ITEMS), "TAP AN OWNED THEME OR GEL TO USE IT")]  # ---- lamp gels ----
 TAB_W, TAB_H, TAB_GAP, TAB_Y, TAB_LIFT = 50, 15, 4, 55, 3
 TAB_X = [14 + t * (TAB_W + TAB_GAP) for t in range(len(TABS))]
 RULE_Y = TAB_Y + TAB_H  # the shelf line the tabs stand on
@@ -8431,6 +8786,10 @@ def item_icon(i):
     """Mini sprite for shop item i, origin = where it sits in its window (centre x, y)."""
     if i in KEEP_ITEM_IDS:  # ---- keepsakes ----
         return keep_icon(i), 14
+    if i in GEL_ITEMS:  # ---- lamp gels ----
+        return gel_icon(i - 30), 14
+    if i in (34, 35):  # ---- temperature ----
+        return temp_icon(i), 14
     if i in TANK_ITEMS:
         return tank_icon(i - 10), 14
     if i in THEME_ITEMS:
@@ -8732,7 +9091,7 @@ def shop_node():
                 g.append(image("StoredBadge", stored_badge(), lx=x0 + 50, ly=y0 + 48, node_name=f"Away{i}", opacity=0, binds=[bind(prop(f"away{i}"), 18)]))
             else:
                 g.append(image("OwnBadge", own_badge(), lx=x0 + 50, ly=y0 + 48, node_name=f"Own{i}", opacity=0, binds=[bind(prop(f"own{i}"), 18)]))
-            if i in THEME_ITEMS:  # v11: the theme in use
+            if i in THEME_ITEMS or i in GEL_ITEMS:  # v11: the theme in use (---- lamp gels ---- and the gel on the lamp)
                 g.append(image("InUseBadge", in_use_badge(), lx=x0 + 50, ly=y0 + 48, node_name=f"Use{i}", opacity=0,
                                binds=[bind(prop(f"use{i}", default=1 if i == THEME_ITEM0 else 0), 18)]))
             for ni, nprop, nlines in NEEDS:  # locked because of the tank size (written by the logic alongside lock{i})
@@ -8839,6 +9198,7 @@ btf.append(poly_shape("GlassStreak1", [(30 * P, 20 * P), (44 * P, 20 * P), (14 *
                       lin_grad(0, 20 * P, 0, 120 * P, [(0, hx("ffffff", 40)), (1, hx("ffffff", 0))])))
 btf.append(poly_shape("GlassStreak2", [(50 * P, 20 * P), (54 * P, 20 * P), (26 * P, 100 * P), (24 * P, 100 * P)],
                       lin_grad(0, 20 * P, 0, 100 * P, [(0, hx("ffffff", 30)), (1, hx("ffffff", 0))])))
+btf.append(temp_thermo_node())  # ---- temperature ---- the stick-on thermometer on the front glass
 
 # the tank's walls, over the screen overlays: the left glass wall at world x 0, the right one at wallX
 # (720 / 1080 / 1440 by tier) carrying an opaque "outside" panel so nothing past it ever shows.
@@ -8913,7 +9273,7 @@ lamp = Px()
 for x in range(20, LW - 20):
     lamp.put(x, HOOD - 2, hx("fff6c8"))
     lamp.put(x, HOOD - 1, hx("ffe48a"))
-btf.append(node("Lamp", [image("LampStrip", lamp),
+btf.append(node("Lamp", gel_lamp_parts() + [image("LampStrip", lamp),  # ---- lamp gels ---- the gel's strip over the clear one
                          rect_shape("LampGlow", water_x, water_y, water_w, 40 * P,
                                     lin_grad(0, 0, 0, 40 * P, [(0, hx("fff2b0", 90)), (1, hx("fff2b0", 0))]), blend="screen")],
                 binds=[bind(prop("daylight", default=1), 18)]))
@@ -9088,6 +9448,8 @@ for n, (label, _, cx, tool, press, trig, have) in enumerate(SHELF_ITEMS):
     hx0 = bx0 - 4 if n == 0 else max(bx0 - 4, (_bx[n - 1][1] + bx0) // 2 + 1)
     hx1 = bx1 + 5 if n == len(SHELF_ITEMS) - 1 else min(bx1 + 5, (bx1 + _bx[n + 1][0]) // 2 + 1)
     rect = (hx0, SHELF[1] + 2, hx1 - hx0, SHELF_TOP + 10 - SHELF[1] - 2)
+    if label == "Clean":  # ---- temperature ---- the heater and chiller units hang above the sponge: its box starts below them
+        rect = (rect[0], TEMP_SPONGE_TOP, rect[2], SHELF_TOP + 10 - TEMP_SPONGE_TOP)
     gid = nid()
     shelf_glow_ids.append(gid)
     kids = [node(f"{label}Spot", [
@@ -9109,6 +9471,7 @@ for n, (label, _, cx, tool, press, trig, have) in enumerate(SHELF_ITEMS):
     else:
         shelf_items.extend(kids + [hit])
 btf.append(node("ToolShelf", list(reversed(shelf_items))))
+btf.append(temp_units_node())  # ---- temperature ---- the heater and chiller on the cubby's back wall
 
 switch_hit = nid()
 btf.append(node("LightSwitch", [
@@ -9126,6 +9489,10 @@ inner = [image("BtnBase", button_art(), node_name="ShopBase"), centred("ShopIcon
 press = node("ShopPress", list(reversed(inner)), binds=[bind(prop(f"b{SHOP_BTN}y"), 14)])
 hid = nid()
 hit_ids.append((hid, "shop"))
+btf.append(gel_wheel_node())  # ---- lamp gels ---- the gel wheel above the light switch
+hit_ids.append((GEL_HIT_ID, "gel"))  # ---- lamp gels ----
+hit_ids += [(TEMP_HIT_IDS[key], key) for _, key, *_ in TEMP_UNITS]  # ---- temperature ----
+TRIGGERS += ["gel", "heater", "chiller"]  # ---- lamp gels ---- ---- temperature ----
 hit = rect_shape("ShopHit", 0, 0, BTN_W * P, (BTN_H + 2) * P, solid(hx("ffffff", 1)), sid=hid)
 btf.append(node("ShopButton", [hit, press, image("BtnShadow", button_shadow(), node_name="ShopShadow")], x=BTN_X[SHOP_BTN] * P, y=BTN_Y * P))
 add_anim("HeldGlow", 120, [keys(g, 18, [(0, 0.6), (60, 1), (120, 0.6)], "cubic") for g in shelf_glow_ids])
@@ -9209,6 +9576,7 @@ doc = f'''<Rive version="1" kind="fragment">
 <DataConverterRangeMapper minInput="0" maxInput="1" minOutput="3000" maxOutput="0" clampLower="true" clampUpper="true" name="Away" id="{AWAY_CONV}"/>
 <DataConverterRangeMapper minInput="0" maxInput="1" minOutput="1" maxOutput="{HW_GHOST_FADE}" clampLower="true" clampUpper="true" name="hw_GhostFade" id="{HW_FADE_CONV}"/>
 {calm_converters()}
+<DataConverterRangeMapper minInput="0" maxInput="1" minOutput="1" maxOutput="{GEL_DIM}" clampLower="true" clampUpper="true" name="GelDim" id="{GEL_DIM_CONV}"/>
 {jvm}
 {vm}
 {nl.join(assets)}
@@ -9287,6 +9655,10 @@ hw_contract(contract)  # ---- Halloween event ----
 keep_contract(contract)  # ---- keepsakes ----
 store_contract(contract)  # ---- put away ----
 nv_contract(contract, NV_SPOTS)  # ---- night visitors ----
+# ---- lamp gels ---- ---- temperature ---- the gel wheel and the two shelf units are buttons like the rest
+contract["buttons"] += [{"name": "gel", "x": GEL_HIT[0] * P, "y": GEL_HIT[1] * P, "w": GEL_HIT[2] * P, "h": GEL_HIT[3] * P}] + temp_button_rects()
+gel_contract(contract)  # ---- lamp gels ----
+temp_contract(contract)  # ---- temperature ----
 # ---- asset groups: each group's PNGs packed into one file (base64 in JSON, a type every host serves and
 # compresses); the contract lists them with a content hash the host adds to the URL so a new build busts caches
 SPRITE_DIR = ROOT / "public" / "sprites"

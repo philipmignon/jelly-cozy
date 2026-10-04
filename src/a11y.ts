@@ -7,6 +7,8 @@
 import { SPECIES_NAMES } from "./species";
 import { MILESTONES } from "./keepsakes";
 import { VISITORS, VISITOR_NAMES, nightVisitor } from "./visitors";
+import { gelWords } from "./gels";
+import { settingWords, settledWords } from "./temperature";
 
 // ---------------------------------------------------------------- keys
 
@@ -33,6 +35,9 @@ export type KeyAction =
   | { kind: "pan"; dir: -1 | 1 } // [ and ]: look left / right
   | { kind: "hold"; n: number } // 1-4: the can, the shrimp jar, the plankton bottle, the sponge
   | { kind: "escape" } // put down what's in hand, close the shop
+  | { kind: "gel" } // ---- lamp gels ---- G: the next gel on the lamp
+  | { kind: "heater" } // ---- temperature ---- H: the heater on or off
+  | { kind: "chiller" } // ---- temperature ---- C: the chiller on or off
   // the shop, while it's open
   | { kind: "shopMove"; dx: -1 | 0 | 1; dy: -1 | 0 | 1 }
   | { kind: "shopStep"; d: -1 | 1 } // Tab / Shift+Tab: the next card, on into the next tab
@@ -98,6 +103,12 @@ export function keyAction(e: KeyLike, ctx: { onCanvas: boolean; shopOpen: boolea
       return { kind: "hold", n: Number(k) - 1 };
     case "Escape":
       return { kind: "escape" };
+    case "g": // ---- lamp gels ----
+      return { kind: "gel" };
+    case "h": // ---- temperature ----
+      return { kind: "heater" };
+    case "c":
+      return { kind: "chiller" };
   }
   return null;
 }
@@ -224,6 +235,12 @@ export interface SayEvent {
   seen?: boolean;
   /** v14 "visitorArrived": the first time this kind ever came */
   first?: boolean;
+  /** ---- lamp gels ---- "gel": the gel now on the lamp */
+  gel?: number;
+  /** ---- temperature ---- "thermo": the unit (1 heater, -1 chiller); "thermo", "settled": the setting, the water's °C */
+  dir?: number;
+  set?: number;
+  temp?: number;
 }
 
 /** v14: how each night visitor's arrival is said (they're rare: worth a line of their own). */
@@ -296,6 +313,12 @@ export function eventWords(
     case "rode":
       // only a ride you could see (the bubbler on screen), and now and then: rides are frequent
       return j && e.seen ? { text: `${j.name} rode the bubbler.`, low: true } : null;
+    case "gel": // ---- lamp gels ----
+      return { text: gelWords(e.gel ?? 0), low: false };
+    case "thermo": // ---- temperature ----
+      return e.dir ? { text: settingWords(e.dir, e.set ?? 0), low: false } : null;
+    case "settled":
+      return e.temp !== undefined ? { text: settledWords(e.set ?? 0, e.temp), low: false } : null;
   }
   return null;
 }

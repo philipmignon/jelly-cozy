@@ -268,6 +268,10 @@ import { COLUMN_HALF, CURRENT_HALF, CURRENT_PUSH, CURRENT_TOP_GAP, GLIDE_SHARE, 
 import { SEASONS, type SeasonId } from "./season";
 import { SPRINKLE_NEAR, advance, copyRequests, planRequests, requestText, requestsOf, rewardOf, type DailyRequests, type Deed, type Request, type RequestKind } from "./requests";
 import { MILESTONES, copyKeep, countDay, isEarned, keepFacts, keepOf, newlyReached, progressOf, seedKeep, type KeepSave } from "./keepsakes";
+// ---- lamp gels ----
+import { GEL_N, anyGel, gelFields, gelsOf, nextGel, setGel, uvLightOf, type GelState } from "./gels";
+// ---- temperature ----
+import { climateField, climateOf, comfortOf, driftTemp, setPoint, stepClimate, tempGrowth, tempMood, tempReading, toggleDevice, zoneOf, TEMP_NEAR, type Climate, type SaveClimate } from "./temperature";
 
 export { K, clamp, sandAt, specProps, SHOP_ITEMS, POLYP_ANCHORS, SETTLE_SPOTS, DECOR, TAB_ITEMS, NAMES, OPEN_SAND, OPEN_SANDS, TIERS, MAX_SLOTS, geomOf };
 export type { Species, Stage, Snail, Walker, Cam, Visit, VisitorKind, Spot, SaveSpot, FoodKind };
@@ -388,6 +392,12 @@ export interface Save {
   stored?: boolean[];
   /** v15 (optional): the visitor log, times seen and first seen per visitor kind (./visitlog.ts); absent until the first */
   visitorsSeen?: VisitorsSeen;
+  /** ---- lamp gels ---- (optional): gels owned (GEL_N long, Clear always) once one is bought; the one on the lamp, absent = Clear */
+  gels?: boolean[];
+  gel?: number;
+  /** ---- temperature ---- (optional): the heater and chiller, the thermostat setting and the water's °C (./temperature.ts);
+   *  absent = neither owned, room temperature */
+  climate?: SaveClimate;
 }
 
 // ---------------------------------------------------------------- state
@@ -459,7 +469,10 @@ export interface Jelly {
   ride: number;
 }
 
-export type SimEventType = "ate" | "pulse" | "cleaned" | "grew" | "adult" | "earned" | "baby" | "dug" | "shrimpAte" | "pearlReady" | "pearl" | "rehomed" | "upgraded" | "revealed" | "visitorArrived" | "visitorTapped" | "visitorLeft" | "spotCleaned" | "themed" | "requestDone" | "rode" | "keepsake";
+export type SimEventType = "ate" | "pulse" | "cleaned" | "grew" | "adult" | "earned" | "baby" | "dug" | "shrimpAte" | "pearlReady" | "pearl" | "rehomed" | "upgraded" | "revealed" | "visitorArrived" | "visitorTapped" | "visitorLeft" | "spotCleaned" | "themed" | "requestDone" | "rode" | "keepsake"
+  // ---- lamp gels ---- "gel" (gel): a gel went on the lamp; ---- temperature ---- "thermo" (dir, set): a shelf unit
+  // was switched; "settled" (set, temp): the water reached its setting
+  | "gel" | "thermo" | "settled";
 export interface SimEvent {
   type: SimEventType;
   slot?: number;
@@ -487,6 +500,13 @@ export interface SimEvent {
   keepsake?: number;
   /** v14 "visitorArrived": the first time this kind ever came (it's new in the visitor log) */
   first?: boolean;
+  /** ---- lamp gels ---- "gel": the gel now on the lamp (0 Clear .. 3 UV) */
+  gel?: number;
+  /** ---- temperature ---- "thermo": which unit (1 heater, -1 chiller); "thermo", "settled": the setting (-1 cool, 0 room,
+   *  1 warm) and the water's temperature (°C) */
+  dir?: number;
+  set?: number;
+  temp?: number;
 }
 
 export interface State {
@@ -593,6 +613,10 @@ export interface State {
   keepAtLoad: number[];
   /** v14: the visitor log (./visitlog.ts) */
   visitorsSeen: VisitorsSeen;
+  /** ---- lamp gels ---- owned and on the lamp (./gels.ts) */
+  gels: GelState;
+  /** ---- temperature ---- the heater, the chiller, the setting and the water (./temperature.ts) */
+  climate: Climate;
 }
 
 /** v8: what the player has in hand. v11: "shrimp" (the brine shrimp jar) and "plankton" (the bottle) are foods too. */
@@ -918,6 +942,8 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
     ...keepField(keepOf(raw.keep)),
     ...storedField(storedOf(raw.stored, owned)),
     ...seenField(visitorsSeenOf(raw.visitorsSeen)),
+    ...gelFields(gelsOf(raw.gels, raw.gel)), // ---- lamp gels ----
+    ...climateField(climateOf(raw.climate)), // ---- temperature ----
   };
 }
 
@@ -973,13 +999,17 @@ export function applyAway(save: Save, now: number, growthMultiplier = 1): Save {
   const right = tierRight(tier);
   const start = Array.isArray(save.spots) ? spotsFromSave(save.spots, right) : spotsForMurk(save.murk, right, rng(save.lastSeen));
   const dirt = dirtAway(start, away, right, save.helpers[SNAIL] === true, SNAIL_FLOOR, GOOD_MURK, Math.floor(finite(save.lastSeen, 0) / 1000) + 7);
+  // ---- temperature ---- the water settled toward its setting; growth while away goes at the rate it settled to
+  const clim = climateOf(save.climate);
+  clim.temp = driftTemp(clim.temp, clim.set, away);
   return {
     ...save,
+    ...(save.climate ? { climate: climateField(clim).climate } : {}),
     slots: save.slots.map((j) => {
       if (!j) return null;
       const fullGood = j.fullness > GOOD_FULLNESS ? (j.fullness - GOOD_FULLNESS) * RATES.hungerAway : 0;
       const good = dirt.goodTime(Math.min(away, fullGood));
-      const pts = Math.min(AWAY_GROWTH_CAP, Math.floor((good * growthMultiplier) / CARE_SECONDS));
+      const pts = Math.min(AWAY_GROWTH_CAP, Math.floor((good * growthMultiplier * tempGrowth(j.k, clim.temp)) / CARE_SECONDS));
       return {
         ...j,
         gp: j.gp + pts,
@@ -1306,6 +1336,8 @@ export function createState(save: Save, rand: () => number = Math.random, opts: 
     keepOn: opts.keepsakes === true,
     keepAtLoad: [],
     visitorsSeen: visitorsSeenOf(save.visitorsSeen),
+    gels: gelsOf(save.gels, save.gel), // ---- lamp gels ----
+    climate: climateOf(save.climate), // ---- temperature ----
   };
   state.theme = themeOf(save.theme, state.themes);
   for (const j of jellies(state)) noteJelly(state, j);
@@ -1343,10 +1375,12 @@ export function toSave(s: State, now: number): Save {
     ...keepField(s.keep),
     ...storedField(storedOf(s.stored, s.owned)),
     ...seenField(s.visitorsSeen),
+    ...gelFields(s.gels), // ---- lamp gels ----
+    ...climateField(s.climate), // ---- temperature ----
   };
 }
 
-export const jellies = (s: State) => s.slots.filter((j): j is Jelly => j !== null);
+export const jellies =(s: State) => s.slots.filter((j): j is Jelly => j !== null);
 export const jellyCount = (s: State) => jellies(s).length;
 
 // ---------------------------------------------------------------- world and camera (v5)
@@ -1483,7 +1517,8 @@ function hintTarget(s: State, dir: -1 | 1): number {
   if (s.shop.open) return 0;
   return (dir < 0 ? s.cam.x < -0.5 : s.cam.x > camMin(s) + 0.5) ? 1 : 0;
 }
-export const moodOf = (s: State, j: Jelly) => clamp(0.5 * j.fullness + 0.3 * (1 - s.murk) + 0.2 * j.affection);
+// ---- temperature ---- a little happier in the water it likes, a little less at the other end (0 at room temperature)
+export const moodOf = (s: State, j: Jelly) => clamp(0.5 * j.fullness + 0.3 * (1 - s.murk) + 0.2 * j.affection + tempMood(j.k, s.climate.temp));
 /** Average mood across the tank. */
 export function mood(s: State): number {
   const js = jellies(s);
@@ -1904,6 +1939,59 @@ export function setTheme(s: State, n: number): boolean {
   return true;
 }
 
+// ---- lamp gels ----
+
+/**
+ * Put gel n (0 Clear, 1 Warm amber, 2 Deep blue, 3 UV) on the lamp if it's owned. A change slides the shop shut so
+ * the new light shows, and "gel" comes out of the next step(). False for a gel that isn't owned.
+ */
+export function useGel(s: State, n: number): boolean {
+  const was = s.gels.on;
+  if (!setGel(s.gels, n)) return false;
+  if (n !== was) {
+    closeShop(s);
+    s.queued.push({ type: "gel", gel: n });
+  }
+  return true;
+}
+
+/** The gel wheel by the light switch: the next owned gel (Clear included). Returns the gel now on, or -1 with none bought. */
+export function cycleGel(s: State): number {
+  s.gels.pressUntil = s.t + 0.14;
+  if (!anyGel(s.gels)) return -1;
+  useGel(s, nextGel(s.gels));
+  return s.gels.on;
+}
+
+/** The gels: owned, and the one on the lamp. */
+export const gelInfo = (s: State) => ({ on: s.gels.on, owned: [...s.gels.owned] });
+
+// ---- temperature ----
+
+/**
+ * A shelf unit tapped (dir 1 the heater, -1 the chiller): it flips its setting on or off (the other unit's goes off).
+ * "thermo" comes out of the next step(). Returns the new setting, or null if that unit isn't owned.
+ */
+export function tapClimate(s: State, dir: 1 | -1): -1 | 0 | 1 | null {
+  if (dir > 0) s.climate.pressHeat = s.t + 0.14;
+  else s.climate.pressCool = s.t + 0.14;
+  const set = toggleDevice(s.climate, dir);
+  if (set === null) return null;
+  s.queued.push({ type: "thermo", dir, set, temp: tempReading(s.climate.temp) });
+  return set;
+}
+
+/** The water and the thermostat: °C now, the reading, the setting and its target, which units are owned. */
+export const climateInfo = (s: State) => ({
+  temp: s.climate.temp,
+  reading: tempReading(s.climate.temp),
+  set: s.climate.set,
+  target: setPoint(s.climate.set),
+  zone: zoneOf(s.climate.temp),
+  heater: s.climate.heater,
+  chiller: s.climate.chiller,
+});
+
 /** The theme in use (0 Reef .. 3 Arctic) and which are owned. */
 export const themeInfo = (s: State) => ({ theme: s.theme, name: THEME_NAMES[s.theme] ?? THEME_NAMES[0], owned: [...s.themes] });
 
@@ -1920,6 +2008,26 @@ export function buy(s: State, i: number): BuyResult {
     s.dollars -= item.price;
     s.themes[item.theme] = true;
     setTheme(s, item.theme);
+    return "bought";
+  }
+  // ---- lamp gels ---- an owned gel's card puts it on the lamp (the one already on: back to Clear); a new one goes on
+  if (item.kind === "gel") {
+    if (s.gels.owned[item.gel]) return useGel(s, s.gels.on === item.gel ? 0 : item.gel) ? "selected" : "owned";
+    if (s.dollars < item.price) return "cantAfford";
+    s.dollars -= item.price;
+    s.gels.owned[item.gel] = true;
+    useGel(s, item.gel);
+    return "bought";
+  }
+  // ---- temperature ---- the heater or the chiller: its unit appears on the shelf, switched off until it's tapped
+  if (item.kind === "climate") {
+    if (item.dir > 0 ? s.climate.heater : s.climate.chiller) return "owned";
+    if (s.dollars < item.price) return "cantAfford";
+    s.dollars -= item.price;
+    if (item.dir > 0) s.climate.heater = true;
+    else s.climate.chiller = true;
+    const c = shopCardCentre(i) ?? { x: K.W / 2, y: 640 };
+    s.fx = { x: screenToWorld(s, c.x), y: c.y, t0: s.t };
     return "bought";
   }
   if (item.kind === "tank") {
@@ -1992,12 +2100,14 @@ export interface JellyInfo {
   morph: number;
   /** v13: its personality (TRAIT_NAMES / TRAIT_PHRASES) */
   trait: Trait;
+  /** ---- temperature ---- the water it's in, °C (tempPhrase(k, temp) is the card's line) */
+  temp: number;
 }
 
 export function jellyInfo(s: State, slot: number): JellyInfo | null {
   const j = s.slots[slot];
   if (!j) return null;
-  return { name: j.name, k: j.k, g: j.g, ageDays: Math.max(0, Math.floor((s.clock - j.born) / 86_400_000)), fullness: j.fullness, mood: moodOf(s, j), morph: j.morph, trait: j.trait };
+  return { name: j.name, k: j.k, g: j.g, ageDays: Math.max(0, Math.floor((s.clock - j.born) / 86_400_000)), fullness: j.fullness, mood: moodOf(s, j), morph: j.morph, trait: j.trait, temp: s.climate.temp };
 }
 
 /** Trimmed, 1..12 characters; anything else is ignored. Returns whether the name changed. */
@@ -2169,6 +2279,8 @@ const requestTank = (s: State) => ({
   bubbler: placed(s, BUBBLER),
   // v15: a night visitor can only be spotted at night: offered when it's night by the clock with hours of it left
   night: isNightByClock(s.clock) && ![5, 6].includes(new Date(s.clock).getHours()),
+  // ---- temperature ---- what the thermostat can do, and where the water is now
+  climate: { heater: s.climate.heater, chiller: s.climate.chiller, zone: zoneOf(s.climate.temp) },
 });
 
 /** Plan today's requests if the day has turned (or none were planned yet). Unfinished ones from another day just go. */
@@ -2201,6 +2313,10 @@ function stepRequests(s: State, events: SimEvent[]): void {
     else if (e.type === "visitorTapped") requestDeed(s, { kind: "visitor" }, events);
     else if (e.type === "rode" && e.seen) requestDeed(s, { kind: "ride" }, events);
     else if (e.type === "visitorArrived" && e.kind && VISITOR_NIGHT[VISITORS.indexOf(e.kind)]) requestDeed(s, { kind: "night" }, events);
+  }
+  // ---- temperature ---- "set the tank to what a <species> likes": done once the water suits one of them
+  if (s.requests?.items.some((r) => r.kind === "temp" && !r.done)) {
+    for (const k of new Set(jellies(s).map((j) => j.k))) if (comfortOf(k, s.climate.temp) > 0) requestDeed(s, { kind: "temp", k }, events);
   }
 }
 
@@ -2312,6 +2428,9 @@ export function catchUp(s: State, from: number, now: number): AwaySummary | null
   s.spots = spotSlots(spotsFromSave(after.spots, rightGlass(s)));
   s.snailSpot = -1;
   syncMurk(s);
+  // ---- temperature ---- the water kept settling toward its setting
+  s.climate.temp = driftTemp(s.climate.temp, s.climate.set, (now - from) / 1000);
+  s.climate.settled = Math.abs(s.climate.temp - setPoint(s.climate.set)) <= TEMP_NEAR;
   syncClock(s, now);
   return awaySummary(before, after);
 }
@@ -3168,6 +3287,8 @@ export function step(s: State, dt: number): SimEvent[] {
   s.nightTarget = s.lamp ? s.lamp.night : isNightByClock(s.clock);
   const nt = s.nightTarget ? 1 : 0;
   s.night += clamp(nt - s.night, -dt / 1.2, dt / 1.2);
+  // ---- temperature ---- the water eases toward the thermostat's setting; once there, it says so
+  if (stepClimate(s.climate, dt) === "settled") events.push({ type: "settled", set: s.climate.set, temp: tempReading(s.climate.temp) });
 
   // cleaning sweep (clean(): demo and tests)
   if (s.wipe) {
@@ -3304,7 +3425,7 @@ export function step(s: State, dt: number): SimEvent[] {
   s.slots.forEach((j, i) => {
     if (!j) return;
     if (j.fullness > GOOD_FULLNESS && s.murk < GOOD_MURK) {
-      j.care += dt * mult;
+      j.care += dt * mult * tempGrowth(j.k, s.climate.temp); // ---- temperature ---- faster in the water it likes
       while (j.care >= CARE_SECONDS) {
         j.care -= CARE_SECONDS;
         j.gp += 1;
@@ -3671,6 +3792,22 @@ export function view(s: State): View {
   }
   const tankFull = !roomForPolyp(s);
   SHOP_ITEMS.forEach((item, i) => {
+    // ---- lamp gels ---- like themes: owned ones stay bright, "IN USE" on the one on the lamp
+    if (item.kind === "gel") {
+      const has = s.gels.owned[item.gel] === true;
+      const using = s.gels.on === item.gel;
+      v[`own${i}`] = has && !using ? 1 : 0;
+      v[`use${i}`] = using ? 1 : 0;
+      v[`lock${i}`] = !has && s.dollars < item.price ? 1 : 0;
+      return;
+    }
+    // ---- temperature ---- the heater and the chiller: bought once
+    if (item.kind === "climate") {
+      const has = item.dir > 0 ? s.climate.heater : s.climate.chiller;
+      v[`own${i}`] = has ? 1 : 0;
+      v[`lock${i}`] = has || s.dollars < item.price ? 1 : 0;
+      return;
+    }
     // v13: a keepsake's card is locked until its milestone is reached, whatever the dollars
     const keep = keepsakeOf(item) >= 0;
     if (item.kind === "theme") {
@@ -3779,5 +3916,40 @@ export function view(s: State): View {
     v[`${name}X`] = vis ? snap(k === MANTA ? vis.gx : vis.x) : 0;
     v[`${name}Y`] = vis ? snap(vis.y) : 0;
   });
+  viewGels(v, s, night);
+  viewClimate(v, s);
   return v;
+}
+
+// ---- lamp gels ----
+/** The gel's tint layers (one-hot; the .riv fades them with the lamp), the wheel by the switch, and under the UV gel
+ *  how strongly things fluoresce: uvLight for the glowing decorations, j{s}uv for each jelly in the tank. */
+function viewGels(v: View, s: State, night: number): void {
+  for (let g = 0; g < GEL_N; g++) v[`gel${g}`] = g === s.gels.on ? 1 : 0;
+  v.haveGel = anyGel(s.gels) ? 1 : 0;
+  v.gelPress = s.t < s.gels.pressUntil ? P : 0;
+  v.uvLight = uvLightOf(s.gels, 1 - night);
+  for (let i = 0; i < MAX_SLOTS; i++) v[`j${i}uv`] = s.slots[i] ? v.uvLight : 0;
+}
+
+// ---- temperature ----
+/** The hood thermometer (whole degrees, two one-hot digits: tc0 ones, tc1 tens; its colour by zone) and the shelf's
+ *  heater and chiller units (shown once bought, lit while on, bobbing when tapped). */
+function viewClimate(v: View, s: State): void {
+  const c = s.climate;
+  const r = tempReading(c.temp);
+  for (let d = 0; d < 10; d++) {
+    v[`tc0n${d}`] = d === r % 10 ? 1 : 0;
+    v[`tc1n${d}`] = d === Math.floor(r / 10) % 10 ? 1 : 0;
+  }
+  const z = zoneOf(c.temp);
+  v.tmpCool = z < 0 ? 1 : 0;
+  v.tmpRoom = z === 0 ? 1 : 0;
+  v.tmpWarm = z > 0 ? 1 : 0;
+  v.haveHeat = c.heater ? 1 : 0;
+  v.haveCool = c.chiller ? 1 : 0;
+  v.heatOn = c.set > 0 ? 1 : 0;
+  v.coolOn = c.set < 0 ? 1 : 0;
+  v.heatPress = s.t < c.pressHeat ? P : 0;
+  v.coolPress = s.t < c.pressCool ? P : 0;
 }

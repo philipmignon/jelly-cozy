@@ -43,7 +43,7 @@ export default defineConfig({
   // deps in the shared node_modules/.vite reloads pages served by the others mid-test
   ...(process.env.JT_VITE_CACHE_DIR ? { cacheDir: process.env.JT_VITE_CACHE_DIR } : {}),
   build: { target: "es2022" },
-  test: { include: ["src/**/*.test.ts"], environment: "node" },
+  test: { include: ["src/**/*.test.ts", "tools/**/*.test.mjs"], environment: "node" },
   plugins: [
     {
       // the loading screen markup (src/loader.html) goes into index.html

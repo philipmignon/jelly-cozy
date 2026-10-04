@@ -194,10 +194,14 @@ function getName(r: Reader): string | null {
     else {
       const cp = r.get(21);
       if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return null;
-      s += String.fromCodePoint(cp);
+      const ch = String.fromCodePoint(cp);
+      // one spelling per code: putName writes a NAME_CHARS character in 6 bits, never escaped
+      if (NAME_CHARS.includes(ch)) return null;
+      s += ch;
     }
   }
-  return s;
+  // ...and a built-in name by its index, never letter by letter
+  return NAMES.includes(s) ? null : s;
 }
 
 /** Is this tank layout one the game could hold? (Everything decode accepts, and only that.) */

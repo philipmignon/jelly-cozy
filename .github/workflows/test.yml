@@ -1,0 +1,112 @@
+# Every push (any branch) and pull request: the merge guard, the type check, the unit tests, the build, the byte
+# budgets, then the browser checks in headless Chrome. Pages (pages.yml) deploys main only after this passes.
+#
+# Chrome: the scripts launch puppeteer-core with `channel: "chrome"`, which on Linux means /opt/google/chrome/chrome,
+# where the Google Chrome .deb installs. ubuntu-latest ships it there; the "Chrome" step checks, and installs the
+# current stable .deb if an image ever comes without it. WebGL runs on SwiftShader (no GPU on a runner).
+# Time and CPU budgets stay local (npm run budget): a shared runner is too noisy for them. Bytes are deterministic.
+name: Test
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  # pages.yml runs it before a hand-started deploy
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  # one run per branch or PR at a time; a newer push cancels the older run, except on main (each main commit is
+  # tested to completion, because pages.yml deploys on its success)
+  group: test-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CI: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # the guard compares sources with the base (the merge base with main, or the commit before a push to main)
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Merge guard (conflict markers, truncated sources, stale generated files)
+        run: npm run guard
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        run: npx vitest run
+
+      - name: Build
+        id: build
+        run: npm run build
+
+      - name: Byte budgets (dist/)
+        run: node tools/budget.mjs --bytes
+
+      - name: Chrome
+        run: |
+          # Ubuntu 24.04 stops unprivileged user namespaces, which Chrome's sandbox needs
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          if ! /opt/google/chrome/chrome --version; then
+            curl -fsSL -o /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+            sudo apt-get update -q
+            sudo apt-get install -yq /tmp/chrome.deb
+            /opt/google/chrome/chrome --version
+          fi
+          mkdir -p shots
+
+      - name: Click-through (e2e)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 20
+        env:
+          E2E_GPU: swiftshader
+        run: |
+          # `npm run e2e:ci` once the restructured e2e lands; until then the script itself
+          if node -e "process.exit(require('./package.json').scripts?.['e2e:ci'] ? 0 : 1)"; then
+            npm run e2e:ci
+          else
+            node tools/e2e.mjs
+          fi
+
+      - name: Offline (service worker)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node tools/offline.mjs
+
+      - name: Phones (screenshots, no room on a phone, the menu fits)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node tools/phones.mjs
+
+      - name: Upload the e2e report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: shots/e2e-report.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload screenshots (on failure)
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: shots
+          path: shots/
+          if-no-files-found: ignore
+          retention-days: 14

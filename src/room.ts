@@ -143,7 +143,8 @@ export async function createRoom(host: RoomHost, url: string): Promise<RoomView>
   (tank ?? root).after(lampBtn); // under every overlay (they all sit higher)
 
   let shown = false;
-  let drawn: { phase: SkyPhase | null; lit: boolean; season: string | null } = { phase: null, lit: false, season: null };
+  let drawn: { phase: SkyPhase | null; lit: boolean; season: string | null; gel?: number } = { phase: null, lit: false, season: null };
+  const gelOf = () => host.gel?.() ?? 0; // ---- lamp gels ----
   let phase = skyPhase(new Date(), location.search);
   let scenes: HTMLElement[] = [];
 
@@ -154,7 +155,7 @@ export async function createRoom(host: RoomHost, url: string): Promise<RoomView>
     return { a, left: b.x - L.side * a, top: b.y };
   };
 
-  const state = (): { phase: SkyPhase; lit: boolean; season: string | null } => ({ phase, lit: host.lit(), season: host.season() });
+  const state = (): { phase: SkyPhase; lit: boolean; season: string | null; gel: number } => ({ phase, lit: host.lit(), season: host.season(), gel: gelOf() });
 
   const render = (fade: boolean) => {
     const s = state();
@@ -344,13 +345,15 @@ export async function createRoom(host: RoomHost, url: string): Promise<RoomView>
       }
     }
     // the tank's own light on the wall beside it: bright and cool while it's lit, a faint blue when it's dark
-    sides(ctx, s.lit ? "90,190,255" : "70,110,220", s.lit ? (s.phase === "night" ? 0.3 : 0.14) : 0.12, s.lit ? 80 : 50, L.floor + 36);
+    // ---- lamp gels ---- while lit, in the gel's colour: warm amber, deep blue, UV violet
+    const lampRgb = (["90,190,255", "255,176,84", "70,110,255", "150,90,255"] as const)[s.gel] ?? "90,190,255";
+    sides(ctx, s.lit ? lampRgb : "70,110,220", s.lit ? (s.phase === "night" ? 0.3 : 0.14) : 0.12, s.lit ? 80 : 50, L.floor + 36);
     if (s.season && (s.phase === "dusk" || s.phase === "night") && sprites.hw_pumpkin) radial(ctx, L.sill.x, L.sill.y, 26, "255,140,40", 0.5);
   }
 
   /** every frame: two reads and a compare; a redraw only when the switch or the season changed */
   const update = () => {
-    if (shown && (host.lit() !== drawn.lit || host.season() !== drawn.season || phase !== drawn.phase)) render(true);
+    if (shown && (host.lit() !== drawn.lit || host.season() !== drawn.season || phase !== drawn.phase || gelOf() !== (drawn.gel ?? 0))) render(true);
   };
   // the window's time of day moves on by itself: check once a minute (and on coming back to the tab)
   setInterval(() => {

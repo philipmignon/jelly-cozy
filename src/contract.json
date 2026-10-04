@@ -898,9 +898,9 @@
   {
    "name": "clean",
    "x": 414,
-   "y": 1098,
+   "y": 1179,
    "w": 123,
-   "h": 180
+   "h": 99
   },
   {
    "name": "lamp",
@@ -915,6 +915,27 @@
    "y": 1098,
    "w": 144,
    "h": 156
+  },
+  {
+   "name": "gel",
+   "x": 12,
+   "y": 1071,
+   "w": 72,
+   "h": 48
+  },
+  {
+   "name": "heater",
+   "x": 423,
+   "y": 1095,
+   "w": 54,
+   "h": 81
+  },
+  {
+   "name": "chiller",
+   "x": 477,
+   "y": 1095,
+   "w": 54,
+   "h": 81
   }
  ],
  "shopCards": [
@@ -1134,6 +1155,41 @@
    "w": 303,
    "h": 201,
    "tab": 3
+  },
+  {
+   "x": 366,
+   "y": 894,
+   "w": 303,
+   "h": 201,
+   "tab": 3
+  },
+  {
+   "x": 45,
+   "y": 1113,
+   "w": 303,
+   "h": 201,
+   "tab": 3
+  },
+  {
+   "x": 366,
+   "y": 1113,
+   "w": 303,
+   "h": 201,
+   "tab": 3
+  },
+  {
+   "x": 366,
+   "y": 675,
+   "w": 303,
+   "h": 201,
+   "tab": 2
+  },
+  {
+   "x": 45,
+   "y": 894,
+   "w": 303,
+   "h": 201,
+   "tab": 2
   }
  ],
  "shopScroll": {
@@ -1158,9 +1214,15 @@
    "trackTop": 216,
    "trackH": 759
   },
-  null,
   {
    "max": 135,
+   "viewTop": 216,
+   "viewBottom": 975,
+   "trackTop": 216,
+   "trackH": 759
+  },
+  {
+   "max": 354,
    "viewTop": 216,
    "viewBottom": 975,
    "trackTop": 216,
@@ -1531,6 +1593,9 @@
   "shop",
   "shrimp",
   "plankton",
+  "gel",
+  "heater",
+  "chiller",
   "shopClose",
   "buy0",
   "buy1",
@@ -1563,6 +1628,11 @@
   "buy28",
   "buy29",
   "buy30",
+  "buy31",
+  "buy32",
+  "buy33",
+  "buy34",
+  "buy35",
   "tab0",
   "tab1",
   "tab2",
@@ -1676,7 +1746,11 @@
   "camY",
   "camZ",
   "nightShade",
+  "gel1",
+  "gel2",
+  "gel3",
   "dec4glow",
+  "uvLight",
   "octoF0",
   "octoF1",
   "octoF2",
@@ -1807,6 +1881,7 @@
   "j0flush",
   "j0glow",
   "j0nglow",
+  "j0uv",
   "j0g0",
   "j0g1",
   "j0tf4",
@@ -1852,6 +1927,7 @@
   "j1flush",
   "j1glow",
   "j1nglow",
+  "j1uv",
   "j1g0",
   "j1g1",
   "j1tf4",
@@ -1897,6 +1973,7 @@
   "j2flush",
   "j2glow",
   "j2nglow",
+  "j2uv",
   "j2g0",
   "j2g1",
   "j2tf4",
@@ -1942,6 +2019,7 @@
   "j3flush",
   "j3glow",
   "j3nglow",
+  "j3uv",
   "j3g0",
   "j3g1",
   "j3tf4",
@@ -1987,6 +2065,7 @@
   "j4flush",
   "j4glow",
   "j4nglow",
+  "j4uv",
   "j4g0",
   "j4g1",
   "j4tf4",
@@ -2032,6 +2111,7 @@
   "j5flush",
   "j5glow",
   "j5nglow",
+  "j5uv",
   "j5g0",
   "j5g1",
   "j5tf4",
@@ -2077,6 +2157,7 @@
   "j6flush",
   "j6glow",
   "j6nglow",
+  "j6uv",
   "j6g0",
   "j6g1",
   "j6tf4",
@@ -2211,6 +2292,29 @@
   "batX",
   "batY",
   "batSX",
+  "tmpCool",
+  "tmpRoom",
+  "tmpWarm",
+  "tc1n0",
+  "tc1n1",
+  "tc1n2",
+  "tc1n3",
+  "tc1n4",
+  "tc1n5",
+  "tc1n6",
+  "tc1n7",
+  "tc1n8",
+  "tc1n9",
+  "tc0n0",
+  "tc0n1",
+  "tc0n2",
+  "tc0n3",
+  "tc0n4",
+  "tc0n5",
+  "tc0n6",
+  "tc0n7",
+  "tc0n8",
+  "tc0n9",
   "wallX",
   "panL",
   "panR",
@@ -2303,6 +2407,10 @@
   "own18",
   "lock19",
   "own19",
+  "lock34",
+  "own34",
+  "lock35",
+  "own35",
   "tab2Y",
   "lock11",
   "own11",
@@ -2324,6 +2432,15 @@
   "lock30",
   "own30",
   "use30",
+  "lock31",
+  "own31",
+  "use31",
+  "lock32",
+  "own32",
+  "use32",
+  "lock33",
+  "own33",
+  "use33",
   "tab3Y",
   "shopY",
   "barFood",
@@ -2379,10 +2496,19 @@
   "havePlankton",
   "toolSponge",
   "b1y",
+  "heatOn",
+  "heatPress",
+  "haveHeat",
+  "coolOn",
+  "coolPress",
+  "haveCool",
   "sunO",
   "moonO",
   "b2y",
   "b3y",
+  "gel0",
+  "haveGel",
+  "gelPress",
   "storeHot",
   "storeO",
   "storeY"
@@ -2407,6 +2533,7 @@
    "flush",
    "glow",
    "nglow",
+   "uv",
    "g0",
    "g1",
    "tf4",
@@ -2528,6 +2655,51 @@
   "y0": 78,
   "y1": 186
  },
+ "gels": {
+  "items": [
+   31,
+   32,
+   33
+  ],
+  "names": [
+   "Clear",
+   "Warm amber",
+   "Deep blue",
+   "UV"
+  ],
+  "fluoresce": [
+   3,
+   6
+  ]
+ },
+ "temperature": {
+  "items": [
+   34,
+   35
+  ],
+  "units": [
+   {
+    "name": "heater",
+    "x": 423,
+    "y": 1095,
+    "w": 54,
+    "h": 81
+   },
+   {
+    "name": "chiller",
+    "x": 477,
+    "y": 1095,
+    "w": 54,
+    "h": 81
+   }
+  ],
+  "thermometer": {
+   "x": 621,
+   "x1": 696,
+   "y": 93,
+   "h": 33
+  }
+ },
  "assetGroups": {
   "ev-halloween": {
    "file": "sprites/ev-halloween.json",
@@ -2543,15 +2715,15 @@
   },
   "sp-comb": {
    "file": "sprites/sp-comb.json",
-   "v": "81c018fdfb",
-   "sprites": 144,
-   "bytes": 88655
+   "v": "87e6ae3b1c",
+   "sprites": 160,
+   "bytes": 100707
   },
   "sp-crystal": {
    "file": "sprites/sp-crystal.json",
-   "v": "6e31b7c74a",
-   "sprites": 200,
-   "bytes": 114986
+   "v": "e19aa476d3",
+   "sprites": 224,
+   "bytes": 127074
   },
   "sp-flowerhat": {
    "file": "sprites/sp-flowerhat.json",

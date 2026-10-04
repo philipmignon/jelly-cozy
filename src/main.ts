@@ -84,9 +84,12 @@ import {
   view,
   visitorLog,
   THEME_NAMES,
+  cycleGel,
+  tapClimate,
   type BuyResult,
   type State,
 } from "./sim";
+import { tempPhrase } from "./temperature";
 
 const SAVE_KEY = "jellytank:v5";
 const OLD_SAVE_KEYS = ["jellytank:v3", "jellytank:v2", "jellytank:v1"];
@@ -351,7 +354,9 @@ async function main() {
   const cardInfo = (slot: number): JellyCardInfo | null => {
     const i = jellyInfo(state, slot);
     const morph = i?.morph === MORPH_CLASSIC ? " · rare colour" : i?.morph === MORPH_GHOST ? " · ghost colour" : "";
-    return i && { name: i.name, species: `${SPECIES[i.k] ?? ""}${morph}`, stage: STAGES[i.g] ?? "", ageDays: i.ageDays, fullness: i.fullness, mood: i.mood, trait: TRAIT_PHRASES[i.trait], rehome: rehomeInfo(state, slot) };
+    // ---- temperature ---- `temp`: what water it likes, and how it finds this
+    const temp = i ? tempPhrase(i.k, i.temp) : null;
+    return i && { name: i.name, species: `${SPECIES[i.k] ?? ""}${morph}`, stage: STAGES[i.g] ?? "", ageDays: i.ageDays, fullness: i.fullness, mood: i.mood, trait: TRAIT_PHRASES[i.trait], ...(temp ? { temp } : {}), rehome: rehomeInfo(state, slot) };
   };
 
   // ---------------------------------------------------------------- buttons in the .riv
@@ -384,7 +389,24 @@ async function main() {
       closeShop(state);
       audio.play("ui");
     },
+    // ---- lamp gels ---- the wheel by the switch: the next owned gel goes on the lamp
+    gel: () => {
+      if (cycleGel(state) < 0) return;
+      audio.play("switch");
+      buzz(8);
+      persist(state);
+    },
+    // ---- temperature ---- the shelf's units: each switches its setting on or off
+    heater: () => climatePress(1),
+    chiller: () => climatePress(-1),
   };
+  function climatePress(dir: 1 | -1): void {
+    const set = tapClimate(state, dir);
+    if (set === null) return;
+    audio.play("switch");
+    buzz(8);
+    persist(state);
+  }
   // v15: a decoration carried down to the drawer is let go over the shelf: Rive still clicks what's under the
   // finger, so the cabinet's buttons ignore presses while one is carried and just after
   let dragging = -1; // the decoration being carried (gestures below)
@@ -793,6 +815,7 @@ async function main() {
         },
         lit: () => !state.nightTarget,
         season: () => state.event,
+        gel: () => state.gels.on, // ---- lamp gels ---- the tank's light on the room's wall takes the gel's colour
         toggle: press.lamp,
       });
     }
@@ -853,6 +876,10 @@ async function main() {
           break;
         case "themed":
           audio.play("unlock");
+          persist(state);
+          break;
+        case "gel": // ---- lamp gels ---- (from the wheel or a shop card)
+        case "thermo": // ---- temperature ----
           persist(state);
           break;
         case "keepsake":

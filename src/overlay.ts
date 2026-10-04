@@ -15,6 +15,8 @@ export interface JellyCardInfo {
   mood: number;
   /** v13: its personality as a short line ("Shy — hides by the rocks"); omitted = no line */
   trait?: string;
+  /** ---- temperature ---- what water it likes and how it finds this ("Likes it cool — a bit warm in here"); omitted = no line */
+  temp?: string;
   /** whether this jelly can be rehomed, what it pays, and why not */
   rehome: { allowed: boolean; reward: number; reason: string };
 }
@@ -152,6 +154,7 @@ export function createOverlay(): Overlay {
     </div>
     <div class="jt-meta"><span class="jt-species"></span><span class="jt-stage"></span><span class="jt-age"></span></div>
     <div class="jt-trait" hidden></div>
+    <div class="jt-trait jt-card-temp" hidden></div>
     <div class="jt-row"><span>Fullness</span><div class="jt-bar jt-food"><i></i></div></div>
     <div class="jt-row"><span>Happy</span><div class="jt-bar jt-mood"><i></i></div></div>
     <div class="jt-hint">Tap the name to rename</div>
@@ -234,6 +237,9 @@ export function createOverlay(): Overlay {
     const trait = $<HTMLElement>(".jt-trait");
     trait.textContent = info.trait ?? "";
     trait.hidden = !info.trait;
+    const temp = $<HTMLElement>(".jt-card-temp"); // ---- temperature ----
+    temp.textContent = info.temp ?? "";
+    temp.hidden = !info.temp;
     const d = Math.floor(info.ageDays);
     $<HTMLElement>(".jt-age").textContent = d < 1 ? "Born today" : `${d} day${d === 1 ? "" : "s"} old`;
     $<HTMLElement>(".jt-food > i").style.width = `${Math.round(info.fullness * 100)}%`;

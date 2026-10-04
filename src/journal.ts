@@ -11,6 +11,7 @@ import { captionDate } from "./photo";
 import type { VisitorRow } from "./visitlog";
 import { SPECIES_NAMES } from "./species";
 import { FOOD_NAMES, MORPH_CLASSIC, MORPH_GHOST, favouriteFood, morphSeen, type Species } from "./sim";
+import { prefWords } from "./temperature";
 import { traitsIn } from "./traits";
 
 export interface JournalPage {
@@ -336,6 +337,7 @@ export function createJournal(pages: () => JournalPage[], keepsakes?: () => Keep
       ? [
           ["Raised", String(p.raised)],
           ["Favourite food", FOOD_NAMES[favouriteFood(page as Species)] ?? "Flakes"],
+          ["Likes", prefWords(page as Species)], // ---- temperature ----
           ["First adult", p.firstAdultAt ? new Date(p.firstAdultAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "Not yet"],
           ["First name", p.firstName ?? "Not yet"],
           ["Personalities", traitsIn(p.traitSeen ?? 0).join(", ") || "Not met yet"],

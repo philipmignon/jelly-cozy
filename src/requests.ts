@@ -12,13 +12,16 @@
  *   "visitor"  -1; a visitor tapped                                                    (10)
  *   "ride"     -1; a jelly rode the bubbler to the top while it was on screen (only with the bubbler) (8)
  *   "night"    -1; a night visitor spotted (it came into view; only planned at night, by the clock)    (12)
+ *   "temp"     species k; the water set to what it likes (only with a jelly that minds, the heater or chiller
+ *              that gets there owned, and the water not there already: ./temperature.ts)            (8)
  * Unfinished requests don't carry over: a new day (or a day away) replaces them.
  */
 import { FOOD_KINDS, FOOD_NAMES, SPECIES_N, SPECIES_NAMES, favouriteFood, type FoodKind, type Species } from "./species";
 import { rng } from "./dirt";
+import { tempPref } from "./temperature";
 
-export type RequestKind = "feed" | "scrub" | "pet" | "pearl" | "sprinkle" | "visitor" | "ride" | "night";
-export const REQUEST_KINDS: readonly RequestKind[] = ["feed", "scrub", "pet", "pearl", "sprinkle", "visitor", "ride", "night"];
+export type RequestKind = "feed" | "scrub" | "pet" | "pearl" | "sprinkle" | "visitor" | "ride" | "night" | "temp";
+export const REQUEST_KINDS: readonly RequestKind[] = ["feed", "scrub", "pet", "pearl", "sprinkle", "visitor", "ride", "night", "temp"];
 
 export interface Request {
   kind: RequestKind;
@@ -53,6 +56,8 @@ export interface RequestTank {
   bubbler?: boolean;
   /** v14: it's night by the clock with hours of it left (night visitors can turn up) */
   night?: boolean;
+  /** ---- temperature ---- the heater and chiller owned, and the water's zone now (-1 cool, 0 room, 1 warm) */
+  climate?: { heater: boolean; chiller: boolean; zone: number };
 }
 
 /** Something the player did that a request may count. */
@@ -64,7 +69,8 @@ export type Deed =
   | { kind: "sprinkle"; decor: number; n: number }
   | { kind: "visitor" }
   | { kind: "ride" }
-  | { kind: "night" };
+  | { kind: "night" }
+  | { kind: "temp"; k: Species }; // ---- temperature ---- the water suits a jelly of species k
 
 /** At most this many a day. */
 export const REQUESTS_PER_DAY = 2;
@@ -96,6 +102,8 @@ export function rewardOf(r: Pick<Request, "kind" | "target" | "n">): number {
       return 8;
     case "night":
       return 12;
+    case "temp":
+      return 8;
   }
 }
 
@@ -122,6 +130,8 @@ export function requestText(r: Request): string {
       return "Watch a jelly ride the bubbler";
     case "night":
       return "Spot a night visitor";
+    case "temp":
+      return `Set the tank to what ${an((SPECIES_NAMES[r.target] ?? "jelly").toLowerCase())} likes`;
   }
 }
 
@@ -164,6 +174,10 @@ export function planRequests(day: string, t: RequestTank): DailyRequests {
   pool.push([1, () => req("visitor", 1)]);
   if (t.bubbler) pool.push([2, () => req("ride", 1)]);
   if (t.night) pool.push([1, () => req("night", 1)]);
+  // ---- temperature ---- a jelly that likes it cool (or warm), the device that gets there, the water not there yet
+  const c = t.climate;
+  const fussy = c ? kinds.filter((k) => tempPref(k) !== 0 && tempPref(k) !== c.zone && (tempPref(k) > 0 ? c.heater : c.chiller)) : [];
+  if (fussy.length) pool.push([2, () => req("temp", 1, pick(fussy))]);
   const items: Request[] = [];
   while (items.length < REQUESTS_PER_DAY && pool.length) {
     const total = pool.reduce((a, p) => a + p[0], 0);
@@ -183,6 +197,8 @@ function worth(r: Request, d: Deed): number {
       return r.kind === "feed" && r.food === d.food && (r.target < 0 || r.target === d.k) ? 1 : 0;
     case "sprinkle":
       return r.kind === "sprinkle" && r.target === d.decor ? d.n : 0;
+    case "temp":
+      return r.kind === "temp" && r.target === d.k ? 1 : 0;
     default:
       return r.kind === d.kind ? 1 : 0;
   }
@@ -219,7 +235,8 @@ export function requestsOf(raw: unknown): DailyRequests | null {
     const kind = REQUEST_KINDS.find((k) => k === q.kind);
     const n = int(q.n, 1, 99);
     if (!kind || n === null) return [];
-    const target = kind === "feed" ? int(q.target, -1, SPECIES_N - 1) : kind === "sprinkle" ? int(q.target, 0, DECOR_NAMES.length - 1) : -1;
+    const target =
+      kind === "feed" ? int(q.target, -1, SPECIES_N - 1) : kind === "sprinkle" ? int(q.target, 0, DECOR_NAMES.length - 1) : kind === "temp" ? int(q.target, 0, SPECIES_N - 1) : -1;
     const food = kind === "feed" ? int(q.food, 0, FOOD_KINDS - 1) : 0;
     if (target === null || food === null) return [];
     const r = req(kind, n, target, kind === "feed" ? (food as FoodKind) : undefined);

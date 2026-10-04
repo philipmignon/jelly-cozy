@@ -5,6 +5,7 @@
  */
 import contract from "./contract.json";
 import { SEASONS } from "./season";
+import { GEL_N } from "./gels";
 
 export interface Body {
   /** half body width */
@@ -502,7 +503,10 @@ export type ShopItem =
   | { name: string; price: number; kind: "helper"; h: number }
   | { name: string; price: number; kind: "tank"; tier: number }
   | { name: string; price: number; kind: "food"; f: FoodKind }
-  | { name: string; price: number; kind: "theme"; theme: number; keepsake?: number };
+  | { name: string; price: number; kind: "theme"; theme: number; keepsake?: number }
+  // ---- lamp gels ---- a coloured filter for the lamp (./gels.ts); ---- temperature ---- the heater (+1), the chiller (-1)
+  | { name: string; price: number; kind: "gel"; gel: number }
+  | { name: string; price: number; kind: "climate"; dir: 1 | -1 };
 export const SHOP_ITEMS: readonly ShopItem[] = [
   { name: "BLUE BLUBBER", price: 40, kind: "polyp", k: BLUBBER },
   { name: "UPSIDE-DOWN", price: 70, kind: "polyp", k: UPSIDE },
@@ -538,6 +542,13 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
   { name: "SHIP'S WHEEL", price: 0, kind: "decor", d: 8, keepsake: 3 },
   { name: "POSTBOX", price: 0, kind: "decor", d: 9, keepsake: 4 },
   { name: "MOONLIT LAGOON", price: 0, kind: "theme", theme: 4, keepsake: 5 },
+  // ---- lamp gels ---- (TANK tab): buying one puts it on the lamp; tap an owned one's card to use it (again: off)
+  { name: "WARM GEL", price: 60, kind: "gel", gel: 1 },
+  { name: "BLUE GEL", price: 80, kind: "gel", gel: 2 },
+  { name: "UV GEL", price: 150, kind: "gel", gel: 3 },
+  // ---- temperature ---- (SUPPLIES tab): units on the shelf's back wall; tap one to switch it on or off
+  { name: "HEATER", price: 90, kind: "climate", dir: 1 },
+  { name: "CHILLER", price: 110, kind: "climate", dir: -1 },
 ];
 /** v13: the milestone that earns shop item `it` (./keepsakes.ts), or -1 for anything the shop sells. */
 export const keepsakeOf = (it: ShopItem | undefined): number => (it && (it.kind === "decor" || it.kind === "theme") ? it.keepsake ?? -1 : -1);
@@ -560,8 +571,8 @@ export const CRAB = 2;
 export const TAB_ITEMS: readonly (readonly number[])[] = [
   [0, 13, 1, 14, 2, 15, 16, 17], // JELLIES scrolls (contract.shopScroll)
   [3, 4, 5, 6, 7, 24, 25, 26, 27, 28, 29], // v13: the bubbler, then the keepsakes; DECOR and TANK scroll too (contract.shopScrollTabs)
-  [8, 9, 10, 18, 19],
-  [11, 12, 20, 21, 22, 23, 30],
+  [8, 9, 10, 18, 19, 34, 35], // ---- temperature ---- the heater and the chiller
+  [11, 12, 20, 21, 22, 23, 30, 31, 32, 33], // ---- lamp gels ---- after the themes
 ];
 export const TAB_N = TAB_ITEMS.length;
 /** A tab's card group sits at y 0 when active and this far away when not (so hidden cards can't be hit). */
@@ -802,7 +813,7 @@ export function specProps(foodN = K.foodN): string[] {
   out.push("shopY");
   SHOP_ITEMS.forEach((_, i) => out.push(`own${i}`, `lock${i}`));
   // v11: the "IN USE" badge on the active theme's card
-  SHOP_ITEMS.forEach((it, i) => it.kind === "theme" && out.push(`use${i}`));
+  SHOP_ITEMS.forEach((it, i) => (it.kind === "theme" || it.kind === "gel") && out.push(`use${i}`)); // ---- lamp gels ---- theirs too
   // v15: the "STORED" badge on a decoration's card while it's put away
   SHOP_ITEMS.forEach((it, i) => it.kind === "decor" && out.push(`away${i}`));
   for (let t = 0; t < TAB_N; t++) out.push(`shopTab${t}`, `tab${t}Y`);
@@ -821,6 +832,13 @@ export function specProps(foodN = K.foodN): string[] {
   const octoSpots = (K as unknown as { octoSpots?: unknown[] }).octoSpots;
   out.push("octoOn", "octoSX", "octoF0", "octoF1", "octoF2", "octoF3", "octoDY", "octoC1", "octoC2");
   for (let i = 0; i < (Array.isArray(octoSpots) && octoSpots.length ? octoSpots.length : 1); i++) out.push(`octoS${i}`);
+  // ---- lamp gels ---- the tint layers (one-hot), the wheel by the switch, the UV light and what fluoresces under it
+  for (let g = 0; g < GEL_N; g++) out.push(`gel${g}`);
+  out.push("haveGel", "gelPress", "uvLight");
+  for (let s = 0; s < MAX_SLOTS; s++) out.push(`j${s}uv`);
+  // ---- temperature ---- the hood thermometer (two digits, one-hot; its colour by zone) and the shelf's two units
+  for (let p = 0; p < 2; p++) for (let d = 0; d < 10; d++) out.push(`tc${p}n${d}`);
+  out.push("tmpCool", "tmpRoom", "tmpWarm", "haveHeat", "haveCool", "heatOn", "coolOn", "heatPress", "coolPress");
   // optional: the art's "NEEDS MEDIUM" note on the large card, written only if the contract has it
   for (const n of ["needs12", "needs15", "needs17", "shopScroll", "shopScrollBar"]) if (K.props.includes(n)) out.push(n);
   return out;

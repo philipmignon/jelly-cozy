@@ -28,6 +28,8 @@ import {
   type Target,
 } from "./a11y";
 import { COMB, JUVENILE, TAB_ITEMS, keepsakeOf } from "./species";
+import { GEL_NAMES } from "./gels";
+import { tempReading } from "./temperature";
 import { MILESTONES } from "./keepsakes";
 import { SCRUB_STEP_MAX } from "./dirt";
 import {
@@ -65,7 +67,7 @@ import {
 } from "./sim";
 
 /** The .riv's buttons the keyboard can press (contract `buttons`), plus closing the shop. */
-export type ButtonName = "feed" | "clean" | "shrimp" | "plankton" | "lamp" | "shop" | "shopClose";
+export type ButtonName = "feed" | "clean" | "shrimp" | "plankton" | "lamp" | "shop" | "shopClose" | "gel" | "heater" | "chiller"; // ---- lamp gels ---- ---- temperature ----
 
 export interface KeyboardHost {
   state: State;
@@ -139,7 +141,14 @@ const BUTTON_LABEL: Record<string, string> = {
   plankton: "Plankton bottle",
   clean: "Sponge",
   shop: "Shop",
+  gel: "Gel wheel", // ---- lamp gels ----
+  heater: "Heater", // ---- temperature ----
+  chiller: "Chiller",
 };
+/** ---- lamp gels ---- ---- temperature ---- the buttons that only show once their thing is bought */
+const owns = (s: State, name: string): boolean =>
+  name === "shrimp" || name === "plankton" ? hasTool(s, name) : name === "gel" ? anyGelOf(s) : name === "heater" ? s.climate.heater : name === "chiller" ? s.climate.chiller : true;
+const anyGelOf = (s: State) => s.gels.owned.some((o, i) => o && i > 0);
 /** The shelf button that picks up each tool. */
 const BUTTON_OF: Record<Exclude<Tool, "none">, ButtonName> = { food: "feed", sponge: "clean", shrimp: "shrimp", plankton: "plankton" };
 const TOOL_WORDS: Record<Exclude<Tool, "none">, string> = { food: "Food can", sponge: "Sponge", shrimp: "Brine shrimp jar", plankton: "Plankton bottle" };
@@ -187,7 +196,8 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
   help.textContent =
     "Tab moves between the jellies, the pearl, visitors and the shelf, and arrows jump to the nearest one that way. " +
     "Enter pets a jelly or presses a button, N opens a jelly's card. F feeds, S scrubs the glass, 1 to 4 pick up the foods and the sponge, " +
-    "L flips the light, B opens the shop, J the journal, the square brackets look left and right, M mutes, Escape puts things down. " +
+    "L flips the light, G changes the lamp's gel, H and C switch the heater and the chiller, " +
+    "B opens the shop, J the journal, the square brackets look left and right, M mutes, Escape puts things down. " +
     "In the shop, Enter on a decoration you own puts it away, or places it again.";
   document.body.append(help);
   canvas.tabIndex = 0;
@@ -232,7 +242,7 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
       jellies: state.slots.flatMap((j, slot) => (j ? [{ slot, x: j.x }] : [])),
       pearl: pearlShowing(state),
       visitor: (visitorInfo(state)?.on ?? 0) > 0.5,
-      buttons: BUTTONS.filter((b) => b.name !== "shrimp" && b.name !== "plankton" ? true : hasTool(state, b.name as Tool)),
+      buttons: BUTTONS.filter((b) => owns(state, b.name)),
     });
 
   /** The target's box in artboard (screen) coordinates. */
@@ -290,6 +300,13 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
     }
     const label = BUTTON_LABEL[t.name] ?? t.name;
     if (t.name === "lamp") return `${label}, ${state.nightTarget ? "night" : "day"}.`;
+    // ---- lamp gels ----
+    if (t.name === "gel") return `${label}: ${GEL_NAMES[state.gels.on] ?? "Clear"}${state.gels.on ? " gel" : ""} on the lamp. Enter for the next.`;
+    // ---- temperature ----
+    if (t.name === "heater" || t.name === "chiller") {
+      const on = state.climate.set === (t.name === "heater" ? 1 : -1);
+      return `${label}, ${on ? "on" : "off"}. The water is ${tempReading(state.climate.temp)} degrees.`;
+    }
     if (t.name === "shop") return `${label}. You have ${dollars(state.dollars)}.`;
     const tool = (Object.keys(BUTTON_OF) as Exclude<Tool, "none">[]).find((k) => BUTTON_OF[k] === t.name);
     return `${label}${tool && state.tool === tool ? ", in hand" : ""}.`;
@@ -504,6 +521,8 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
             return true;
           }
           h.press(t.name as ButtonName);
+          // ---- lamp gels ---- ---- temperature ---- the change is announced as it happens (eventWords)
+          if (t.name === "gel" || t.name === "heater" || t.name === "chiller") return true;
           if (t.name === "shop") {
             selectCard(TAB_ITEMS[0]?.[0] ?? 0, true);
             return true;
@@ -554,6 +573,13 @@ export function attachKeyboard(h: KeyboardHost): Keyboard {
           return true;
         }
         return false;
+      // ---- lamp gels ---- ---- temperature ---- G, H, C: what tapping the wheel or a unit does (announced as it happens)
+      case "gel":
+      case "heater":
+      case "chiller":
+        if (!owns(state, a.kind)) tell(a.kind === "gel" ? "No lamp gels yet. The shop's Tank tab sells them." : `No ${a.kind} yet. The shop's Supplies tab sells one.`);
+        else h.press(a.kind);
+        return true;
       default:
         shopAct(a);
         return true;

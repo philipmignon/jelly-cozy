@@ -1,0 +1,6 @@
+{
+ "set": "swiftshader",
+ "platform": "darwin",
+ "arch": "arm64",
+ "chrome": "154.0.8037.57"
+}

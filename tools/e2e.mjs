@@ -6,10 +6,13 @@
  *   npm run e2e                  builds dist/ first if the sources are newer, then runs every flow
  *   npm run e2e -- shop keyboard only these flows (or E2E_FLOWS=shop,keyboard)
  *   npm run e2e:ci               what CI runs after `npm run build`: software GL, no build
+ *   node tools/e2e.mjs --update-refs   the visual flows write their renders over the reference screenshots (this
+ *                                GPU mode's set; npm run e2e:update-refs does both sets and lists what changed)
  *
  * A flow that fails (a check, or an exception: that flow only) is retried once on a fresh browser: FLAKY if the
- * retry passes (exit 0, but loudly), FAIL if both fail (exit 1). The summary table goes to stdout and the whole
- * run to shots/e2e-report.json; screenshots to shots/e2e-*.png.
+ * retry passes (exit 0, but loudly), FAIL if both fail (exit 1). A flow's warnings (t.warn: the a11y flow's
+ * moderate findings, a reference screenshot within its tolerance) fail nothing. The summary table goes to stdout and
+ * the whole run to shots/e2e-report.json; screenshots to shots/e2e-*.png, the visual flows' diffs to shots/visual/.
  *
  * Environment:
  *   E2E_PORT=5198          the static server's port (0: any free one)
@@ -20,6 +23,8 @@
  *   E2E_RETRIES=n          retries per failed flow (default 1)
  *   E2E_CHROME=path        the Chrome to drive (default: the installed Google Chrome)
  *   E2E_STATE=1            write each screenshot's state beside it (shots/e2e-*.json)
+ *   E2E_VISUAL=warn        reference-screenshot mismatches are warnings, not failures (tools/e2e/visual.mjs)
+ *   E2E_VISUAL_FOREIGN=1   compare as a run on another platform would (HTML text left out, looser tolerances)
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, statSync, writeFileSync, readFileSync } from "node:fs";
@@ -33,9 +38,14 @@ const CI = args.includes("--ci") || !!process.env.CI;
 const GPU = process.env.E2E_GPU ?? (CI ? "swiftshader" : "real");
 const WORKERS = Math.max(1, Number(process.env.E2E_WORKERS ?? Math.min(Math.floor(cpus().length / 2), 4)));
 const FLOW_TIMEOUT = Number(process.env.E2E_FLOW_TIMEOUT ?? (GPU === "swiftshader" ? 300_000 : 150_000));
-const RETRIES = Number(process.env.E2E_RETRIES ?? 1);
+// --update-refs: the visual flows re-render their scenes and overwrite the reference screenshots for this GPU mode
+// (tools/e2e/reference/<set>/); nothing is retried, since the first render is the one kept
+const UPDATE = args.includes("--update-refs") || process.env.E2E_UPDATE_REFS === "1";
+if (UPDATE) process.env.E2E_UPDATE_REFS = "1";
+const RETRIES = UPDATE ? 0 : Number(process.env.E2E_RETRIES ?? 1);
 const PORT = Number(process.env.E2E_PORT ?? 5198);
-const only = [...args.filter((a) => !a.startsWith("--")), ...(process.env.E2E_FLOWS ?? "").split(",").filter(Boolean)];
+const named = [...args.filter((a) => !a.startsWith("--")), ...(process.env.E2E_FLOWS ?? "").split(",").filter(Boolean)];
+const only = named.length || !UPDATE ? named : ["visual-tank", "visual-ui"];
 const REPORT = join(SHOTS, "e2e-report.json");
 
 /** dist/ is missing or older than what builds it */
@@ -85,7 +95,7 @@ setInterval(() => {
 }, 1000).unref();
 
 async function attempt(browser, origin, flow) {
-  const t = new Flow(browser, origin, flow);
+  const t = new Flow(browser, origin, flow, { gpu: GPU });
   const t0 = Date.now();
   const gone = () => t.diag.push({ browser: "disconnected (crashed or killed)" });
   browser.once("disconnected", gone);
@@ -109,7 +119,7 @@ async function attempt(browser, origin, flow) {
   const stalled = stalls.filter((x) => x.at >= t0 && x.at - x.ms <= t0 + ms).reduce((sum, x) => sum + x.ms, 0);
   if (stalled) t.diag.push({ runnerStalledMs: stalled, note: "this process didn't run for that long (the machine slept, or was overloaded)" });
   const failed = t.checks.filter((c) => !c.ok);
-  return { ok: !error && failed.length === 0 && t.checks.length > 0, ms, error, checks: t.checks, diag: t.diag };
+  return { ok: !error && failed.length === 0 && t.checks.length > 0, ms, error, checks: t.checks, warnings: t.warnings, diag: t.diag };
 }
 
 async function main() {
@@ -144,13 +154,14 @@ async function main() {
       }
       const last = attempts[attempts.length - 1];
       const result = last.ok ? (attempts.length > 1 ? "FLAKY" : "PASS") : "FAIL";
-      const r = { name: flow.name, result, checks: last.checks.length, failed: last.checks.filter((c) => !c.ok).length, ms: attempts.reduce((s, a) => s + a.ms, 0), attempts };
+      const r = { name: flow.name, result, checks: last.checks.length, failed: last.checks.filter((c) => !c.ok).length, warnings: last.warnings.length, ms: attempts.reduce((s, a) => s + a.ms, 0), attempts };
       results.push(r);
       // this flow's lines together, as it finishes
       const lines = [`\n── ${flow.name}: ${result} (${(r.ms / 1000).toFixed(1)} s)`];
       attempts.forEach((a, n) => {
         if (attempts.length > 1) lines.push(`  attempt ${n + 1}: ${a.ok ? "passed" : "failed"} in ${(a.ms / 1000).toFixed(1)} s`);
         for (const c of a.checks) if (!a.ok || n === attempts.length - 1) lines.push(`  ${c.ok ? "ok  " : "FAIL"} ${c.name}${c.extra ? `  (${c.extra})` : ""}`);
+        if (n === attempts.length - 1) for (const w of a.warnings) lines.push(`  WARN ${typeof w === "string" ? w : JSON.stringify(w)}`);
         if (a.error) lines.push(`  ERROR ${a.error.split("\n").slice(0, 4).join("\n        ")}`);
         for (const d of a.diag) lines.push(`  DIAG ${JSON.stringify(d)}`);
       });
@@ -166,7 +177,7 @@ async function main() {
   const w = Math.max(...results.map((r) => r.name.length), 4);
   const row = (a, b, c, d) => `${a.padEnd(w)}  ${b.padStart(7)}  ${c.padStart(7)}  ${d}`;
   console.log(`\n${row("flow", "checks", "time", "result")}\n${"-".repeat(w + 28)}`);
-  for (const r of results) console.log(row(r.name, `${r.checks - r.failed}/${r.checks}`, `${(r.ms / 1000).toFixed(1)}s`, r.result));
+  for (const r of results) console.log(row(r.name, `${r.checks - r.failed}/${r.checks}`, `${(r.ms / 1000).toFixed(1)}s`, r.result + (r.warnings ? `  (${r.warnings} warning${r.warnings > 1 ? "s" : ""})` : "")));
   const total = results.reduce((s, r) => s + r.checks, 0);
   const passed = results.reduce((s, r) => s + r.checks - r.failed, 0);
   console.log(`${"-".repeat(w + 28)}\n${row("all", `${passed}/${total}`, `${(wall / 1000).toFixed(1)}s`, "")}`);

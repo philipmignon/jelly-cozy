@@ -86,6 +86,7 @@ export function createKeepNote(journal: () => void): KeepNote {
   card.className = "jt-keep-note";
   card.hidden = true;
   card.setAttribute("role", "dialog");
+  card.setAttribute("aria-labelledby", "jt-keep-note-title"); // its heading names it
   card.setAttribute("aria-live", "polite");
   document.body.append(card);
   const back = focusReturn(card);
@@ -103,6 +104,7 @@ export function createKeepNote(journal: () => void): KeepNote {
         const one = entries.length === 1;
         card.replaceChildren();
         const h = document.createElement("h2");
+        h.id = "jt-keep-note-title";
         h.textContent = one ? "A keepsake!" : "Keepsakes for you";
         card.append(h);
         if (one) {

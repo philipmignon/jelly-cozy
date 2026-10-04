@@ -102,6 +102,17 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      # the visual flows' renders and diffs: written when a reference screenshot differs, and every render when the
+      # swiftshader set was made on another platform (adopt them: npm run e2e:update-refs -- --from <this artifact>)
+      - name: Upload the visual renders
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual
+          path: shots/visual/
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Upload screenshots (on failure)
         if: ${{ failure() }}
         uses: actions/upload-artifact@v4

@@ -45,7 +45,7 @@ The browser checks drive headless Chrome (puppeteer-core with the installed Chro
 
 | Command | What it checks | Port |
 | --- | --- | --- |
-| `npm run e2e` (`node tools/e2e.mjs`) | real presses on the tank, flow by flow: buttons, tools, the shop, cards, decor and the drawer, keyboard play, the journal, keepsakes, the album, share and backup codes, the room, seasons and night visitors, a hidden tab catching up, battery pacing | `E2E_PORT` (5198) |
+| `npm run e2e` (`node tools/e2e.mjs`) | real presses on the tank, flow by flow: buttons, tools, the shop, cards, decor and the drawer, keyboard play, the journal, keepsakes, the album, share and backup codes, the room, seasons and night visitors, a hidden tab catching up, battery pacing; reference screenshots of 17 key scenes; axe-core accessibility checks | `E2E_PORT` (5198) |
 | `node tools/offline.mjs` | the Pages build's service worker: repeat visits, offline play, the update chip | `OFFLINE_PORT` (5197) |
 | `node tools/phones.mjs` | screenshots at common phone and tablet sizes into `shots/`; fails if a phone fetches the room or the settings menu runs off the screen | `PHONES_PORT` (5195) |
 | `node tools/loadtime.mjs` | time to first frame over fast and slow 4G, for a new and a full tank, with and without the Halloween art | `LOAD_PORT` (5196) |
@@ -55,7 +55,9 @@ The browser checks drive headless Chrome (puppeteer-core with the installed Chro
 
 ### The e2e flows
 
-Each file in `tools/e2e/flows/` is one flow: it opens the tank in a fresh browser context with a save of its own, drives it, and reports its own checks. A flow that throws fails alone. The runner (`tools/e2e.mjs`) runs several flows at once, retries a failed one on a fresh browser, and prints a table. A flow that passes on the retry is FLAKY: the run still exits 0 and names it in a warning. A flow that fails twice fails the run. The runner writes the whole run to `shots/e2e-report.json` and the screenshots to `shots/e2e-*.png`.
+Each file in `tools/e2e/flows/` is one flow: it opens the tank in a fresh browser context with a save of its own, drives it, and reports its own checks. A flow that throws fails alone. The runner (`tools/e2e.mjs`) runs several flows at once, retries a failed one on a fresh browser, and prints a table. A flow that passes on the retry is FLAKY: the run still exits 0 and names it in a warning. A flow that fails twice fails the run. Warnings (`WARN` lines) fail nothing. The runner writes the whole run to `shots/e2e-report.json` and the screenshots to `shots/e2e-*.png`.
+
+The e2e server swaps the Google Fonts link for a local copy of the same font (Silkscreen v6, `tools/e2e/fonts/`), so no flow waits on the network for it and the screenshots don't change when Google updates it.
 
 ```sh
 npm run e2e                    # every flow, on this machine's GPU
@@ -74,6 +76,36 @@ npm run e2e:ci                 # what CI runs after `npm run build`: software GL
 | `E2E_FLOWS` | all | a comma-separated list of flows |
 | `E2E_CHROME` | the installed Google Chrome | a Chrome binary to drive instead |
 | `E2E_STATE` | off | `1` writes the tank's state beside each screenshot (`shots/e2e-*.json`) |
+| `E2E_VISUAL` | off | `warn` reports reference-screenshot mismatches as warnings instead of failures |
+
+### Reference screenshots
+
+Two flows, `visual-tank` and `visual-ui`, render 17 scenes on the virtual clock (`?clock=virtual&seed=1&now=` a June noon) from fixed saves, and compare each pixel by pixel ([pixelmatch](https://github.com/mapbox/pixelmatch)) with a PNG in `tools/e2e/reference/<set>/`:
+
+- the tank: `day-new` (a new game), `full-tank` (seven species, every decoration, the keepsakes, the bubbler, the helpers), `night-visitor` (light off, the octopus), `halloween-night` (pumpkins, the bat, a ghost moon), `calm` (reduce motion), `drawer-carrying` (the anchor held over the open drawer), `phone-390x844`, `small-360x640`
+- the panels and the room: `shop-jellies`, `shop-decor`, `shop-helpers`, `shop-tank`, `journal-species`, `journal-keepsakes`, `journal-visitors`, `room-day` and `room-halloween-dusk` (1440x900)
+
+There is one set per GPU mode, since GL output differs by GPU: `metal` (`npm run e2e` on a Mac) and `swiftshader` (`npm run e2e:ci` and CI). Each set's `meta.json` records the platform and Chrome it was made with. On that platform and Chrome major a scene has to match exactly (the virtual clock's renders are byte-identical run to run). Elsewhere (CI's Linux against a set made on a Mac, or after a Chrome update) the run is *foreign*: it leaves the HTML text out, because each OS draws the font its own way, and allows a small difference (0.05% of the pixels, more for the four scenes that scale pixel art by a fraction; `tools/e2e/scenes.mjs` lists them and why).
+
+A mismatch fails its check with the share of pixels that differ and writes `shots/visual/<scene>-actual.png`, `-expected.png` and `-diff.png` (red: what differs; blue: what a foreign run left out).
+
+Re-render the references when the art or the layout changes on purpose (a new sprite, a moved button, a reworded panel), and after a Chrome update moves pixels everywhere:
+
+```sh
+npm run e2e:update-refs                               # both sets, on this Mac: metal, then swiftshader
+npm run e2e:update-refs -- --gpu swiftshader          # one set
+npm run e2e:update-refs -- --from ~/Downloads/visual  # adopt a CI run's renders (its "visual" artifact)
+```
+
+It lists each scene that changed and by how much. Open those PNGs before you commit them: every changed reference is a picture you're approving. Never re-render to make a failure you don't understand go away.
+
+The `swiftshader` set was made on a Mac (arm64), and CI renders on Linux (x86-64) with the Chrome the runner image ships, so CI checks it as foreign. A foreign run uploads every render as the `visual` artifact; adopting them with `--from` makes the set native to CI, so CI checks exactly from then on (and a Mac's `E2E_GPU=swiftshader` runs become the foreign ones). To see what CI checks without pushing: `E2E_VISUAL_FOREIGN=1 npm run e2e -- visual-tank visual-ui`.
+
+How well it catches a regression: putting back the old chest lid (the plank floating above the gold, before 627bba2) fails 10 of the 17 scenes on both GPUs, 0.3% of the pixels in the day scenes, 0.02% at night, and the diff marks the lid. The foreign tolerances still catch it in the day scenes.
+
+### Accessibility checks
+
+The `a11y` flow runs [axe-core](https://github.com/dequelabs/axe-core) (WCAG 2.2 A/AA and best practices) on the HTML around the tank in 17 states: the first tip, the tank idle, the settings menu, the shop, a jelly's card, the requests note, the share, backup and restore panels, the journal (a species, the keepsakes, the visitors, the album), the album viewer, the away note, a keepsake note, and the room on a wide screen with reduce motion on. A serious or critical violation fails; moderate and minor ones are warnings in the report, one per rule with the states it came up in. The tank's canvas is one labelled `role="application"` element that axe can't look inside, and the room's canvases are decoration, so neither is checked beyond that.
 
 The flows drive the tank through a test API, `window.__jt` (`src/testapi.ts`). It loads only when the URL asks for test mode, as a separate chunk that players never download:
 

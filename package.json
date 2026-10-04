@@ -17,11 +17,15 @@
     "hooks": "node tools/guard.mjs --install-hook",
     "budget": "vite build --logLevel warn && node tools/budget.mjs",
     "budget:bytes": "vite build --logLevel warn && node tools/budget.mjs --bytes",
-    "test:explore": "FC_SEED=random FC_SCALE=10 vitest run src/save.prop.test.ts src/tankcode.prop.test.ts src/progress.prop.test.ts"
+    "test:explore": "FC_SEED=random FC_SCALE=10 vitest run src/save.prop.test.ts src/tankcode.prop.test.ts src/progress.prop.test.ts",
+    "e2e:update-refs": "node tools/e2e/update-refs.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
+    "axe-core": "^4.13.0",
     "fast-check": "^4.10.2",
+    "pixelmatch": "^7.2.0",
+    "pngjs": "^7.0.0",
     "puppeteer-core": "^25.12.0",
     "typescript": "^6.0.3",
     "vite": "^8.3.0",

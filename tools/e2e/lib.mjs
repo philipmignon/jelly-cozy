@@ -60,11 +60,15 @@ export function save(over = {}) {
 
 // ---------------------------------------------------------------- the server: dist/ as GitHub Pages serves it
 
-const TYPES = { ".js": "text/javascript", ".mjs": "text/javascript", ".wasm": "application/wasm", ".html": "text/html", ".json": "application/json", ".riv": "application/octet-stream", ".png": "image/png", ".webmanifest": "application/manifest+json", ".css": "text/css" };
+const TYPES = { ".js": "text/javascript", ".mjs": "text/javascript", ".wasm": "application/wasm", ".html": "text/html", ".json": "application/json", ".riv": "application/octet-stream", ".png": "image/png", ".webmanifest": "application/manifest+json", ".css": "text/css", ".woff2": "font/woff2" };
+/** where the e2e server serves the Silkscreen copy in tools/e2e/fonts/ (a path dist/ never has) */
+const FONTS = "__e2e-fonts/";
 
 /**
  * dist/ under /jelly-cozy/ (like Pages). The service worker is left out: index.html loses its
  * <meta name="jellytank-sw"> opt-in, so the tank never registers one (tools/offline.mjs tests the worker).
+ * The Google Fonts link becomes a local copy of the same font (tools/e2e/fonts/): the screenshots don't hang on
+ * the network or change when Google updates the font, and the reference screenshots (visual flow) stay valid.
  */
 export function startServer(port) {
   const dist = join(ROOT, "dist");
@@ -72,13 +76,22 @@ export function startServer(port) {
   const cache = new Map();
   const body = (f) => {
     if (cache.has(f)) return cache.get(f);
-    const path = join(dist, f);
-    if (!path.startsWith(dist) || !existsSync(path) || !statSync(path).isFile()) return null;
+    const base = f.startsWith(FONTS) ? join(ROOT, "tools/e2e/fonts") : dist;
+    const path = join(base, f.startsWith(FONTS) ? f.slice(FONTS.length) : f);
+    if (!path.startsWith(base) || !existsSync(path) || !statSync(path).isFile()) return null;
     let b = readFileSync(path);
-    if (f === "index.html") b = Buffer.from(String(b).replace(/<meta name="jellytank-sw"[^>]*>/, ""));
+    if (f === "index.html") {
+      b = Buffer.from(
+        String(b)
+          .replace(/<meta name="jellytank-sw"[^>]*>/, "")
+          .replace(/<link rel="preconnect" href="https:\/\/fonts\.(googleapis|gstatic)\.com"[^>]*>/g, "")
+          .replace(/<link rel="stylesheet" href="https:\/\/fonts\.googleapis\.com\/css2\?family=Silkscreen[^"]*"[^>]*>/, `<link rel="stylesheet" href="./${FONTS}silkscreen.css" />`),
+      );
+    }
     cache.set(f, b);
     return b;
   };
+  if (/fonts\.googleapis\.com/.test(String(body("index.html")))) throw new Error("e2e server: index.html's Google Fonts link has changed; update the local-font swap in tools/e2e/lib.mjs (startServer)");
   const server = createServer((req, res) => {
     const url = decodeURIComponent(req.url.split("?")[0]);
     if (!url.startsWith(BASE)) return res.writeHead(404).end();
@@ -124,11 +137,15 @@ const withTimeout = (p, ms, what) => {
  * collect here for the runner's report.
  */
 export class Flow {
-  constructor(browser, origin, { name }) {
+  constructor(browser, origin, { name }, { gpu = "real" } = {}) {
     this.browser = browser;
     this.origin = origin;
     this.name = name;
+    /** the runner's GL: "real" (this machine's GPU) or "swiftshader" (which reference screenshots apply) */
+    this.gpu = gpu;
     this.checks = [];
+    /** what's worth knowing but fails nothing (the a11y flow's moderate and minor findings) */
+    this.warnings = [];
     this.diag = [];
     this.errors = [];
     this.contexts = [];
@@ -141,6 +158,11 @@ export class Flow {
   check(name, ok, extra = "") {
     this.checks.push({ name, ok: !!ok, extra: ok ? "" : String(extra ?? "") });
     return !!ok;
+  }
+
+  /** a warning: in the report and the runner's output, never a failure */
+  warn(what) {
+    this.warnings.push(what);
   }
 
   /** the app's URL for these query parameters (test mode always; the virtual clock and seed unless turned off) */
@@ -314,16 +336,17 @@ export class Flow {
   // ---- screenshots
 
   /**
-   * shots/e2e-<name>.png. A screenshot that hangs (software GL under load did, for minutes) fails the flow fast,
-   * and the report says whether the page's JS still answered.
+   * shots/e2e-<name>.png (and its PNG bytes returned). A screenshot that hangs (software GL under load did, for
+   * minutes) fails the flow fast, and the report says whether the page's JS still answered.
    */
   async shot(name, page = this.page) {
     const path = join(SHOTS, `e2e-${name}.png`);
     const t0 = Date.now();
     try {
-      await withTimeout(page.screenshot({ path, optimizeForSpeed: true }), 30_000, `screenshot ${name}`);
+      const png = await withTimeout(page.screenshot({ path, optimizeForSpeed: true }), 30_000, `screenshot ${name}`);
       // E2E_STATE=1: the state beside it (to see what differs when two runs' pixels do)
       if (process.env.E2E_STATE === "1") writeFileSync(path.replace(/\.png$/, ".json"), JSON.stringify(await page.evaluate(() => window.__jt?.state() ?? null), null, 1));
+      return Buffer.from(png);
     } catch (e) {
       const jsAlive = await withTimeout(page.evaluate(() => 1), 3000, "a JS ping").then(() => true, () => false);
       this.diag.push({ shot: name, ms: Date.now() - t0, jsAlive, error: String(e?.message ?? e) });

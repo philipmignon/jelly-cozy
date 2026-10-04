@@ -111,7 +111,7 @@ const CSS = `
   min-width: 44px; height: 32px; font: 14px ${FONT}; color: #2b1712; cursor: pointer;
   background: #fffaf0; border: 2px solid #693c24; border-radius: 6px; box-shadow: 0 2px 0 #693c24;
 }
-.jt-book-nav button:focus-visible, .jt-book-x:focus-visible { outline: 2px solid #b5541b; outline-offset: 2px; }
+.jt-book-nav button:focus-visible, .jt-book-x:focus-visible, .jt-vlog-list:focus-visible { outline: 2px solid #b5541b; outline-offset: 2px; }
 .jt-book-dots { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
 .jt-book-dots i { width: 8px; height: 8px; border-radius: 2px; background: #d9bf94; }
 .jt-book-dots i.seen { background: #a78560; }
@@ -214,7 +214,7 @@ export function createJournal(pages: () => JournalPage[], keepsakes?: () => Keep
     <div class="jt-keep-page" hidden><h3 class="jt-book-name">Keepsakes</h3>
       <p class="jt-keep-intro">Reach a milestone and a keepsake turns up in your tank.</p><ul class="jt-keep-list"></ul></div>
     <div class="jt-vlog-page" hidden><h3 class="jt-book-name">Visitors</h3>
-      <p class="jt-vlog-intro">Everyone who has dropped by your tank. Some only come out at night.</p><ul class="jt-vlog-list"></ul></div>
+      <p class="jt-vlog-intro">Everyone who has dropped by your tank. Some only come out at night.</p><ul class="jt-vlog-list" tabindex="0" aria-label="Visitors"></ul></div>
     <div class="jt-book-nav"><button type="button" class="prev" aria-label="Previous page">&lt;</button>
       <div><div class="jt-book-dots"></div><div class="jt-book-count"></div></div>
       <button type="button" class="next" aria-label="Next page">&gt;</button></div>

@@ -43,7 +43,8 @@ export default defineConfig({
   // deps in the shared node_modules/.vite reloads pages served by the others mid-test
   ...(process.env.JT_VITE_CACHE_DIR ? { cacheDir: process.env.JT_VITE_CACHE_DIR } : {}),
   build: { target: "es2022" },
-  test: { include: ["src/**/*.test.ts", "tools/**/*.test.mjs"], environment: "node" },
+  // 30 s per test: several simulate minutes to hours of tank time, and CI runners are ~2x slower than a dev machine
+  test: { include: ["src/**/*.test.ts", "tools/**/*.test.mjs"], environment: "node", testTimeout: 30_000 },
   plugins: [
     {
       // the loading screen markup (src/loader.html) goes into index.html

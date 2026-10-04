@@ -92,9 +92,9 @@ export const flow = {
     t.check("pairs: a pair's baby is born, and a note names both parents", baby > 1 && /^Mochi and Pip had a baby( — a [a-z-]+ one)?!$/.test(note), JSON.stringify({ baby, note }));
     t.check("pairs: both parents start a new wait", s.slots[0].content < 60 && s.slots[1].content < 60, JSON.stringify([s.slots[0].content, s.slots[1].content]));
 
-    // ---- the journal's Colours section: all four moon colours raised
+    // ---- the journal's Colours section: all five moon colours raised (winter's frost between ghost and dusk)
     const journal = Array.from({ length: 9 }, () => blank());
-    journal[0] = entry(2, { morphSeen: 1 | 2 | 8 | 16 });
+    journal[0] = entry(2, { morphSeen: 1 | 2 | 4 | 8 | 16 });
     journal[5] = entry(1, { morphSeen: 1 });
     await t.open({ save: save({ slots: [jelly(0, 3)], journal, keep, visitorsSeen: { octopus: { n: 1, first: NOW } } }) });
     page = t.page;
@@ -102,8 +102,9 @@ export const flow = {
     await page.click(".jt-menu-journal");
     await t.until(() => !document.querySelector(".jt-book").hidden);
     const rows = await page.evaluate(() => [...document.querySelectorAll(".jt-book-morph")].map((r) => ({ found: r.classList.contains("found"), text: r.textContent.replace(/\s+/g, " ").trim() })));
-    t.check("pairs: the journal's Colours section lists rare, ghost, dusk and pearl",
-      rows.length === 4 && rows.every((r) => r.found) && /dusk moon/i.test(rows[2].text) && /pearl moon/i.test(rows[3].text) && /rare × rare/.test(rows[2].text) && /rare × ghost/.test(rows[3].text),
+    t.check("pairs: the journal's Colours section lists rare, ghost, frost, dusk and pearl",
+      rows.length === 5 && rows.every((r) => r.found) && /frost moon/i.test(rows[2].text) && /born in winter/i.test(rows[2].text) &&
+        /dusk moon/i.test(rows[3].text) && /pearl moon/i.test(rows[4].text) && /rare × rare/.test(rows[3].text) && /rare × ghost/.test(rows[4].text),
       JSON.stringify(rows));
     const heading = await page.evaluate(() => document.querySelector(".jt-book-morphs h4")?.textContent);
     t.check("pairs: the section is called Colours", heading === "Colours", heading);

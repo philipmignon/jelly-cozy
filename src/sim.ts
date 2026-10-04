@@ -391,12 +391,14 @@ export interface LampOverride {
  * The save version written by toSave (v6 changed no save fields; v8 added the dirt spots; v9 foods and themes; v10 morph
  * ids instead of a boolean, the morphSeen bitmask and today's requests; v11 jelly traits, the keepsakes' `keep` and
  * decorations 5..10, the keepsakes and the bubbler; v12 the optional `stored` (decorations put away) and
- * `visitorsSeen` (the visitor log), both absent in a v11 save and read as empty). The save key stays jellytank:v5.
+ * `visitorsSeen` (the visitor log), both absent in a v11 save and read as empty; v13 the optional `gels`/`gel`,
+ * `climate`, `finds`, `nursery` and each jelly's `pair`, and morph ids 3 frost, 4 dusk and 5 pearl, all absent from a
+ * v12 save and read as their defaults). The save key stays jellytank:v5.
  */
-export const SAVE_VERSION = 12;
+export const SAVE_VERSION = 13;
 
 export interface Save {
-  v: 12;
+  v: 13;
   /** always length 7 (MAX_SLOTS); null = empty slot */
   slots: (SaveJelly | null)[];
   dollars: number;
@@ -920,7 +922,7 @@ export function defaultSave(now = Date.now()): Save {
   const slots = withSlots([freshJelly(MOON, POLYP, pickName([], seedOf(now, 0)), now)]);
   const spots = spotsForMurk(0.1, tierRight(0), rng(now));
   return {
-    v: 12,
+    v: SAVE_VERSION,
     slots,
     dollars: 0,
     murk: murkOf(spots),
@@ -946,7 +948,7 @@ export function migrateV1(v1: SaveV1, now = v1.lastSeen): Save {
   const j: SaveJelly = { ...freshJelly(MOON, ADULT, pickName([], seedOf(now, 0)), now), fullness: clamp(v1.fullness), affection: clamp(v1.affection) };
   const spots = spotsForMurk(clamp(finite(v1.murk, 0.1)), tierRight(0), rng(v1.lastSeen));
   return {
-    v: 12,
+    v: SAVE_VERSION,
     slots: withSlots([j]),
     dollars: 10,
     murk: murkOf(spots),
@@ -1031,9 +1033,9 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
   const foods = ownedList(raw.foods, FOOD_KINDS);
   const themes = ownedList(raw.themes, THEME_N);
   const spots =
-    raw.v === 8 || raw.v === 9 || raw.v === 10 || raw.v === 11 || raw.v === 12 ? spotsFromSave(raw.spots, tierRight(tier)) : spotsForMurk(clamp(finite(raw.murk, 0.1)), tierRight(tier), rng(finite(raw.lastSeen, now)));
+    raw.v === 8 || raw.v === 9 || raw.v === 10 || raw.v === 11 || raw.v === 12 || raw.v === 13 ? spotsFromSave(raw.spots, tierRight(tier)) : spotsForMurk(clamp(finite(raw.murk, 0.1)), tierRight(tier), rng(finite(raw.lastSeen, now)));
   return {
-    v: 12,
+    v: SAVE_VERSION,
     slots,
     dollars: clamp(Math.floor(finite(raw.dollars, 0)), 0, MAX_DOLLARS),
     murk: murkOf(spots),
@@ -1047,7 +1049,7 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
     lastSeen: finite(raw.lastSeen, now),
     tier,
     cam: snap(clamp(finite(raw.cam, 0), camLo(worldWOf(tier)), 0)),
-    journal: raw.v === 7 || raw.v === 8 || raw.v === 9 || raw.v === 10 || raw.v === 11 || raw.v === 12 ? journalOf(raw.journal, slots, now) : journalFrom(slots, now),
+    journal: raw.v === 7 || raw.v === 8 || raw.v === 9 || raw.v === 10 || raw.v === 11 || raw.v === 12 || raw.v === 13 ? journalOf(raw.journal, slots, now) : journalFrom(slots, now),
     foods,
     themes,
     theme: themeOf(raw.theme, themes),
@@ -1143,12 +1145,12 @@ export function applyAway(save: Save, now: number, growthMultiplier = 1): Save {
   };
 }
 
-/** Parse whatever localStorage held into a v12 save (no time away yet); `fresh` = it was a brand-new game. */
+/** Parse whatever localStorage held into a current save (no time away yet); `fresh` = it was a brand-new game. */
 function parseSave(raw: string | null, now: number): { save: Save; fresh: boolean } {
   try {
     const d: unknown = raw ? JSON.parse(raw) : null;
     const o = d && typeof d === "object" ? (d as Record<string, unknown>) : null;
-    if (o?.v === 12 || o?.v === 11 || o?.v === 10 || o?.v === 9 || o?.v === 8 || o?.v === 7 || o?.v === 5 || o?.v === 4 || o?.v === 3 || o?.v === 2) return { save: sanitize(o, now), fresh: false };
+    if (o?.v === 13 || o?.v === 12 || o?.v === 11 || o?.v === 10 || o?.v === 9 || o?.v === 8 || o?.v === 7 || o?.v === 5 || o?.v === 4 || o?.v === 3 || o?.v === 2) return { save: sanitize(o, now), fresh: false };
     if (o?.v === 1)
       return {
         save: migrateV1(
@@ -1268,7 +1270,7 @@ export function demoSave(now = Date.now()): Save {
     { ...freshJelly(MOON, POLYP, "Bloop", now), gp: GROWTH[EPHYRA] - 1, fullness: 0.25, affection: 0.6, anchor: 0 },
   ]);
   return {
-    v: 12,
+    v: SAVE_VERSION,
     slots,
     dollars: 200,
     murk: 0,
@@ -1494,7 +1496,7 @@ export function createState(save: Save, rand: () => number = Math.random, opts: 
 
 export function toSave(s: State, now: number): Save {
   return {
-    v: 12,
+    v: SAVE_VERSION,
     slots: s.slots.map((j) =>
       j
         ? { k: j.k, g: j.g, gp: j.gp, care: j.care, fullness: j.fullness, affection: j.affection, anchor: j.anchor, spot: j.spot, name: j.name, born: j.born, content: j.content, morph: j.morph, trait: j.trait, ...(j.pair >= 0 ? { pair: j.pair } : {}) }
@@ -3033,7 +3035,7 @@ export function importTank(code: string, now = Date.now()): Save | null {
   const theme = clamp(Math.round(t.theme ?? 0), 0, THEME_N - 1);
   themes[theme] = true;
   return {
-    v: 12,
+    v: SAVE_VERSION,
     slots,
     dollars: 0,
     murk: 0,

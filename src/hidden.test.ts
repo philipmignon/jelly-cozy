@@ -16,7 +16,7 @@ const jelly = (k: SaveJelly["k"], g: SaveJelly["g"], extra: Partial<SaveJelly> =
 const tank = (extra: Partial<Save> = {}): Save => {
   const slots = [jelly(0, 2, { gp: 25 }), jelly(1, 0, { name: "Bloop", anchor: 0, gp: 3, fullness: 0.7 }), null, null, null, null, null];
   return {
-    v: 12, foods: [true, false, false], themes: [true, false, false, false, false], theme: 0, slots,
+    v: 13, foods: [true, false, false], themes: [true, false, false, false, false], theme: 0, slots,
     dollars: 30, murk: 0, spots: [], night: false, lamp: null, owned: DECOR.map((_, i) => i === 0), helpers: [true, false, false],
     decorX: DECOR.map((d) => d.x), pearlDay: "", lastSeen: T, tier: 0, cam: 0, journal: journalFrom(slots, 0), ...extra,
   };

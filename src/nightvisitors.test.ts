@@ -64,7 +64,7 @@ const jelly = (k: Species, g: Stage, extra: Partial<SaveJelly> = {}): SaveJelly 
 });
 const owned = (...ns: number[]) => Array.from({ length: DECOR.length }, (_, i) => ns.includes(i));
 const tank = (slots: (SaveJelly | null)[], extra: Partial<Save> = {}): Save => ({
-  v: 12, foods: [true, false, false], themes: [true, false, false, false], theme: 0,
+  v: 13, foods: [true, false, false], themes: [true, false, false, false], theme: 0,
   slots: Array.from({ length: 7 }, (_, i) => slots[i] ?? null),
   dollars: 10, murk: 0, spots: [], night: true, lamp: null, owned: owned(), helpers: [false, false, false],
   decorX: DECOR.map((d) => d.x), pearlDay: "", lastSeen: NIGHT, tier: 0, cam: 0, journal: journalFrom(slots, 0), ...extra,

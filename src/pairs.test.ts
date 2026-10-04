@@ -66,7 +66,7 @@ const jelly = (k: Species, g: Stage, extra: Partial<SaveJelly> = {}): SaveJelly 
   k, g, gp: [0, 4, 12, 30][g]!, care: 0, fullness: 1, affection: 1, anchor: -1, spot: -1, name: "Mochi", born: 0, content: 0, morph: 0, trait: 1, ...extra,
 });
 const tank = (slots: (SaveJelly | null)[], extra: Partial<Save> = {}): Save => ({
-  v: 12, foods: [true, false, false], themes: [true, false, false, false], theme: 0,
+  v: 13, foods: [true, false, false], themes: [true, false, false, false], theme: 0,
   slots: Array.from({ length: 7 }, (_, i) => (slots[i] ? { ...slots[i]!, name: slots[i]!.name === "Mochi" ? NAMES[i]! : slots[i]!.name } : null)),
   dollars: 0, murk: 0, spots: [], night: false, lamp: null, owned: [false, false, false, false, false], helpers: [false, false, false],
   // local noon, so day or night doesn't depend on the machine's time zone

@@ -226,6 +226,7 @@ describe("older versions migrate", () => {
     10: ["requests"],
     11: ["keep"],
     12: ["stored", "visitorsSeen"],
+    13: ["gels", "gel", "climate", "finds", "nursery"],
   };
   const fieldsOf = (v: number) => Object.entries(ADDED).flatMap(([at, fs]) => (Number(at) <= v ? fs : []));
   const plausibleJelly = (v: number) =>
@@ -238,17 +239,17 @@ describe("older versions migrate", () => {
       anchor: fc.integer({ min: -1, max: 2 }),
       spot: fc.constant(-1),
       ...(v >= 3 ? { name: fc.constantFrom("Mochi", "Bloop", "Puff"), born: fc.integer({ min: NOW - 90 * 864e5, max: NOW }), content: fc.nat(100) } : {}),
-      ...(v >= 7 ? { morph: v >= 10 ? fc.integer({ min: 0, max: 2 }) : fc.boolean() } : {}),
+      ...(v >= 7 ? { morph: v >= 13 ? fc.constantFrom(...MORPH_KNOWN) : v >= 10 ? fc.integer({ min: 0, max: 2 }) : fc.boolean() } : {}),
       ...(v >= 11 ? { trait: fc.integer({ min: 0, max: 3 }) } : {}),
     });
-  const versioned = fc.constantFrom(2, 3, 4, 5, 7, 8, 9, 10, 11, 12).chain((v) =>
+  const versioned = fc.constantFrom(2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13).chain((v) =>
     fc.tuple(
       fc.constant(v),
       fc.record({ save: saveish, slots: fc.array(fc.option(plausibleJelly(v), { nil: null }), { minLength: 1, maxLength: 7 }), tier: fc.integer({ min: 0, max: 2 }), dollars: fc.integer({ min: 0, max: 20000 }) }),
     ),
   );
 
-  it("v2..v12: the right shape loads as a current save keeping the jellies the tier holds, their species and the dollars", () => {
+  it("v2..v13: the right shape loads as a current save keeping the jellies the tier holds, their species and the dollars", () => {
     fc.assert(
       fc.property(versioned, nowArb, ([v, { save, slots, tier, dollars }], now) => {
         const keep = new Set(fieldsOf(v));

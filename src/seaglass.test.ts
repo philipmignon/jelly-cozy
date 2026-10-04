@@ -44,7 +44,7 @@ const run = (s: State, seconds: number) => {
 };
 const adult = (): SaveJelly => ({ k: 0, g: 3, gp: 30, care: 0, fullness: 0.8, affection: 0.4, anchor: -1, spot: -1, name: "Mochi", born: NOON, content: 0, morph: 0 });
 const tank = (extra: Partial<Save> = {}): Save => ({
-  v: 12, foods: [true, false, false], themes: [true, false, false, false, false], theme: 0,
+  v: 13, foods: [true, false, false], themes: [true, false, false, false, false], theme: 0,
   slots: [adult(), null, null, null, null, null, null],
   dollars: 0, murk: 0, spots: [], night: false, lamp: null, owned: Array.from({ length: DECOR_N }, () => false), helpers: [false, false, false],
   decorX: DECOR.map((d) => d.x), pearlDay: "", lastSeen: NOON, tier: 0, cam: 0, journal: journalFrom([adult()], NOON), ...extra,

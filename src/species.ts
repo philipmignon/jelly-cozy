@@ -588,11 +588,12 @@ export const CRAB_SPEED = 11;
 export const NAME_MAX = 12;
 /** v7: a new jelly (a baby, or a bought polyp) is a rare colour morph this often. ?fast=1 doesn't change it. */
 export const MORPH_CHANCE = 0.1;
-/** v12 morph ids (SaveJelly.morph): 0 none, 1 classic (the v7 rare palette), 2 ghost (the Halloween palette). */
+/** v12 morph ids (SaveJelly.morph): 0 none, 1 classic (the v7 rare palette), 2 ghost (the Halloween palette), 3 frost (winter's). */
 export const MORPH_NONE = 0;
 export const MORPH_CLASSIC = 1;
 export const MORPH_GHOST = 2;
-export const MORPH_IDS = 3;
+export const MORPH_FROST = 3;
+export const MORPH_IDS = 4;
 /** v12: a morph parent's baby is the same morph this often (otherwise it rolls like a plain parent's). */
 export const MORPH_INHERIT = 0.5;
 /** v12: while a season offers a morph (SimOptions.seasonalMorph), a baby that rolled plain is that morph this often. */
@@ -794,8 +795,10 @@ export function specProps(foodN = K.foodN): string[] {
     out.push(`j${s}healthy`, `j${s}pale`, `j${s}flush`, `j${s}glow`, `j${s}rot`);
     // Halloween's ghost-pale morph palette; quiet nights' bell glow
     out.push(`j${s}ghost`, `j${s}nglow`);
+    // winter's frost morph palette
+    out.push(`j${s}frost`);
   }
-  // seasonal events: each season's decor prop (evHalloween)
+  // seasonal events: each season's decor prop (evHalloween, evWinter)
   for (const season of SEASONS) out.push(season.prop);
   out.push("fxX", "fxY", "fxS", "fxO");
   for (let p = 0; p < 4; p++) for (let d = 0; d < 10; d++) out.push(`cd${p}n${d}`);
@@ -814,8 +817,8 @@ export function specProps(foodN = K.foodN): string[] {
   out.push("snailOn", "snailX", "snailY", "snailSX", "snailF0", "snailF1");
   for (const h of ["shrimp", "crab"]) out.push(`${h}On`, `${h}X`, `${h}Y`, `${h}SX`, `${h}F0`, `${h}F1`, `${h}F2`, `${h}F3`);
   out.push("camX", "camY", "camZ", "wallX", "panL", "panR");
-  // v7 visitors: turtle, seahorse ("horse"), diver; the Halloween bat
-  for (const v of ["turtle", "horse", "diver", "bat"]) out.push(`${v}On`, `${v}X`, `${v}Y`, `${v}SX`, `${v}F0`, `${v}F1`, `${v}F2`, `${v}F3`);
+  // v7 visitors: turtle, seahorse ("horse"), diver; the Halloween bat; winter's penguin
+  for (const v of ["turtle", "horse", "diver", "bat", "penguin"]) out.push(`${v}On`, `${v}X`, `${v}Y`, `${v}SX`, `${v}F0`, `${v}F1`, `${v}F2`, `${v}F3`);
   // v14 night visitors: the manta and the hermit crab like the others; the octopus by spot (octoS{i}), with octoDY and its colours
   for (const v of ["manta", "hermit"]) out.push(`${v}On`, `${v}X`, `${v}Y`, `${v}SX`, `${v}F0`, `${v}F1`, `${v}F2`, `${v}F3`);
   const octoSpots = (K as unknown as { octoSpots?: unknown[] }).octoSpots;

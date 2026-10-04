@@ -32,7 +32,7 @@ describe("morphs", () => {
   });
   it("a ghost jelly brings its art after the season, or with decor off, without the season", () => {
     const tank = [{ k: 0, morph: 0 }, { k: 3, morph: 2 }];
-    expect(groupsFor(tank, activeSeason(day(12, 1))?.id ?? null)).toEqual(["sp-moon", "sp-comb", "ev-halloween"]);
+    expect(groupsFor(tank, activeSeason(day(11, 20))?.id ?? null)).toEqual(["sp-moon", "sp-comb", "ev-halloween"]);
     expect(groupsFor(tank, activeSeason(day(10, 20), "", false)?.id ?? null)).toEqual(["sp-moon", "sp-comb", "ev-halloween"]);
     expect(groupsFor(tank, activeSeason(day(10, 20), "?season=none")?.id ?? null)).toEqual(["sp-moon", "sp-comb", "ev-halloween"]);
     expect(groupsFor([{ k: 0, morph: 1 }], null)).toEqual(["sp-moon"]);

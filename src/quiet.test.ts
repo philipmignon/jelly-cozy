@@ -219,7 +219,8 @@ describe("seasons in the tank: Halloween", () => {
     expect(kinds(null).has("bat")).toBe(false);
     const hw = kinds("halloween");
     expect(hw.has("bat")).toBe(true);
-    expect(hw.size).toBe(VISITORS.filter((_, k) => !nightVisitor(k)).length); // by day: all but the night visitors
+    // by day: all but the night visitors (and winter's penguin)
+    expect(hw.size).toBe(VISITORS.filter((_, k) => !nightVisitor(k) && VISITORS[k] !== "penguin").length);
   });
 
   it("flutters in, hangs from the hood's lip, stays in view at every tier and camera, then flutters off", () => {

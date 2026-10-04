@@ -10,7 +10,7 @@ import { focusReturn } from "./a11y";
 import { captionDate } from "./photo";
 import type { VisitorRow } from "./visitlog";
 import { SPECIES_NAMES } from "./species";
-import { FOOD_NAMES, MORPH_CLASSIC, MORPH_GHOST, favouriteFood, morphSeen, type Species } from "./sim";
+import { FOOD_NAMES, MORPH_CLASSIC, MORPH_FROST, MORPH_GHOST, favouriteFood, morphSeen, type Species } from "./sim";
 import { traitsIn } from "./traits";
 
 export interface JournalPage {
@@ -56,10 +56,16 @@ const GHOSTS = [
   "Ghost moon", "Ghost blubber", "Ghost upside-down", "Ghost comb", "Ghost fried egg", "Ghost nettle",
   "Ghost crystal", "Ghost flower hat", "Ghost lion's mane",
 ];
-/** v12: the morph rows, in order: id, label, names, portrait key suffix (ART[`${k}${suffix}`]). */
+/** Winter's frost morph's name per species ("Frost moon"). */
+const FROSTS = [
+  "Frost moon", "Frost blubber", "Frost upside-down", "Frost comb", "Frost fried egg", "Frost nettle",
+  "Frost crystal", "Frost flower hat", "Frost lion's mane",
+];
+/** v12: the morph rows, in order: id, label, names, portrait key suffix (ART[`${k}${suffix}`]), a class for its look. */
 const MORPH_ROWS = [
-  { id: MORPH_CLASSIC, label: "Rare colour", names: MORPHS, art: "m" },
-  { id: MORPH_GHOST, label: "Ghost colour", names: GHOSTS, art: "g" },
+  { id: MORPH_CLASSIC, label: "Rare colour", names: MORPHS, art: "m", cls: "" },
+  { id: MORPH_GHOST, label: "Ghost colour", names: GHOSTS, art: "g", cls: " ghost" },
+  { id: MORPH_FROST, label: "Frost colour", names: FROSTS, art: "f", cls: " frost" },
 ] as const;
 
 // the portraits are generated; until they exist the book shows a placeholder dot
@@ -104,6 +110,7 @@ const CSS = `
 .jt-book-morph b { font-weight: normal; color: #8e5632; }
 .jt-book-morph.found b { color: #8e5632; }
 .jt-book-morph.ghost.found { border-color: #8f86c8; color: #3c3466; background: #ece8ff; }
+.jt-book-morph.frost.found { border-color: #6aa8cc; color: #1e4a66; background: #e4f6ff; }
 .jt-book-morph img { image-rendering: pixelated; }
 .jt-book-morph.found { border-style: solid; border-color: #e09a28; color: #6b3a12; background: #fff2c8; }
 .jt-book-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -210,7 +217,7 @@ export function createJournal(pages: () => JournalPage[], keepsakes?: () => Keep
     <h3 class="jt-book-name"></h3>
     <p class="jt-book-fact"></p>
     <dl class="jt-book-stats"></dl>
-    <div class="jt-book-morphs">${MORPH_ROWS.map((m) => `<div class="jt-book-morph${m.id === MORPH_GHOST ? " ghost" : ""}"><img alt=""><span><b>${m.label}:</b> <i></i></span></div>`).join("")}</div>
+    <div class="jt-book-morphs">${MORPH_ROWS.map((m) => `<div class="jt-book-morph${m.cls}"><img alt=""><span><b>${m.label}:</b> <i></i></span></div>`).join("")}</div>
     <div class="jt-keep-page" hidden><h3 class="jt-book-name">Keepsakes</h3>
       <p class="jt-keep-intro">Reach a milestone and a keepsake turns up in your tank.</p><ul class="jt-keep-list"></ul></div>
     <div class="jt-vlog-page" hidden><h3 class="jt-book-name">Visitors</h3>
@@ -280,7 +287,7 @@ export function createJournal(pages: () => JournalPage[], keepsakes?: () => Keep
         (li.querySelector(".jt-vlog-seen") as HTMLElement).textContent = met ? `Seen ${r.n === 1 ? "once" : `${r.n} times`}` : "Not met yet";
         (li.querySelector(".jt-vlog-when") as HTMLElement).textContent = met && r.first !== null
           ? `First seen ${seenDate(r.first)}`
-          : r.night ? "Comes out at night" : r.season === "halloween" ? "Comes at Halloween" : "Drops by any time";
+          : r.night ? "Comes out at night" : r.season === "halloween" ? "Comes at Halloween" : r.season === "winter" ? "Comes in winter" : "Drops by any time";
         li.dataset.kind = r.kind;
         return li;
       }),

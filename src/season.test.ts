@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  GHOST_MORPH, SEASONS, SEASON_DECOR_KEY, activeSeason, inSeason, readSeasonDecor, seasonAt, seasonOverride, seasonalMorph,
+  FROST_MORPH, GHOST_MORPH, SEASONS, SEASON_DECOR_KEY, activeSeason, inSeason, readSeasonDecor, seasonAt, seasonOverride, seasonalMorph,
   writeSeasonDecor, type Season,
 } from "./season";
-import { MORPH_GHOST } from "./species";
+import { MORPH_FROST, MORPH_GHOST } from "./species";
 
 const at = (y: number, m: number, d: number, h = 12) => new Date(y, m - 1, d, h).getTime();
 
@@ -25,6 +25,28 @@ describe("seasons", () => {
     expect(inSeason(winter, new Date(2027, 0, 1))).toBe(true);
     expect(inSeason(winter, new Date(2027, 0, 6))).toBe(true);
     expect(inSeason(winter, new Date(2027, 0, 7))).toBe(false);
+  });
+
+  it("winter runs from Dec 1 to the end of February (28th, or 29th in a leap year), over the new year", () => {
+    expect(seasonAt(new Date(2026, 10, 30, 23, 59, 59))).toBe(null);
+    expect(seasonAt(new Date(2026, 11, 1, 0, 0, 0))?.id).toBe("winter");
+    expect(seasonAt(new Date(2026, 11, 31, 23, 59, 59))?.id).toBe("winter");
+    expect(seasonAt(new Date(2027, 0, 1, 0, 0, 0))?.id).toBe("winter");
+    expect(seasonAt(new Date(2027, 1, 28, 23, 59, 59))?.id).toBe("winter");
+    expect(seasonAt(new Date(2027, 2, 1, 0, 0, 0))).toBe(null); // not a leap year: Feb 28 -> Mar 1
+    expect(seasonAt(new Date(2028, 1, 29, 12))?.id).toBe("winter"); // a leap year's Feb 29
+    expect(seasonAt(new Date(2028, 2, 1, 0, 0, 0))).toBe(null);
+    expect(seasonAt(at(2026, 11, 2))?.id).toBe("halloween"); // the seasons don't overlap
+  });
+
+  it("winter: its prop, sprites, morph (frost, 3) and override", () => {
+    const w = SEASONS.find((s) => s.id === "winter")!;
+    expect(w).toMatchObject({ prop: "evWinter", sprites: "wn_", morph: FROST_MORPH });
+    expect(FROST_MORPH).toBe(MORPH_FROST);
+    expect(seasonOverride("?season=winter")?.id).toBe("winter");
+    expect(seasonalMorph(at(2027, 1, 10))).toBe(3);
+    expect(seasonalMorph(at(2026, 7, 1), "?season=winter")).toBe(3);
+    expect(activeSeason(at(2027, 1, 10), "", false)).toBe(null);
   });
 
   it("every season has a prop and a sprite prefix", () => {
@@ -59,7 +81,7 @@ describe("seasons", () => {
     expect(GHOST_MORPH).toBe(MORPH_GHOST); // season.ts and the sim's morph ids agree
     expect(seasonalMorph(at(2026, 10, 20))).toBe(2);
     expect(seasonalMorph(new Date(2026, 10, 2))).toBe(2);
-    expect(seasonalMorph(at(2026, 12, 20))).toBe(null);
+    expect(seasonalMorph(at(2026, 11, 20))).toBe(null);
     expect(seasonalMorph(at(2026, 6, 1), "?season=halloween")).toBe(2);
     expect(seasonalMorph(at(2026, 10, 20), "?season=none")).toBe(null);
   });

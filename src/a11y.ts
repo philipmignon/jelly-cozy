@@ -205,7 +205,7 @@ export interface DescribeInfo {
 /** "Muffin, juvenile moon jelly, full, happy, shy" */
 export function describeJelly(i: DescribeInfo): string {
   const trait = [i.trait, i.personality].find((t): t is string => typeof t === "string" && t.trim() !== "");
-  const colour = i.morph === 1 ? "rare colour" : i.morph === 2 ? "ghost colour" : "";
+  const colour = i.morph === 1 ? "rare colour" : i.morph === 2 ? "ghost colour" : i.morph === 3 ? "frost colour" : "";
   return [i.name, jellyKind(i.k, i.g), colour, fullnessWord(i.fullness), moodWord(i.mood), trait?.toLowerCase()].filter(Boolean).join(", ");
 }
 

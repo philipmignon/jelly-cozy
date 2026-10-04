@@ -18,6 +18,7 @@ import { registerOffline, updateChip } from "./offline";
 import { activeSeason, readSeasonDecor, seasonalMorph, writeSeasonDecor } from "./season";
 import { createRequestNote, type RequestNote } from "./requestnote";
 import { attachRoom, type Room } from "./roomfit";
+import { weatherAt, type Weather } from "./weather";
 import { testQuery } from "./testmode";
 import type { TestHost } from "./testapi";
 import { SPECIES_NAMES, TAB_N, keepsakeOf } from "./species";
@@ -73,6 +74,7 @@ import {
   requests,
   MORPH_CLASSIC,
   MORPH_GHOST,
+  MORPH_FROST,
   setReducedMotion,
   TRAIT_PHRASES,
   setTab,
@@ -350,7 +352,7 @@ async function main() {
   };
   const cardInfo = (slot: number): JellyCardInfo | null => {
     const i = jellyInfo(state, slot);
-    const morph = i?.morph === MORPH_CLASSIC ? " · rare colour" : i?.morph === MORPH_GHOST ? " · ghost colour" : "";
+    const morph = i?.morph === MORPH_CLASSIC ? " · rare colour" : i?.morph === MORPH_GHOST ? " · ghost colour" : i?.morph === MORPH_FROST ? " · frost colour" : "";
     return i && { name: i.name, species: `${SPECIES[i.k] ?? ""}${morph}`, stage: STAGES[i.g] ?? "", ageDays: i.ageDays, fullness: i.fullness, mood: i.mood, trait: TRAIT_PHRASES[i.trait], rehome: rehomeInfo(state, slot) };
   };
 
@@ -482,7 +484,7 @@ async function main() {
   };
   /** A jelly was petted: its sound, a buzz and its name tag. */
   const petted = (slot: number) => {
-    audio.play("pet");
+    audio.play("pet", state.slots[slot]?.k); // each species' own little motif
     buzz(12);
     const at = aboveJelly(slot);
     const name = jellyInfo(state, slot)?.name;
@@ -772,6 +774,17 @@ async function main() {
   let hiddenAt = Date.now(); // v15: when the tab was last hidden (catchUp counts from here)
   let loadedFrame = false;
   let room: Room | null = null; // v15: the room beside the tank on wide screens
+  // the weather outside the room's window (src/weather.ts), worked out again once a minute or when the season changes
+  let weatherKey = "";
+  let weather: Weather | null = null;
+  const weatherNow = (): Weather | null => {
+    const key = `${Math.floor(Date.now() / 60_000)}:${state.event}`;
+    if (key !== weatherKey) {
+      weatherKey = key;
+      weather = weatherAt(new Date(), state.event, location.search);
+    }
+    return weather;
+  };
   let cardTick = 0;
   let reqTick = 0;
   rive.on(EventType.Advance, (e) => {
@@ -794,6 +807,7 @@ async function main() {
         lit: () => !state.nightTarget,
         season: () => state.event,
         toggle: press.lamp,
+        weather: weatherNow,
       });
     }
     overlay.placeTip();
@@ -920,6 +934,8 @@ async function main() {
     write(v);
     audio.setNight(v.nightShade ?? 0);
     room?.sync();
+    // rain on the window, softly under the music: only while the room (and so its window) is on screen
+    audio.setRain(room?.shown() === true && weatherNow() === "rain");
     audio.setMurk(state.murk);
     if (overlay.cardSlot !== null && (cardTick = (cardTick + 1) % 15) === 0) overlay.updateCard(cardInfo(overlay.cardSlot));
     // v12: the note follows the requests' progress (and a new day's list after midnight)

@@ -146,8 +146,8 @@ describe("v12: babies inherit colour morphs", () => {
 });
 
 describe("v12: morph ids in saves (v7..v9 wrote booleans)", () => {
-  it("morphOf: true is classic, 1 and 2 stay, anything else is none", () => {
-    expect([true, false, 0, 1, 2, 3, -1, 1.5, "2", null, undefined].map(morphOf)).toEqual([1, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0]);
+  it("morphOf: true is classic, 1, 2 and 3 (winter's frost) stay, anything else is none", () => {
+    expect([true, false, 0, 1, 2, 3, 4, -1, 1.5, "2", null, undefined].map(morphOf)).toEqual([1, 0, 0, 1, 2, 3, 0, 0, 0, 0, 0, 0]);
   });
 
   it("loadSave migrates a v9 save's boolean morphs and journal to v10", () => {
@@ -189,9 +189,9 @@ describe("v12: morph ids in saves (v7..v9 wrote booleans)", () => {
   });
 
   it("a damaged morphSeen keeps only known bits", () => {
-    const raw = { ...tank([]), journal: tank([]).journal.map((e, k) => ({ ...e, morphSeen: [7, -1, "3", 2.5][k] ?? 0 })) };
+    const raw = { ...tank([]), journal: tank([]).journal.map((e, k) => ({ ...e, morphSeen: [15, -1, "3", 2.5][k] ?? 0 })) };
     const save = loadSave(JSON.stringify(raw), 0);
-    expect(save.journal.slice(0, 4).map((e) => e.morphSeen)).toEqual([3, 0, 0, 0]);
+    expect(save.journal.slice(0, 4).map((e) => e.morphSeen)).toEqual([7, 0, 0, 0]); // bits for morphs 1-3
   });
 });
 

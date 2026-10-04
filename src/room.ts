@@ -13,11 +13,18 @@
  *   glow   the light, screen-blended: the window's daylight or moonlight, the lamp's warm pool, the tank's glow
  * A change fades the new scene in over the old (as long as the tank's own day/night fade), at once with reduce motion.
  *
+ * Weather (host.weather(), src/weather.ts): some evenings it rains, and in winter it may snow instead. A fourth canvas,
+ * the window's glass only and at art resolution, sits between the art and the shade (so night darkens it too): rain
+ * streaks falling outside, beads on the glass and the odd one running down; or snowflakes drifting down. It redraws
+ * at WEATHER_FPS while the room shows and the tab is visible, never per frame; with reduce motion it is drawn once,
+ * still. A winter season's "snow" sprites (snow drifted against the panes) show only while it snows.
+ *
  * The room's lamp follows the tank's light (on while the tank is lit) and is a second light switch: clicking it
  * flips the tank's. Everything else lets the pointer through to the tank canvas. `?sky=dawn|day|dusk|night` forces
  * the window's time of day (screenshots, tests), as `?season=` forces the event.
  */
 import type { RoomHost, RoomView } from "./roomfit";
+import type { Weather } from "./weather";
 
 // This chunk imports nothing at run time: a chunk that imported from the main bundle would name the main script's
 // file, and wherever that resolves to another URL (a host that adds a query string, say) the whole tank would load
@@ -49,6 +56,9 @@ export interface RoomLayout {
   tile: number;
   floor: number;
   window: Box;
+  /** the glazing bars (3 px wide from these): the vertical one's x, the horizontal one's y */
+  mullion?: number;
+  transom?: number;
   lamp: { x: number; y: number };
   sill: { x: number; y: number };
   tank: Box;
@@ -57,17 +67,24 @@ interface SpriteData {
   x: number;
   y: number;
   png: string;
-  /** a season's sprite: its event id, and when it shows ("always"; "sky": in the window at dusk and night) */
+  /**
+   * a season's sprite: its event id, and when it shows ("always"; "sky": in the window at dusk and night; "pane": in
+   * the window at any time; "snow": in the window while it snows)
+   */
   season?: string;
-  when?: "always" | "sky";
+  when?: When;
 }
+type When = "always" | "sky" | "pane" | "snow";
 interface Sprite {
   x: number;
   y: number;
   img: CanvasImageSource;
   season: string | undefined;
-  when: "always" | "sky" | undefined;
+  when: When | undefined;
 }
+
+/** The weather layer's frame rate while it rains or snows (reduce motion: one still frame). */
+export const WEATHER_FPS = 10;
 
 /** How each time of day lights the room: the dark's colour and strength, the window's light and how far it reaches. */
 const SKY_LIGHT: Record<SkyPhase, { dark: number; tint: string; win: string; winGlow: number; winHole: number; lamp: number }> = {
@@ -143,7 +160,7 @@ export async function createRoom(host: RoomHost, url: string): Promise<RoomView>
   (tank ?? root).after(lampBtn); // under every overlay (they all sit higher)
 
   let shown = false;
-  let drawn: { phase: SkyPhase | null; lit: boolean; season: string | null } = { phase: null, lit: false, season: null };
+  let drawn: { phase: SkyPhase | null; lit: boolean; season: string | null; weather: Weather | null } = { phase: null, lit: false, season: null, weather: null };
   let phase = skyPhase(new Date(), location.search);
   let scenes: HTMLElement[] = [];
 
@@ -154,7 +171,12 @@ export async function createRoom(host: RoomHost, url: string): Promise<RoomView>
     return { a, left: b.x - L.side * a, top: b.y };
   };
 
-  const state = (): { phase: SkyPhase; lit: boolean; season: string | null } => ({ phase, lit: host.lit(), season: host.season() });
+  const state = (): { phase: SkyPhase; lit: boolean; season: string | null; weather: Weather | null } => ({
+    phase,
+    lit: host.lit(),
+    season: host.season(),
+    weather: host.weather(),
+  });
 
   const render = (fade: boolean) => {
     const s = state();
@@ -162,6 +184,7 @@ export async function createRoom(host: RoomHost, url: string): Promise<RoomView>
     root.dataset.sky = s.phase;
     root.dataset.lamp = s.lit ? "on" : "off";
     root.dataset.season = s.season ?? "none";
+    root.dataset.weather = s.weather ?? "none";
     const { a, left, top } = place();
     // the art covers the whole width: room space from rx0 (<= 0) on, repeating the tile past the painted room
     const rx0 = Math.min(0, -Math.ceil(left / a) - 1);
@@ -181,6 +204,8 @@ export async function createRoom(host: RoomHost, url: string): Promise<RoomView>
       return ctx;
     };
     drawArt(canvas("jt-room-art", 1), rx0, rx1, s);
+    weatherCanvas = s.weather ? windowCanvas(scene, a, left, top) : null;
+    drawWeather();
     drawShade(canvas("jt-room-shade", SHADE_RES), rx0, rx1, s);
     drawGlow(canvas("jt-room-glow", SHADE_RES), rx0, rx1, s);
     root.append(scene);
@@ -227,6 +252,8 @@ export async function createRoom(host: RoomHost, url: string): Promise<RoomView>
     const skyThings = dark ? season.filter((sp) => sp.when === "sky") : [];
     if (s.phase === "night" && !skyThings.length) sprite(ctx, "moon");
     for (const sp of skyThings) ctx.drawImage(sp.img, sp.x, sp.y);
+    // the season in the window at any time of day (winter's snowy roofs, frost in the panes), and while it snows
+    for (const sp of season) if (sp.when === "pane" || (sp.when === "snow" && s.weather === "snow")) ctx.drawImage(sp.img, sp.x, sp.y);
     ctx.restore();
     sprite(ctx, "room");
     if (s.lit) sprite(ctx, "lamp_on");
@@ -294,7 +321,7 @@ export async function createRoom(host: RoomHost, url: string): Promise<RoomView>
       radial(ctx, L.lamp.x, L.floor + 18, 110, "0,0,0", 0.5 * k.lamp, 0.25);
     }
     sides(ctx, "0,0,0", s.lit ? (s.phase === "night" ? 0.55 : 0.3) : 0.16, 110);
-    if (s.season && (s.phase === "dusk" || s.phase === "night") && sprites.hw_pumpkin) radial(ctx, L.sill.x, L.sill.y, 40, "0,0,0", 0.5);
+    if (s.season === "halloween" && (s.phase === "dusk" || s.phase === "night") && sprites.hw_pumpkin) radial(ctx, L.sill.x, L.sill.y, 40, "0,0,0", 0.5);
     ctx.globalCompositeOperation = "source-over";
   }
 
@@ -303,8 +330,10 @@ export async function createRoom(host: RoomHost, url: string): Promise<RoomView>
     const w = L.window;
     const wx = (w.x0 + w.x1) / 2;
     // the window: its glow, a patch of light on the floor in front of it, a few soft shafts leaning down-right
-    radial(ctx, wx, (w.y0 + w.y1) / 2, 150, k.win, k.winGlow, 1.2);
-    radial(ctx, wx + 30, L.floor + 22, 110, k.win, k.winGlow * 0.9, 0.16);
+    // (rain greys the light a little)
+    const winGlow = k.winGlow * (s.weather === "rain" ? 0.7 : 1);
+    radial(ctx, wx, (w.y0 + w.y1) / 2, 150, k.win, winGlow, 1.2);
+    radial(ctx, wx + 30, L.floor + 22, 110, k.win, winGlow * 0.9, 0.16);
     ctx.save();
     ctx.globalAlpha = s.phase === "night" ? 0.35 : 1;
     for (const [dx, wd, a] of [[6, 26, 0.1], [44, 18, 0.08], [70, 22, 0.07]] as const) {
@@ -345,12 +374,116 @@ export async function createRoom(host: RoomHost, url: string): Promise<RoomView>
     }
     // the tank's own light on the wall beside it: bright and cool while it's lit, a faint blue when it's dark
     sides(ctx, s.lit ? "90,190,255" : "70,110,220", s.lit ? (s.phase === "night" ? 0.3 : 0.14) : 0.12, s.lit ? 80 : 50, L.floor + 36);
-    if (s.season && (s.phase === "dusk" || s.phase === "night") && sprites.hw_pumpkin) radial(ctx, L.sill.x, L.sill.y, 26, "255,140,40", 0.5);
+    if (s.season === "halloween" && (s.phase === "dusk" || s.phase === "night") && sprites.hw_pumpkin) radial(ctx, L.sill.x, L.sill.y, 26, "255,140,40", 0.5);
   }
 
-  /** every frame: two reads and a compare; a redraw only when the switch or the season changed */
+  // ---------------------------------------------------------------- the weather on the window
+
+  let weatherCanvas: CanvasRenderingContext2D | null = null;
+  let weatherTimer: ReturnType<typeof setInterval> | null = null;
+  let wt = 0; // the weather's own clock, s
+  /** A canvas over the window's glass, one px per art px (pixelated), drawn in window space. */
+  const windowCanvas = (scene: HTMLElement, a: number, left: number, top: number): CanvasRenderingContext2D => {
+    const w = L.window;
+    const c = document.createElement("canvas");
+    c.className = "jt-room-art jt-room-weather";
+    c.width = w.x1 - w.x0;
+    c.height = w.y1 - w.y0;
+    Object.assign(c.style, { left: `${left + w.x0 * a}px`, top: `${top + w.y0 * a}px`, width: `${c.width * a}px`, height: `${c.height * a}px` });
+    scene.insertBefore(c, scene.children[1] ?? null); // over the art, under the shade
+    return c.getContext("2d")!;
+  };
+  /** A small steady pseudo-random 0..1 for particle i, salt k. */
+  const rnd = (i: number, k: number) => {
+    const v = Math.sin(i * 127.1 + k * 311.7) * 43758.5453;
+    return v - Math.floor(v);
+  };
+  /** The glazing bars, in window space: weather outside stays behind them. */
+  const bars = () => {
+    const w = L.window;
+    const mx = L.mullion ?? Math.round((w.x0 + w.x1) / 2) - 1;
+    const ty = L.transom ?? Math.round((w.y0 + w.y1) / 2) - 2;
+    return { mx: mx - w.x0, ty: ty - w.y0 };
+  };
+
+  function drawWeather() {
+    const ctx = weatherCanvas;
+    if (!ctx) return;
+    const weather = drawn.weather;
+    const W = ctx.canvas.width;
+    const H = ctx.canvas.height;
+    ctx.clearRect(0, 0, W, H);
+    const t = reduceMotion() ? 7.3 : wt; // reduce motion: one still frame
+    if (weather === "snow") {
+      for (let i = 0; i < 46; i++) {
+        const speed = 7 + rnd(i, 1) * 9;
+        const y = (rnd(i, 2) * (H + 8) + t * speed) % (H + 8) - 4;
+        const x = (rnd(i, 3) * W + Math.sin(t * (0.5 + rnd(i, 4)) + i) * 3 + W) % W;
+        const big = rnd(i, 5) > 0.7;
+        ctx.fillStyle = `rgba(255,255,255,${big ? 0.9 : 0.7})`;
+        ctx.fillRect(Math.floor(x), Math.floor(y), big ? 2 : 1, big ? 2 : 1);
+      }
+    } else if (weather === "rain") {
+      // streaks falling outside, leaning a little with the wind
+      ctx.fillStyle = "rgba(196,214,240,0.32)";
+      for (let i = 0; i < 34; i++) {
+        const speed = 150 + rnd(i, 1) * 70;
+        const len = 4 + Math.floor(rnd(i, 2) * 4);
+        const y = ((rnd(i, 3) * (H + 20) + t * speed) % (H + 20)) - 10;
+        const x0 = rnd(i, 4) * (W + 20) - 10 + y * 0.18;
+        for (let j = 0; j < len; j++) ctx.fillRect(Math.floor(x0 + j * 0.18), Math.floor(y + j), 1, 1);
+      }
+    }
+    // keep what's outside behind the glazing bars
+    const { mx, ty } = bars();
+    ctx.clearRect(mx, 0, 3, H);
+    ctx.clearRect(0, ty, W, 3);
+    if (weather !== "rain") return;
+    // beads on the glass (in front of the bars' edges is fine: they're on the pane), and a few running down
+    for (let i = 0; i < 26; i++) {
+      const x = Math.floor(rnd(i, 6) * W);
+      const y = Math.floor(rnd(i, 7) * H);
+      ctx.fillStyle = "rgba(226,238,255,0.55)";
+      ctx.fillRect(x, y, 1, 1);
+      ctx.fillStyle = "rgba(40,50,80,0.35)";
+      ctx.fillRect(x, y + 1, 1, 1);
+    }
+    for (let i = 0; i < 4; i++) {
+      const period = 5 + rnd(i, 8) * 4;
+      const p = ((t + rnd(i, 9) * period) % period) / period; // 0..1 down the pane, then a new one
+      const x = Math.floor(rnd(i, 10) * (W - 4)) + 2;
+      const y = Math.floor(p * p * H);
+      for (let j = 1; j < 10 && y - j >= 0; j++) {
+        ctx.fillStyle = `rgba(210,226,250,${0.28 * (1 - j / 10)})`;
+        ctx.fillRect(x + (j % 5 === 0 ? 1 : 0), y - j, 1, 1);
+      }
+      ctx.fillStyle = "rgba(236,244,255,0.75)";
+      ctx.fillRect(x, y, 2, 2);
+    }
+  }
+
+  /** Run the weather's frames while it rains or snows on a shown room in a visible tab (not with reduce motion). */
+  const pumpWeather = () => {
+    const want = shown && !!weatherCanvas && !reduceMotion() && !document.hidden;
+    if (want && !weatherTimer) {
+      let last = performance.now();
+      weatherTimer = setInterval(() => {
+        const now = performance.now();
+        wt += Math.min(0.5, (now - last) / 1000);
+        last = now;
+        drawWeather();
+      }, 1000 / WEATHER_FPS);
+    } else if (!want && weatherTimer) {
+      clearInterval(weatherTimer);
+      weatherTimer = null;
+      drawWeather(); // reduce motion turned on mid-shower: the still frame
+    }
+  };
+
+  /** every frame: a few reads and a compare; a redraw only when the switch, the season or the weather changed */
   const update = () => {
-    if (shown && (host.lit() !== drawn.lit || host.season() !== drawn.season || phase !== drawn.phase)) render(true);
+    if (shown && (host.lit() !== drawn.lit || host.season() !== drawn.season || phase !== drawn.phase || host.weather() !== drawn.weather)) render(true);
+    pumpWeather();
   };
   // the window's time of day moves on by itself: check once a minute (and on coming back to the tab)
   setInterval(() => {
@@ -358,6 +491,7 @@ export async function createRoom(host: RoomHost, url: string): Promise<RoomView>
     update();
   }, 60_000);
   document.addEventListener("visibilitychange", () => {
+    pumpWeather();
     if (document.hidden) return;
     phase = skyPhase(new Date(), location.search);
     update();
@@ -378,10 +512,15 @@ export async function createRoom(host: RoomHost, url: string): Promise<RoomView>
         lampBtn.classList.remove("jt-room-shown");
         scenes.forEach((el) => el.remove());
         scenes = [];
-        drawn = { phase: null, lit: false, season: null };
+        weatherCanvas = null;
+        drawn = { phase: null, lit: false, season: null, weather: null };
       }
       shown = on;
+      pumpWeather();
     },
     sync: update,
+    get shown() {
+      return shown;
+    },
   };
 }

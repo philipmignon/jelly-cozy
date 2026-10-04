@@ -20,7 +20,10 @@ import { createRequestNote, type RequestNote } from "./requestnote";
 import { attachRoom, type Room } from "./roomfit";
 import { testQuery } from "./testmode";
 import type { TestHost } from "./testapi";
-import { SPECIES_NAMES, TAB_N, keepsakeOf } from "./species";
+import { NUR_CAP, SPECIES_NAMES, TAB_N, keepsakeOf } from "./species";
+import { NURSERY, onBowl, onOpenBowl, nurserySpecies, toBowl } from "./nursery";
+import { createNurseryPanel } from "./nurserypanel";
+import { describeJelly } from "./a11y";
 import { createSpriteGroups, eventGroup, groupsFor, jellyGroups, speciesGroup, useSpriteGroups } from "./spritegroups";
 import {
   K,
@@ -86,6 +89,23 @@ import {
   THEME_NAMES,
   type BuyResult,
   type State,
+  // ---- nursery ----
+  closeNursery,
+  isNurseryOpen,
+  moveToNursery,
+  moveToTank,
+  nurseryAt,
+  nurseryCentre,
+  nurseryFeed,
+  nurseryInfo,
+  nurserySprinkle,
+  nurseryTap,
+  openNursery,
+  petNursling,
+  renameNursling,
+  setTool,
+  toNurseryInfo,
+  toTankInfo,
 } from "./sim";
 
 const SAVE_KEY = "jellytank:v5";
@@ -135,9 +155,11 @@ function makeWriter(vmi: ViewModelInstance) {
   const last = new Map<string, number>();
   const handles = new Map<string, ReturnType<ViewModelInstance["number"]>>();
   const slotProp = /^j([0-6])(.+)$/;
+  const nurProp = /^nj([0-3])(.+)$/; // ---- nursery ---- nj2k5 lives at nj2/k5 (contract nursery.nested)
   for (const name of K.props) {
     const m = slotProp.exec(name);
-    const h = vmi.number(m ? `j${m[1]}/${m[2]}` : name);
+    const nm = m ? null : nurProp.exec(name);
+    const h = vmi.number(m ? `j${m[1]}/${m[2]}` : nm ? `nj${nm[1]}/${nm[2]}` : name);
     if (h) handles.set(name, h);
   }
   return (v: Record<string, number>) => {
@@ -270,7 +292,7 @@ async function main() {
   const tankGroups = (near = Infinity) => {
     const { x0, x1 } = viewSpan(state);
     const js = state.slots.flatMap((j) => (j && j.x > x0 - near && j.x < x1 + near ? [{ k: j.k, morph: j.morph }] : []));
-    return groupsFor(js, wantedEvent());
+    return groupsFor([...js, ...nurserySpecies(state.nursery?.slots ?? [])], wantedEvent()); // ---- nursery ---- its few always
   };
   /** species the shop would sell this tank right now: worth having before they're bought */
   const affordableGroups = () =>
@@ -351,8 +373,29 @@ async function main() {
   const cardInfo = (slot: number): JellyCardInfo | null => {
     const i = jellyInfo(state, slot);
     const morph = i?.morph === MORPH_CLASSIC ? " · rare colour" : i?.morph === MORPH_GHOST ? " · ghost colour" : "";
-    return i && { name: i.name, species: `${SPECIES[i.k] ?? ""}${morph}`, stage: STAGES[i.g] ?? "", ageDays: i.ageDays, fullness: i.fullness, mood: i.mood, trait: TRAIT_PHRASES[i.trait], rehome: rehomeInfo(state, slot) };
+    // ---- nursery ---- once there's a bowl, a little one's card can send it there
+    const mv = toNurseryInfo(state, slot);
+    return i && { name: i.name, species: `${SPECIES[i.k] ?? ""}${morph}`, stage: STAGES[i.g] ?? "", ageDays: i.ageDays, fullness: i.fullness, mood: i.mood, trait: TRAIT_PHRASES[i.trait], rehome: rehomeInfo(state, slot), ...(mv ? { move: { label: "Move to nursery", ...mv } } : {}) };
   };
+  /** ---- nursery ---- a nursery jelly's card (overlay slot -1 - n): no rehoming, a "Move to tank" row */
+  const nurseryCardInfo = (n: number): JellyCardInfo | null => {
+    const i = nurseryInfo(state, n);
+    const mv = toTankInfo(state, n);
+    const morph = i?.morph === MORPH_CLASSIC ? " · rare colour" : i?.morph === MORPH_GHOST ? " · ghost colour" : "";
+    return i && {
+      name: i.name,
+      species: `${SPECIES[i.k] ?? ""}${morph}`,
+      stage: `${STAGES[i.g] ?? ""} · nursery`,
+      ageDays: i.ageDays,
+      fullness: i.fullness,
+      mood: i.mood,
+      trait: TRAIT_PHRASES[i.trait],
+      rehome: { allowed: false, reward: 0, reason: "" },
+      noRehome: true,
+      move: { label: "Move to tank", allowed: mv?.allowed ?? false, reason: i.ready && !mv?.allowed ? `Ready to move: ${mv?.reason ?? ""}` : mv?.reason ?? "" },
+    };
+  };
+  const anyCardInfo = (slot: number) => (slot < 0 ? nurseryCardInfo(-1 - slot) : cardInfo(slot));
 
   // ---------------------------------------------------------------- buttons in the .riv
 
@@ -458,8 +501,16 @@ async function main() {
   let reqNote: RequestNote | null = null; // v12: today's requests (none in read-only tanks)
   let menuWasOpen = false; // the press that closes the menu (or the requests note) shouldn't also pet, pour or pan
   canvas.addEventListener("pointerdown", () => (menuWasOpen = !!settings?.isOpen || !!reqNote?.isOpen), true);
-  const inTank = (y: number) =>
+  const waterFree = (y: number) =>
     y < K.cabTop && !isShopOpen(state) && !overlay.busy && overlay.cardSlot === null && !book.isOpen && !sharePanel.isOpen && !backupOpen() && !reqNote?.isOpen && !keepNote.isOpen && !menuWasOpen;
+  // ---- nursery ---- while the bowl is open its close-up takes the water's presses (nurseryPress), not the tank
+  const inTank = (y: number) => waterFree(y) && !isNurseryOpen(state);
+  const nurseryPress = (y: number) => waterFree(y) && isNurseryOpen(state);
+  /** ---- nursery ---- the open bowl's water under a screen point (fully zoomed in) */
+  const inBowl = (x: number, y: number) => {
+    const p = toBowl(x, y);
+    return (state.nursery?.e ?? 0) >= 0.99 && onOpenBowl(p.x, p.y);
+  };
   // the held tool: a press in the water sprinkles or scrubs instead of petting/panning
   const SPRINKLE_MS = 110;
   let lastPour = 0;
@@ -522,19 +573,148 @@ async function main() {
         if (at) overlay.nameTag(`Bye, ${r.name}!`, at.x, at.y);
         persist(state);
       },
+      // ---- nursery ----
+      move: () => {
+        const at = aboveJelly(slot);
+        const r = moveToNursery(state, slot);
+        if (!r) return;
+        audio.play("putdown");
+        if (at) overlay.nameTag(`${r.name} to the nursery`, at.x, at.y);
+        persist(state);
+      },
     });
   };
-  const toolWater = (y: number) => y < K.cabTop && !isShopOpen(state) && !overlay.busy && !book.isOpen && !sharePanel.isOpen && !backupOpen() && !reqNote?.isOpen && !keepNote.isOpen && !menuWasOpen;
+  /** ---- nursery ---- open a nursery jelly's card (a long-press in the open bowl, or Enter on its row) */
+  const openNurseryCard = (n: number) => {
+    const info = nurseryCardInfo(n);
+    if (!info) return;
+    audio.play("ui");
+    overlay.openCard(-1 - n, info, {
+      rename: (name) => {
+        if (renameNursling(state, n, name)) persist(state);
+      },
+      rehome: () => {},
+      move: () => {
+        const r = moveToTank(state, n);
+        if (!r) return;
+        audio.play("pickup");
+        closeNurseryView(false);
+        const at = aboveJelly(r.slot);
+        if (at) overlay.nameTag(`${r.name} to the tank`, at.x, at.y);
+        persist(state);
+      },
+    });
+  };
+  /** ---- nursery ---- the bowl's close-up and its HTML strip open together, and close together */
+  const openNurseryView = () => {
+    if (!openNursery(state)) return false;
+    overlay.closeCard();
+    audio.play("ui");
+    updateNurPanel();
+    nurPanel.show();
+    return true;
+  };
+  let nurTick = 0;
+  const updateNurPanel = () =>
+    nurPanel.update(
+      (state.nursery?.slots ?? []).flatMap((j, n) => {
+        const i = j ? nurseryInfo(state, n) : null;
+        return i ? [{ n, name: i.name, words: nurseryWords(n), ready: i.ready, hungry: i.fullness < 0.3 }] : [];
+      }),
+      NUR_CAP,
+    );
+  const closeNurseryView = (sound = true) => {
+    if (!isNurseryOpen(state) && !nurPanel.isOpen) return;
+    closeNursery(state);
+    nurPanel.hide();
+    if (sound) audio.play("ui");
+  };
+  let nurFocus: number | null = null; // the row with focus in the strip: ringed in the bowl
+  const nurRing = document.createElement("div");
+  nurRing.className = "jt-a11y-ring jt-nur-ring"; // the keyboard ring's look, but its own element (and selector)
+  nurRing.hidden = true;
+  nurRing.setAttribute("aria-hidden", "true");
+  document.body.append(nurRing);
+  /** A nursery jelly was petted: its sound, a buzz and its name tag over it in the bowl. */
+  const pettedNursling = (n: number) => {
+    audio.play("pet");
+    buzz(12);
+    const c = nurseryCentre(state, n);
+    const name = nurseryInfo(state, n)?.name;
+    if (c && name) {
+      const at = client(c.x, c.y - 50);
+      overlay.nameTag(name, at.x, at.y, -1 - n);
+    }
+  };
+  const nurseryWords = (n: number) => {
+    const i = nurseryInfo(state, n);
+    return i ? describeJelly({ ...i, trait: TRAIT_PHRASES[i.trait] }).split(", ").slice(1).join(", ") : "";
+  };
+  const nurPanel = createNurseryPanel({
+    bowl: () => {
+      const a = client(NURSERY.cx - NURSERY.r, NURSERY.cy - NURSERY.r);
+      const b = client(NURSERY.cx + NURSERY.r, NURSERY.cy + NURSERY.r + 36);
+      return { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y };
+    },
+    close: () => closeNurseryView(),
+    card: (n) => openNurseryCard(n),
+    pet: (n) => {
+      if (petNursling(state, n)) pettedNursling(n);
+    },
+    feed: () => {
+      if (nurseryFeed(state, nurFocus ?? -1) > 0) {
+        audio.play("pour");
+        setTimeout(() => audio.play("plop"), 260);
+      }
+    },
+    focused: (n) => (nurFocus = n),
+    escape: () => {
+      if (overlay.cardSlot !== null || overlay.busy || book.isOpen || sharePanel.isOpen || settings?.isOpen) return false;
+      if (state.tool !== "none") {
+        setTool(state, "none"); // what's in hand goes down first, as in the tank
+        audio.play("putdown");
+        return true;
+      }
+      closeNurseryView();
+      return true;
+    },
+  });
+  const toolWater = (y: number) => y < K.cabTop && !isShopOpen(state) && !overlay.busy && !book.isOpen && !sharePanel.isOpen && !backupOpen() && !reqNote?.isOpen && !keepNote.isOpen && !menuWasOpen
+    && !isNurseryOpen(state); // ---- nursery ---- (food goes into the open bowl instead: nurseryTool)
+  /** ---- nursery ---- food in hand over the open bowl's water: it pours in there */
+  const nurseryTool = (x: number, y: number) => nurseryPress(y) && isFoodTool(state.tool) && inBowl(x, y);
+  const pourInBowl = (x: number, y: number, first: boolean) => {
+    const now = performance.now();
+    if (!first && now - lastPour < SPRINKLE_MS) return;
+    lastPour = now;
+    if (nurserySprinkle(state, x, y) > 0) {
+      audio.play("pour");
+      setTimeout(() => audio.play("plop"), 260);
+    }
+    toolAt = { x, y };
+  };
 
   attachGestures(canvas, (cx, cy) => toArtboard(canvas, cx, cy), {
     toolDown(x, y) {
-      if (state.tool === "none" || !toolWater(y)) return false;
+      if (state.tool === "none") return false;
+      if (nurseryTool(x, y)) {
+        setCursor(state, x, y, true, true);
+        pourInBowl(x, y, true);
+        return true;
+      }
+      if (!toolWater(y) || (state.nursery && onBowl(x, y))) return false; // a tap on the hanging bowl opens it
       setCursor(state, x, y, true, true);
       useTool(x, y, true);
       return true;
     },
     toolMove(x, y) {
       // the held item follows the pointer anywhere (over the cabinet too); it only works in the water
+      if (isNurseryOpen(state)) {
+        const pours = nurseryTool(x, y);
+        setCursor(state, x, y, pours, true);
+        if (pours) pourInBowl(x, y, false);
+        return;
+      }
       const inside = toolWater(y);
       setCursor(state, x, y, inside, true);
       if (inside) useTool(x, y, false);
@@ -562,10 +742,28 @@ async function main() {
         overlay.closeCard(); // a tap on the water puts the card away
         return;
       }
+      // ---- nursery ---- the open bowl: pet, call one over, or (off the bowl) close it; the hanging bowl opens it
+      if (nurseryPress(y)) {
+        const slot = nurseryAt(state, sx, y);
+        const r = nurseryTap(state, sx, y);
+        if (r === "close") closeNurseryView();
+        else if (r === "pet" && slot >= 0) pettedNursling(slot);
+        else if (r === "call") audio.play("tap");
+        return;
+      }
+      if (inTank(y) && state.nursery && onBowl(sx, y)) {
+        openNurseryView();
+        return;
+      }
       if (!inTank(y)) return;
       tapWorld(screenToWorld(state, sx), y);
     },
     longPress(sx, y) {
+      if (nurseryPress(y)) {
+        const n = nurseryAt(state, sx, y); // ---- nursery ---- a little one's card
+        if (n >= 0) openNurseryCard(n);
+        return false;
+      }
       if (!inTank(y)) return false;
       const x = screenToWorld(state, sx);
       const n = decorAt(state, x, y);
@@ -643,7 +841,7 @@ async function main() {
   // ---------------------------------------------------------------- photo mode
 
   /** For the photo frame: the pan hints and the held item stay out of the picture. */
-  const PHOTO_HIDE = { panL: 0, panR: 0, canO: 0, jarO: 0, bottleO: 0, spongeO: 0 };
+  const PHOTO_HIDE = { panL: 0, panR: 0, canO: 0, jarO: 0, bottleO: 0, spongeO: 0, nurBowl: 0 }; // ---- nursery ---- the hanging bowl too
   let photoHide = false;
   let photoBusy = false;
   /** n frames drawn (not display frames: at the calm rate only every other one is) */
@@ -672,6 +870,10 @@ async function main() {
       if (isShopOpen(state)) {
         closeShop(state);
         await new Promise((r) => setTimeout(r, 700)); // let the shop slide away
+      }
+      if (isNurseryOpen(state)) {
+        closeNurseryView(false); // ---- nursery ---- the photo is of the tank
+        await new Promise((r) => setTimeout(r, 500));
       }
       await document.fonts?.load(`16px "Silkscreen"`).catch(() => undefined);
       photoHide = true;
@@ -709,7 +911,18 @@ async function main() {
     client,
     // v13: a keepsake note, and the "updated" chip while focus is on it
     busy: () =>
-      overlay.busy || overlay.cardSlot !== null || book.isOpen || albumPage.viewing || sharePanel.isOpen || backupPanel.isOpen || !!reqNote?.isOpen || settingsUi.isOpen || keepNote.isOpen || !!updateChip()?.contains(document.activeElement),
+      overlay.busy || overlay.cardSlot !== null || book.isOpen || albumPage.viewing || sharePanel.isOpen || backupPanel.isOpen || !!reqNote?.isOpen || settingsUi.isOpen || keepNote.isOpen || !!updateChip()?.contains(document.activeElement)
+      || nurPanel.isOpen, // ---- nursery ---- its strip has the keys while the bowl is open
+    // ---- nursery ----
+    nursery: {
+      open: () => openNurseryView(),
+      words: () => {
+        const ls = state.nursery?.slots.flatMap((j, n) => (j ? [n] : [])) ?? [];
+        const ready = ls.filter((n) => nurseryInfo(state, n)?.ready).length;
+        return `Nursery bowl, ${ls.length ? `${ls.length} little one${ls.length === 1 ? "" : "s"}` : "empty"}${ready ? `, ${ready} ready to move` : ""}. Enter opens it.`;
+      },
+      name: (n) => nurseryInfo(state, n),
+    },
     audio,
     press: (name) => press[name](),
     tapWorld,
@@ -826,7 +1039,32 @@ async function main() {
           audio.play("grow");
           buzz([30, 50, 30]);
           persist(state);
+          if (e.type === "baby" && e.nursery && !isNurseryOpen(state)) {
+            // ---- nursery ---- a full tank: the baby went to the bowl; a tag over it says so
+            const at = client(NURSERY.iconC.x + 40, NURSERY.iconC.y + 50);
+            overlay.nameTag("Born in the nursery!", at.x, at.y);
+          }
           break;
+        // ---- nursery ----
+        case "nurseryIn":
+          persist(state);
+          break;
+        case "nurseryOut":
+          if (e.auto) {
+            audio.play("unlock");
+            const at = aboveJelly(e.slot ?? -1);
+            const name = e.slot !== undefined ? jellyInfo(state, e.slot)?.name : undefined;
+            if (at && name) overlay.nameTag(`${name} joins the tank!`, at.x, at.y);
+          }
+          persist(state);
+          break;
+        case "nurseryReady": {
+          audio.play("cleaned");
+          const at = isNurseryOpen(state) && e.slot !== undefined ? nurseryCentre(state, e.slot) : null;
+          const p = at ? client(at.x, at.y - 60) : client(NURSERY.iconC.x + 40, NURSERY.iconC.y + 50);
+          overlay.nameTag("Ready for the tank!", p.x, p.y);
+          break;
+        }
         case "dug":
           audio.play("buy");
           break;
@@ -878,7 +1116,11 @@ async function main() {
         case "earned": {
           // float a "+N" over whatever earned it
           let at: { x: number; y: number } | null = null;
-          if (e.x !== undefined && e.y !== undefined) at = wclient(e.x, e.y - 40);
+          if (e.nursery) {
+            // ---- nursery ---- over the little one in the open bowl, else by the hanging bowl
+            const c = isNurseryOpen(state) && e.slot !== undefined ? nurseryCentre(state, e.slot) : null;
+            at = c ? client(c.x, c.y - 40) : client(NURSERY.iconC.x + 30, NURSERY.iconC.y);
+          } else if (e.x !== undefined && e.y !== undefined) at = wclient(e.x, e.y - 40);
           else if (lastKind === "dug") at = wclient(state.crab.x, state.crab.y - 40);
           else if (lastKind === "requestDone" && reqNote) at = reqNote.anchor();
           else if (lastKind === "pearl") {
@@ -903,25 +1145,37 @@ async function main() {
     const v = view(state);
     // a jelly whose art hasn't arrived stays hidden until it has (off screen at load, a new species, a visit)
     if (groupsSettled) groups.want(tankGroups());
-    state.slots.forEach((j, s) => {
+    const artGate = (j: State["slots"][number], key: string) => {
       if (!j) return;
       const need = jellyGroups(j); // its species' art, and a ghost's event art (morph 2: ev-halloween)
       const missing = need.filter((g) => !groups.isReady(g));
       if (missing.length) {
         for (const g of missing) hiddenFor.add(g);
-        v[`j${s}on`] = 0;
+        v[key] = 0;
         return;
       }
       let t = Infinity; // since the last of its groups arrived
       for (const g of need) if (hiddenFor.has(g)) t = Math.min(t, now - (arrivedAt.get(g) ?? arrivedAt.set(g, now).get(g)!));
-      if (t < FADE_IN_MS) v[`j${s}on`] = Math.round((t / FADE_IN_MS) * 20) / 20;
-    });
+      if (t < FADE_IN_MS) v[key] = Math.round((t / FADE_IN_MS) * 20) / 20;
+    };
+    state.slots.forEach((j, s) => artGate(j, `j${s}on`));
+    state.nursery?.slots.forEach((j, n) => artGate(j, `nj${n}on`)); // ---- nursery ----
     if (photoHide) Object.assign(v, PHOTO_HIDE);
     write(v);
     audio.setNight(v.nightShade ?? 0);
     room?.sync();
     audio.setMurk(state.murk);
-    if (overlay.cardSlot !== null && (cardTick = (cardTick + 1) % 15) === 0) overlay.updateCard(cardInfo(overlay.cardSlot));
+    if (overlay.cardSlot !== null && (cardTick = (cardTick + 1) % 15) === 0) overlay.updateCard(anyCardInfo(overlay.cardSlot));
+    // ---- nursery ---- the strip follows the bowl (the shop opening closes it), its rows the little ones
+    if (nurPanel.isOpen && !isNurseryOpen(state)) nurPanel.hide();
+    if (nurPanel.isOpen && (nurTick = (nurTick + 1) % 10) === 0) updateNurPanel();
+    const ringAt = nurPanel.isOpen && nurFocus !== null && (state.nursery?.e ?? 0) >= 1 ? nurseryCentre(state, nurFocus) : null;
+    nurRing.hidden = !ringAt;
+    if (ringAt) {
+      const a = client(ringAt.x - 45, ringAt.y - 45);
+      const b = client(ringAt.x + 45, ringAt.y + 45);
+      Object.assign(nurRing.style, { left: `${a.x}px`, top: `${a.y}px`, width: `${b.x - a.x}px`, height: `${b.y - a.y}px` });
+    }
     // v12: the note follows the requests' progress (and a new day's list after midnight)
     if (reqNote && (reqTick = (reqTick + 1) % 12) === 0) reqNote.update(requests(state)?.items ?? null);
   });

@@ -33,6 +33,7 @@ export type KeyAction =
   | { kind: "pan"; dir: -1 | 1 } // [ and ]: look left / right
   | { kind: "hold"; n: number } // 1-4: the can, the shrimp jar, the plankton bottle, the sponge
   | { kind: "escape" } // put down what's in hand, close the shop
+  | { kind: "nursery" } // ---- nursery ---- U: open the nursery bowl (once it's bought)
   // the shop, while it's open
   | { kind: "shopMove"; dx: -1 | 0 | 1; dy: -1 | 0 | 1 }
   | { kind: "shopStep"; d: -1 | 1 } // Tab / Shift+Tab: the next card, on into the next tab
@@ -87,6 +88,8 @@ export function keyAction(e: KeyLike, ctx: { onCanvas: boolean; shopOpen: boolea
       return { kind: "journal" };
     case "n":
       return { kind: "card" };
+    case "u":
+      return { kind: "nursery" }; // ---- nursery ----
     case "[":
       return { kind: "pan", dir: -1 };
     case "]":
@@ -224,6 +227,9 @@ export interface SayEvent {
   seen?: boolean;
   /** v14 "visitorArrived": the first time this kind ever came */
   first?: boolean;
+  /** ---- nursery ---- it happened in the nursery (`slot` is a nursery slot); "nurseryOut": it moved by itself */
+  nursery?: boolean;
+  auto?: boolean;
 }
 
 /** v14: how each night visitor's arrival is said (they're rare: worth a line of their own). */
@@ -247,10 +253,12 @@ export function keepsakeWords(m: number): string | null {
  */
 export function eventWords(
   e: SayEvent,
-  jelly: (slot: number) => { name: string; k: number; g: number } | null,
+  jelly: (slot: number, nursery?: boolean) => { name: string; k: number; g: number } | null,
   themeName: (n: number) => string = (n) => `Theme ${n}`,
 ): { text: string; low: boolean } | null {
-  const j = e.slot !== undefined ? jelly(e.slot) : null;
+  // ---- nursery ---- a nursery event's slot is the bowl's ("nurseryOut" names the tank slot it moved to)
+  const inBowl = e.nursery === true || e.type === "nurseryIn" || e.type === "nurseryReady";
+  const j = e.slot !== undefined ? (inBowl ? jelly(e.slot, true) : jelly(e.slot)) : null;
   const plus = (n: number | undefined) => (n ? `+${n} sand dollar${n === 1 ? "" : "s"}` : "");
   switch (e.type) {
     case "ate":
@@ -258,10 +266,19 @@ export function eventWords(
     case "grew": {
       if (!j) return null;
       const kind = jellyKind(j.k, j.g);
-      return { text: j.g === 1 ? `${j.name} budded into ${article(kind)} ${kind}.` : `${j.name} grew into ${article(kind)} ${kind}.`, low: false };
+      const where = e.nursery ? " in the nursery" : "";
+      return { text: j.g === 1 ? `${j.name} budded into ${article(kind)} ${kind}${where}.` : `${j.name} grew into ${article(kind)} ${kind}${where}.`, low: false };
     }
     case "baby":
+      if (j && e.nursery) return { text: `The tank is full, so a new jelly was born in the nursery: ${j.name}, ${article(jellyKind(j.k, j.g))} ${jellyKind(j.k, j.g)}.`, low: false };
       return j ? { text: `A new jelly was born: ${j.name}, ${article(jellyKind(j.k, j.g))} ${jellyKind(j.k, j.g)}.`, low: false } : null;
+    // ---- nursery ----
+    case "nurseryIn":
+      return j ? { text: `${j.name} moved into the nursery.`, low: false } : null;
+    case "nurseryOut":
+      return j ? { text: e.auto ? `${j.name} is big enough for the tank and moved in.` : `${j.name} moved to the tank.`, low: false } : null;
+    case "nurseryReady":
+      return j ? { text: `${j.name} is ready for the tank, but it's full. It waits in the nursery.`, low: false } : null;
     case "pearlReady":
       return { text: "The pearl is ready.", low: false };
     case "pearl":

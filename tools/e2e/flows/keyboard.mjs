@@ -21,8 +21,8 @@ export const flow = {
     await t.key("Tab");
     t.check("kb: Tab reaches the tank", await page.evaluate(() => document.activeElement?.id === "tank"));
     await t.key("Tab");
-    await t.until(() => !document.querySelector(".jt-a11y-ring").hidden && document.querySelector(".jt-a11y-ring-label").textContent !== "", null, { timeout: 5000, pump: true });
-    const ring = await page.evaluate(() => ({ shown: !document.querySelector(".jt-a11y-ring").hidden, label: document.querySelector(".jt-a11y-ring-label").textContent, name: window.__tank.slots[0].name }));
+    await t.until(() => !document.querySelector(".jt-a11y-ring:not(.jt-nur-ring)").hidden && document.querySelector(".jt-a11y-ring:not(.jt-nur-ring) .jt-a11y-ring-label").textContent !== "", null, { timeout: 5000, pump: true });
+    const ring = await page.evaluate(() => ({ shown: !document.querySelector(".jt-a11y-ring:not(.jt-nur-ring)").hidden, label: document.querySelector(".jt-a11y-ring:not(.jt-nur-ring) .jt-a11y-ring-label").textContent, name: window.__tank.slots[0].name }));
     const said = await live("jt-a11y-focus");
     t.check("kb: Tab lands on the jelly, ringed and described", ring.shown && ring.label === ring.name && said.startsWith(`${ring.name}, moon jelly polyp`), `${JSON.stringify(ring)} "${said}"`);
     // v13: the description ends with its personality, as the card words it
@@ -57,7 +57,7 @@ export const flow = {
     await t.key("b");
     await t.idle();
     await hears("jt-a11y-focus", /Blue blubber/);
-    const shop = await page.evaluate(() => ({ open: window.__tank.shop.open, ring: !document.querySelector(".jt-a11y-ring").hidden }));
+    const shop = await page.evaluate(() => ({ open: window.__tank.shop.open, ring: !document.querySelector(".jt-a11y-ring:not(.jt-nur-ring)").hidden }));
     const card = await live("jt-a11y-focus");
     t.check("kb: B opens the shop on its first card", shop.open && shop.ring && /Blue blubber, 40 sand dollars/.test(card), `${JSON.stringify(shop)} "${card}"`);
     await t.key("ArrowRight");

@@ -88,6 +88,7 @@ export function createSharePanel(exportCode: () => string, check: (code: string)
     <div class="row"><h2>Share your tank</h2><button type="button" class="x" aria-label="Close">X</button></div>
     <textarea id="jt-my-code" readonly aria-label="Your tank code"></textarea>
     <div class="row"><button type="button" class="copy">Copy code</button><span class="note copied" aria-live="polite"></span></div>
+    <p class="note">The code shows your tank as it is. The nursery bowl stays home.</p>
     <hr>
     <h2>Visit a tank</h2>
     <textarea id="jt-visit-code" aria-label="Paste a tank code" placeholder="Paste a friend's tank code"></textarea>

@@ -49,6 +49,13 @@
  *                       a little more fullness and a bigger happy flush
  *   "rode"    slot, x, y, seen  (v13) a jelly rode the bubbler's column to the top (x: the column, y: the jelly);
  *                       `seen` when the bubbler was on screen (that's what the "watch a jelly ride" request counts)
+ *   ---- nursery ---- (the nursery bowl, shop item NURSERY_ITEM; s.nursery, the block marked "nursery" below)
+ *   "ate", "grew", "earned", "baby" with `nursery: true`: it happened in the nursery and `slot` is a nursery slot
+ *                       (0..NUR_CAP-1). A baby born while the tank is full goes there.
+ *   "nurseryIn"  slot, from  a jelly moved from tank slot `from` into nursery slot `slot` (queued by moveToNursery)
+ *   "nurseryOut" slot, from, auto  nursery slot `from` moved into tank slot `slot`: by moveToTank, or (`auto`) an
+ *                       ephyra grown enough to be a juvenile, which then grows up there ("grew" in the same step)
+ *   "nurseryReady" slot  a nursery ephyra is ready to move but the tank is full: it waits (once per wait)
  *
  * v13 PERSONALITIES (./traits.ts): every jelly has a trait for life (Jelly.trait; saves before v13 derive one from
  * the name). Shy ones hide by the rocks when the glass is tapped near them or a held item is swept past fast;
@@ -172,7 +179,10 @@ import {
   type Species,
   type TrailParams,
   type Stage,
+  NUR_CAP,
+  NUR_FOOD_N,
 } from "./species";
+import { NURSERY, NUR_SWIM, NUR_ZOOM_TIME, floorAt, fromBowl, keepIn, onOpenBowl, toBowl, wanderTarget, zoomAt } from "./nursery";
 import { helperWorld, newCrab, newShrimp, newSnail, stepCrab, stepShrimp, stepSnail, type HelperWorld, type RestingFood, type Snail, type Walker } from "./helpers";
 import { EDGE_SCROLL, EDGE_ZONE, FLING_MAX, FLING_REST, VIEW_W, camLo, easeTime, newCam, stepCam, type Cam } from "./camera";
 import { NAMES, cleanName, pickName } from "./names";
@@ -388,6 +398,13 @@ export interface Save {
   stored?: boolean[];
   /** v15 (optional): the visitor log, times seen and first seen per visitor kind (./visitlog.ts); absent until the first */
   visitorsSeen?: VisitorsSeen;
+  /** ---- nursery ---- (optional): the nursery bowl and its little ones; absent until it's bought */
+  nursery?: SaveNursery;
+}
+
+/** ---- nursery ---- the saved nursery: NUR_CAP slots of polyps and ephyrae (anchor: the bowl's polyp spot 0..3). */
+export interface SaveNursery {
+  slots: (SaveJelly | null)[];
 }
 
 // ---------------------------------------------------------------- state
@@ -459,7 +476,8 @@ export interface Jelly {
   ride: number;
 }
 
-export type SimEventType = "ate" | "pulse" | "cleaned" | "grew" | "adult" | "earned" | "baby" | "dug" | "shrimpAte" | "pearlReady" | "pearl" | "rehomed" | "upgraded" | "revealed" | "visitorArrived" | "visitorTapped" | "visitorLeft" | "spotCleaned" | "themed" | "requestDone" | "rode" | "keepsake";
+export type SimEventType = "ate" | "pulse" | "cleaned" | "grew" | "adult" | "earned" | "baby" | "dug" | "shrimpAte" | "pearlReady" | "pearl" | "rehomed" | "upgraded" | "revealed" | "visitorArrived" | "visitorTapped" | "visitorLeft" | "spotCleaned" | "themed" | "requestDone" | "rode" | "keepsake"
+  | "nurseryIn" | "nurseryOut" | "nurseryReady"; // ---- nursery ----
 export interface SimEvent {
   type: SimEventType;
   slot?: number;
@@ -487,6 +505,11 @@ export interface SimEvent {
   keepsake?: number;
   /** v14 "visitorArrived": the first time this kind ever came (it's new in the visitor log) */
   first?: boolean;
+  /** ---- nursery ---- it happened in the nursery: `slot` is a nursery slot ("ate", "grew", "earned", "baby") */
+  nursery?: boolean;
+  /** ---- nursery ---- "nurseryIn" / "nurseryOut": the slot it came from; `auto`: it moved itself (grown enough) */
+  from?: number;
+  auto?: boolean;
 }
 
 export interface State {
@@ -593,6 +616,23 @@ export interface State {
   keepAtLoad: number[];
   /** v14: the visitor log (./visitlog.ts) */
   visitorsSeen: VisitorsSeen;
+  /** ---- nursery ---- the nursery bowl (null: not bought) */
+  nursery: Nursery | null;
+}
+
+/** ---- nursery ---- the bowl's live state. Its jellies' x, y are the open bowl's local coordinates (./nursery.ts). */
+export interface Nursery {
+  /** NUR_CAP slots (nj0..nj3 in the view) */
+  slots: (Jelly | null)[];
+  /** its own pellets (nf0..5), local coordinates */
+  food: Food[];
+  /** the open view is wanted, and its eased zoom 0..1 */
+  open: boolean;
+  e: number;
+  /** per slot: grown enough for the tank but waiting for room ("nurseryReady" went out) */
+  ready: boolean[];
+  /** its own random stream (wander targets), so the tank's stays as it was */
+  rand: () => number;
 }
 
 /** v8: what the player has in hand. v11: "shrimp" (the brine shrimp jar) and "plankton" (the bottle) are foods too. */
@@ -918,6 +958,7 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
     ...keepField(keepOf(raw.keep)),
     ...storedField(storedOf(raw.stored, owned)),
     ...seenField(visitorsSeenOf(raw.visitorsSeen)),
+    ...nurseryField(nurseryOf(raw.nursery, now, used)), // ---- nursery ----
   };
 }
 
@@ -990,6 +1031,7 @@ export function applyAway(save: Save, now: number, growthMultiplier = 1): Save {
     murk: dirt.murk,
     spots: toSaveSpots(dirt.spots),
     lastSeen: now,
+    ...awayNursery(save.nursery, away, growthMultiplier), // ---- nursery ----
   };
 }
 
@@ -1063,6 +1105,15 @@ export function awaySummary(before: Save, after: Save): AwaySummary | null {
     if (!b || !a) return;
     const g = stageFor(a.g, a.gp);
     if (g > b.g) picks.push([1, `${a.name} ${GREW_TO[g]}.`]);
+    if (b.fullness >= GOOD_FULLNESS && a.fullness < GOOD_FULLNESS) hungry.push(a.name);
+  });
+  // ---- nursery ---- the little ones in the bowl grow and get hungry too
+  before.nursery?.slots.forEach((b, i) => {
+    const a = after.nursery?.slots[i];
+    if (!b || !a) return;
+    const g = stageFor(a.g, a.gp);
+    if (g >= JUVENILE && b.gp < GROWTH[JUVENILE]) picks.push([1, `${a.name} is big enough to leave the nursery.`]);
+    else if (g > b.g) picks.push([1, `${a.name} ${GREW_TO[g]} in the nursery.`]);
     if (b.fullness >= GOOD_FULLNESS && a.fullness < GOOD_FULLNESS) hungry.push(a.name);
   });
   if (hungry.length) picks.push([0, `${listNames(hungry)} got hungry.`]);
@@ -1306,9 +1357,12 @@ export function createState(save: Save, rand: () => number = Math.random, opts: 
     keepOn: opts.keepsakes === true,
     keepAtLoad: [],
     visitorsSeen: visitorsSeenOf(save.visitorsSeen),
+    nursery: null,
   };
   state.theme = themeOf(save.theme, state.themes);
+  state.nursery = nurseryFromSave(save.nursery, (seed ?? Math.floor(clock / 1000)) + 31); // ---- nursery ----
   for (const j of jellies(state)) noteJelly(state, j);
+  for (const j of state.nursery?.slots ?? []) if (j) noteJelly(state, j); // ---- nursery ----
   if (state.keepOn) state.keepAtLoad = loadKeepsakes(state, save);
   // the hints start where they belong: no fade-in on load
   state.hints = { l: hintTarget(state, -1), r: hintTarget(state, 1) };
@@ -1343,6 +1397,7 @@ export function toSave(s: State, now: number): Save {
     ...keepField(s.keep),
     ...storedField(storedOf(s.stored, s.owned)),
     ...seenField(s.visitorsSeen),
+    ...nurseryField(s.nursery ? { slots: s.nursery.slots.map((j) => j && saveOf(j)) } : null), // ---- nursery ----
   };
 }
 
@@ -1770,6 +1825,7 @@ const roomForPolyp = (s: State) => jellyCount(s) < maxJellies(s) && freeAnchor(s
 export function openShop(s: State): void {
   s.pressUntil[3] = s.t + 0.14;
   setTool(s, "none");
+  if (s.nursery) s.nursery.open = false; // ---- nursery ---- the shop covers the bowl
   if (s.shop.open) return;
   s.tab = 0;
   s.shopScroll = 0;
@@ -1837,8 +1893,8 @@ export function closeShop(s: State): void {
  */
 export type BuyResult = "bought" | "cantAfford" | "tankFull" | "owned" | "needsMedium" | "needsLarge" | "selected" | "keepsake" | "putAway" | "placed";
 
-/** A unique name for a new jelly. */
-const newName = (s: State) => pickName(jellies(s).map((j) => j.name), s.rand());
+/** A unique name for a new jelly (---- nursery ---- the bowl's too). */
+const newName = (s: State) => pickName([...jellies(s), ...nurslings(s)].map((j) => j.name), s.rand());
 
 /**
  * v12: the morph a new polyp gets. Bought (no parent): the base 1-in-10 classic roll. A baby: its parent's
@@ -1930,6 +1986,7 @@ export function buy(s: State, i: number): BuyResult {
     upgradeTank(s, item.tier);
     return "bought";
   }
+  if (item.kind === "nursery") return buyNursery(s, i); // ---- nursery ----
   if (item.kind === "decor" && s.owned[item.d]) return putAway(s, item.d) ? "putAway" : placeDecor(s, item.d) ? "placed" : "owned";
   if (item.kind === "helper" && s.helpers[item.h]) return "owned";
   if (item.kind === "food" && s.foods[item.f]) return "owned";
@@ -2194,7 +2251,7 @@ function requestDeed(s: State, deed: Deed, out: SimEvent[]): void {
 function stepRequests(s: State, events: SimEvent[]): void {
   if (!rollRequests(s)) return;
   for (const e of events.slice()) {
-    const j = e.slot === undefined ? null : s.slots[e.slot];
+    const j = e.slot === undefined ? null : e.nursery ? s.nursery?.slots[e.slot] ?? null : s.slots[e.slot]; // ---- nursery ---- its meals count too
     if (e.type === "ate" && j && e.food !== undefined) requestDeed(s, { kind: "ate", k: j.k, food: e.food }, events);
     else if (e.type === "spotCleaned") requestDeed(s, { kind: "scrub" }, events);
     else if (e.type === "pearl") requestDeed(s, { kind: "pearl" }, events);
@@ -2304,6 +2361,14 @@ export function catchUp(s: State, from: number, now: number): AwaySummary | null
   const after = applyAway(before, now, s.growthMultiplier);
   after.slots.forEach((a, i) => {
     const j = s.slots[i];
+    if (!j || !a) return;
+    j.gp = a.gp;
+    j.fullness = a.fullness;
+    j.affection = a.affection;
+  });
+  // ---- nursery ---- the bowl's little ones, the same way
+  after.nursery?.slots.forEach((a, i) => {
+    const j = s.nursery?.slots[i];
     if (!j || !a) return;
     j.gp = a.gp;
     j.fullness = a.fullness;
@@ -3299,6 +3364,9 @@ export function step(s: State, dt: number): SimEvent[] {
     stepTilt(j.tilt, j.vx, j.vy, dt, j.mode !== "swim" || j.g === POLYP);
   }
   stepHelpers(s, dt, events);
+  // ---- nursery ---- the bowl: its pellets, its little ones swimming and growing; one grown enough moves to the
+  // tank here, before the tank's growth below, so it grows into a juvenile there in this same step
+  stepNursery(s, dt, events);
 
   // growth: good care pays a point a minute; stage-ups happen here
   s.slots.forEach((j, i) => {
@@ -3442,7 +3510,8 @@ function stepHelpers(s: State, dt: number, events: SimEvent[]): void {
 /**
  * Adults whose mood stays above 0.7 build content time; every 10 (growth-scaled)
  * minutes of it they release a polyp of their own species. With no free slot or
- * rock (or the tank at its tier's max) the timer holds at 10 minutes until there's room.
+ * rock (or the tank at its tier's max) the polyp goes to the nursery (---- nursery ---- if there is one with room);
+ * failing that the timer holds at 10 minutes until there's room.
  */
 function babies(s: State, dt: number, events: SimEvent[]): void {
   s.slots.forEach((j, parent) => {
@@ -3450,10 +3519,12 @@ function babies(s: State, dt: number, events: SimEvent[]): void {
     j.content = Math.min(BABY_SECONDS, j.content + dt * s.growthMultiplier);
     if (j.content < BABY_SECONDS) return;
     const born = addPolyp(s, j.k, j);
-    if (!born) return; // full: hold at the threshold
+    // ---- nursery ---- a full tank sends the baby to the nursery, if there is one with room
+    const nursed = born ? null : addNursling(s, j.k, j);
+    if (!born && nursed === null) return; // full: hold at the threshold
     j.content = 0;
     j.wiggleT0 = s.t;
-    events.push({ type: "baby", slot: born.slot, parent });
+    events.push(born ? { type: "baby", slot: born.slot, parent } : { type: "baby", slot: nursed!, parent, nursery: true });
   });
 }
 
@@ -3484,8 +3555,8 @@ const NEEDS12 = K.props.includes("needs12");
 const NEEDS15 = K.props.includes("needs15");
 const NEEDS17 = K.props.includes("needs17");
 
-function writeSlot(v: View, s: State, slot: number, j: Jelly | null, night: number): void {
-  const p = `j${slot}`;
+/** One placed jelly's props: `j{slot}` in the tank (---- nursery ---- `nj{n}` in the bowl, with its own mood). */
+function writeSlot(v: View, s: State, slot: number, j: Jelly | null, night: number, p = `j${slot}`, mood?: number): void {
   if (!j) {
     for (const name of ["on", "x", "y", "healthy", "pale", "flush", "glow", "morph", "rot", "ghost", "nglow"]) v[p + name] = 0;
     for (let i = 0; i < SPECIES_N; i++) v[`${p}k${i}`] = 0;
@@ -3494,7 +3565,7 @@ function writeSlot(v: View, s: State, slot: number, j: Jelly | null, night: numb
     for (let i = 0; i < TRAIL_N; i++) v[`${p}tr${i}`] = 0;
     return;
   }
-  const m = moodOf(s, j);
+  const m = mood ?? moodOf(s, j);
   // happy wiggle: three quick squeezes and a one-pixel shimmy, no thrust
   const wp = (s.t - j.wiggleT0) / WIGGLE_TIME;
   const wiggling = wp >= 0 && wp < 1;
@@ -3698,7 +3769,9 @@ export function view(s: State): View {
           ? s.tier >= item.tier
           : item.kind === "food"
             ? s.foods[item.f] === true
-            : false;
+            : item.kind === "nursery"
+              ? s.nursery !== null // ---- nursery ----
+              : false;
     const tooSmall = item.kind === "polyp" && item.needTier !== undefined && s.tier < item.needTier;
     const blocked = (item.kind === "polyp" && (tankFull || tooSmall)) || (item.kind === "tank" && s.tier < item.tier - 1);
     v[`own${i}`] = owned ? 1 : 0;
@@ -3779,5 +3852,627 @@ export function view(s: State): View {
     v[`${name}X`] = vis ? snap(k === MANTA ? vis.gx : vis.x) : 0;
     v[`${name}Y`] = vis ? snap(vis.y) : 0;
   });
+  writeNursery(v, s, night); // ---- nursery ----
   return v;
 }
+
+// ---------------------------------------------------------------- ---- nursery ----
+//
+// The nursery bowl (shop item NURSERY_ITEM, bought once; ./nursery.ts has its geometry). The rules:
+//   capacity    NUR_CAP (4) little ones, polyps and ephyrae only: no juveniles or adults.
+//   routing     a baby is born into the tank as before. Only when the tank can't take it (full, or no free rock)
+//               does it go to the nursery ("baby" with nursery: true), if there is one with room; with neither,
+//               the parent holds at the threshold as before.
+//   moving      the jelly card moves a tank polyp or ephyra into the nursery (never the tank's last jelly), and a
+//               nursery one back to the tank when there's room (a polyp needs a free rock): moveToNursery,
+//               moveToTank ("nurseryIn" / "nurseryOut").
+//   growth      as in the tank: the same hunger and affection, a growth point a minute while fed, meals and
+//               favourite foods; the bowl's water never clouds. A polyp buds into an ephyra in the bowl.
+//   graduation  an ephyra with a juvenile's growth (GROWTH[JUVENILE]) moves to the tank by itself and grows up
+//               there in the same step ("nurseryOut" auto, then "grew"). With the tank full it waits, its growth
+//               held there, under a "ready to move" tag ("nurseryReady" once), and goes as soon as there's room.
+//   time away   applyAway and catchUp age the bowl like the tank (without the dirt), growth held at that cap.
+//   saves       Save.nursery (optional); share codes leave the nursery out (exportTank); backups are the whole save.
+//   journal     a nursery jelly is in the journal from birth like any other; it counts as raised when it grows
+//               up (in the tank, after it moves).
+
+/** The nursery's jellies (empty without one). */
+export function nurslings(s: State): Jelly[] {
+  return s.nursery ? s.nursery.slots.filter((j): j is Jelly => j !== null) : [];
+}
+export const nurseryCount = (s: State) => nurslings(s).length;
+export const isNurseryOpen = (s: State) => s.nursery?.open === true;
+/** A nursery jelly's mood: its water is always clear. */
+const nurMood = (j: Jelly) => clamp(0.5 * j.fullness + 0.3 + 0.2 * j.affection);
+
+/** A live jelly as saved (the tank's toSave writes the same fields). */
+function saveOf(j: Jelly): SaveJelly {
+  return { k: j.k, g: j.g, gp: j.gp, care: j.care, fullness: j.fullness, affection: j.affection, anchor: j.anchor, spot: j.spot, name: j.name, born: j.born, content: j.content, morph: j.morph, trait: j.trait };
+}
+
+/** The optional save field: there once the nursery is bought. */
+function nurseryField(n: SaveNursery | null | undefined): { nursery?: SaveNursery } {
+  return n ? { nursery: { slots: Array.from({ length: NUR_CAP }, (_, i) => (n.slots[i] ? { ...n.slots[i]! } : null)) } } : {};
+}
+
+/** A saved nursery, repaired slot by slot (stages past ephyra come back as ephyrae; polyps on distinct spots). Null: none. */
+function nurseryOf(raw: unknown, now: number, used: string[]): SaveNursery | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const slotsIn = (raw as { slots?: unknown }).slots;
+  const list: unknown[] = Array.isArray(slotsIn) ? slotsIn : [];
+  const spots = new Set<number>();
+  const slots = Array.from({ length: NUR_CAP }, (_, i): SaveJelly | null => {
+    const r: unknown = list[i];
+    if (!r || typeof r !== "object") return null;
+    const o = r as Record<string, unknown>;
+    const k = speciesOf(o.k);
+    const g = Math.min(EPHYRA, stageOrSpecies(o.g)) as Stage;
+    const name = cleanName(o.name) ?? pickName(used, seedOf(now, 20 + i));
+    used.push(name);
+    let anchor = -1;
+    if (g === POLYP) {
+      const a = Math.round(finite(o.anchor, -1));
+      anchor = a >= 0 && a < NUR_CAP && !spots.has(a) ? a : Array.from({ length: NUR_CAP }, (_, x) => x).find((x) => !spots.has(x))!;
+      spots.add(anchor);
+    }
+    return {
+      k,
+      g,
+      gp: clamp(finite(o.gp, GROWTH[g]), GROWTH[g], GROWTH[JUVENILE]),
+      care: clamp(finite(o.care, 0), 0, CARE_SECONDS),
+      fullness: clamp(finite(o.fullness, 0.7)),
+      affection: clamp(finite(o.affection, 0.4)),
+      anchor,
+      spot: -1,
+      name,
+      born: finite(o.born, now),
+      content: 0,
+      morph: morphOf(o.morph),
+      trait: traitOf(o.trait) ?? traitFromName(name, k),
+    };
+  });
+  return { slots };
+}
+
+/** Time away in the bowl: the tank's hunger, affection and growth (no dirt there), growth held at the move-out mark. */
+function awayNursery(n: SaveNursery | undefined, away: number, growthMultiplier: number): { nursery?: SaveNursery } {
+  if (!n || !Array.isArray(n.slots)) return {};
+  return {
+    nursery: {
+      slots: n.slots.map((j) => {
+        if (!j) return null;
+        const fullGood = j.fullness > GOOD_FULLNESS ? (j.fullness - GOOD_FULLNESS) * RATES.hungerAway : 0;
+        const pts = Math.min(AWAY_GROWTH_CAP, Math.floor((Math.min(away, fullGood) * growthMultiplier) / CARE_SECONDS));
+        return {
+          ...j,
+          gp: Math.max(j.gp, Math.min(j.gp + pts, GROWTH[JUVENILE])),
+          fullness: Math.max(Math.min(j.fullness, 0.1), j.fullness - away / RATES.hungerAway),
+          affection: Math.max(0, j.affection - away / (RATES.affectionDecay * 20)),
+        };
+      }),
+    },
+  };
+}
+
+const offFood = (): Food => ({ state: "off", kind: FLAKES, x: 0, y: 0, vy: 0, age: 0, seed: 0, ex: 0, ey: 0, by: -1 });
+
+function newNursery(seed: number): Nursery {
+  return {
+    slots: Array.from({ length: NUR_CAP }, () => null),
+    food: Array.from({ length: NUR_FOOD_N }, offFood),
+    open: false,
+    e: 0,
+    ready: Array.from({ length: NUR_CAP }, () => false),
+    rand: rng(seed),
+  };
+}
+
+/** The first polyp spot in the bowl no other polyp is on (there are as many as slots, so one is always free). */
+function freeNurAnchor(nu: Nursery, except: Jelly | null = null): number {
+  const used = new Set(nu.slots.flatMap((o) => (o && o !== except && o.mode === "fixed" ? [o.anchor] : [])));
+  const a = Array.from({ length: NUR_CAP }, (_, i) => i).find((i) => !used.has(i));
+  return a ?? 0;
+}
+
+/** A saved jelly placed in the bowl (local coordinates): a polyp on its spot, an ephyra over its slot's spot. */
+function makeNursling(sj: SaveJelly, n: number, nu: Nursery): Jelly {
+  const g = Math.min(sj.g, EPHYRA) as Stage;
+  const j = makeJelly({ ...sj, g, anchor: -1, spot: -1 }, n, [], 0, K.glassR);
+  j.content = 0;
+  if (g === POLYP) {
+    j.mode = "fixed";
+    const used = new Set(nu.slots.flatMap((o) => (o && o.mode === "fixed" ? [o.anchor] : [])));
+    j.anchor = sj.anchor >= 0 && sj.anchor < NUR_CAP && !used.has(sj.anchor) ? sj.anchor : freeNurAnchor(nu);
+    const a = NURSERY.anchors[j.anchor]!;
+    j.x = a.x;
+    j.y = a.y;
+  } else {
+    j.mode = "swim";
+    j.anchor = -1;
+    const a = NURSERY.anchors[n] ?? NURSERY.anchors[0]!;
+    j.x = a.x;
+    j.y = a.y - 150;
+    keepIn(j);
+  }
+  return j;
+}
+
+function nurseryFromSave(n: SaveNursery | undefined, seed: number): Nursery | null {
+  if (!n || !Array.isArray(n.slots)) return null;
+  const nu = newNursery(seed);
+  n.slots.slice(0, NUR_CAP).forEach((sj, i) => {
+    if (sj) nu.slots[i] = makeNursling(sj, i, nu);
+  });
+  return nu;
+}
+
+/** Buy the bowl: it appears hanging from the hood's lip, empty. "owned" if it already is. */
+function buyNursery(s: State, i: number): BuyResult {
+  const item = SHOP_ITEMS[i]!;
+  if (s.nursery) return "owned";
+  if (s.dollars < item.price) return "cantAfford";
+  s.dollars -= item.price;
+  s.nursery = newNursery(Math.floor(s.clock / 1000) + 31);
+  const c = shopCardCentre(i) ?? { x: K.W / 2, y: 640 };
+  s.fx = { x: screenToWorld(s, c.x), y: c.y, t0: s.t };
+  return "bought";
+}
+
+/** A baby whose tank is full goes into the bowl's first free slot: its nursery slot, or null (no bowl, or full). */
+function addNursling(s: State, k: Species, parent: Jelly): number | null {
+  const nu = s.nursery;
+  const n = nu ? nu.slots.findIndex((j) => !j) : -1;
+  if (!nu || n < 0) return null;
+  const morph = birthMorph(s, parent);
+  const trait = rollTrait(s.traitRand, parent.trait);
+  const j = makeNursling({ ...freshJelly(k, POLYP, newName(s), s.clock, morph, trait), anchor: freeNurAnchor(nu) }, n, nu);
+  j.wiggleT0 = s.t;
+  nu.slots[n] = j;
+  noteJelly(s, j);
+  return n;
+}
+
+/** Dollars earned in the bowl: an "earned" with nursery: true and the nursery slot. */
+function nurEarn(s: State, amount: number, events: SimEvent[], n: number): void {
+  const before = s.dollars;
+  s.dollars = Math.min(MAX_DOLLARS, s.dollars + amount);
+  const got = s.dollars - before;
+  if (got > 0) events.push({ type: "earned", amount: got, slot: n, nursery: true });
+}
+
+/** Where a jelly moving out of the bowl comes into the tank (world): under the hanging bowl, in the view. */
+const arrival = (s: State) => ({ x: screenToWorld(s, NURSERY.iconC.x + 90), y: K.waterTop + 180 });
+
+/** Put a saved jelly into the tank's first free slot (a polyp on a free rock; a swimmer at `at`): its slot, or -1. */
+function admit(s: State, sj: SaveJelly, at: { x: number; y: number }): number {
+  const slot = s.slots.findIndex((j) => !j);
+  if (slot < 0 || jellyCount(s) >= maxJellies(s)) return -1;
+  const anchor = sj.g === POLYP ? freeAnchor(s.slots, s.tier) : -1;
+  if (sj.g === POLYP && anchor < 0) return -1;
+  const j = makeJelly({ ...sj, anchor, spot: -1 }, slot, s.slots, s.tier, rightGlass(s));
+  if (j.mode === "swim") {
+    const b = geomIn(s, j.k, j.g).bounds;
+    j.x = clamp(at.x, b.x0, b.x1);
+    j.y = clamp(at.y, b.y0, b.y1);
+  }
+  j.wiggleT0 = s.t;
+  s.slots[slot] = j;
+  noteJelly(s, j);
+  const c = bodyCentre(j);
+  s.fx = { x: c.x, y: c.y, t0: s.t };
+  return slot;
+}
+
+/** Leave a nursery slot: its pellets on their way in finish on their own, its "ready" flag goes. */
+function vacate(nu: Nursery, n: number): void {
+  for (const f of nu.food) if (f.by === n && f.state === "eaten") f.by = -1;
+  nu.slots[n] = null;
+  nu.ready[n] = false;
+}
+
+/** Open the bowl's close-up (false: there's no bowl, or the shop is up). A tool in hand stays there: food works in it. */
+export function openNursery(s: State): boolean {
+  if (!s.nursery || shopBlocks(s)) return false;
+  s.nursery.open = true;
+  return true;
+}
+export function closeNursery(s: State): void {
+  if (s.nursery) s.nursery.open = false;
+}
+
+/** Can the tank's jelly in `slot` move into the nursery, and if not why (a short line)? Null: no bowl, or no jelly. */
+export function toNurseryInfo(s: State, slot: number): { allowed: boolean; reason: string } | null {
+  const nu = s.nursery;
+  const j = s.slots[slot];
+  if (!nu || !j) return null;
+  if (j.g > EPHYRA) return { allowed: false, reason: "Only polyps and babies fit in the nursery." };
+  if (jellyCount(s) <= 1) return { allowed: false, reason: `${j.name} is your only jelly in the tank.` };
+  if (!nu.slots.some((o) => !o)) return { allowed: false, reason: "The nursery is full." };
+  return { allowed: true, reason: "" };
+}
+
+/** Move the tank's polyp or ephyra in `slot` into the nursery ("nurseryIn", queued). Null when it can't go. */
+export function moveToNursery(s: State, slot: number): { name: string; n: number } | null {
+  if (!toNurseryInfo(s, slot)?.allowed) return null;
+  const nu = s.nursery!;
+  const j = s.slots[slot]!;
+  const n = nu.slots.findIndex((o) => !o);
+  const sj = saveOf(j);
+  sj.anchor = j.g === POLYP ? freeNurAnchor(nu) : -1;
+  const c = bodyCentre(j);
+  s.fx = { x: c.x, y: c.y, t0: s.t };
+  for (const f of s.food) if (f.by === slot && f.state === "eaten") f.by = -1;
+  s.slots[slot] = null;
+  const nj = makeNursling(sj, n, nu);
+  nj.wiggleT0 = s.t;
+  nu.slots[n] = nj;
+  s.queued.push({ type: "nurseryIn", slot: n, from: slot });
+  return { name: j.name, n };
+}
+
+/** Can nursery slot `n` move into the tank now, and if not why? Null: no bowl, or nobody there. */
+export function toTankInfo(s: State, n: number): { allowed: boolean; reason: string } | null {
+  const j = s.nursery?.slots[n];
+  if (!j) return null;
+  if (jellyCount(s) >= maxJellies(s) || !s.slots.some((o) => !o)) return { allowed: false, reason: "The tank is full. Rehome a jelly or get a bigger tank." };
+  if (j.g === POLYP && freeAnchor(s.slots, s.tier) < 0) return { allowed: false, reason: "No free rock in the tank for a polyp." };
+  return { allowed: true, reason: "" };
+}
+
+/** Move nursery slot `n` into the tank ("nurseryOut", queued): a polyp to a free rock, an ephyra under the bowl. */
+export function moveToTank(s: State, n: number): { name: string; slot: number } | null {
+  const nu = s.nursery;
+  const j = nu?.slots[n];
+  if (!nu || !j || !toTankInfo(s, n)?.allowed) return null;
+  const slot = admit(s, saveOf(j), arrival(s));
+  if (slot < 0) return null;
+  vacate(nu, n);
+  s.queued.push({ type: "nurseryOut", slot, from: n });
+  return { name: j.name, slot };
+}
+
+/** The nursery jelly under a SCREEN point while the bowl is open (nearest body centre first); -1 if none. */
+export function nurseryAt(s: State, x: number, y: number): number {
+  const nu = s.nursery;
+  if (!nu?.open || nu.e < 0.99) return -1;
+  const p = toBowl(x, y);
+  let best = -1;
+  let bestD = Infinity;
+  nu.slots.forEach((j, n) => {
+    if (!j || !hit(j, p.x, p.y)) return;
+    const c = bodyCentre(j);
+    const d = Math.hypot(c.x - p.x, c.y - p.y);
+    if (d < bestD) {
+      bestD = d;
+      best = n;
+    }
+  });
+  return best;
+}
+
+/** Pet nursery jelly `n` (a tap, or the nursery panel): like petJelly. False if it isn't there. */
+export function petNursling(s: State, n: number): boolean {
+  const j = s.nursery?.slots[n];
+  if (!j || shopBlocks(s)) return false;
+  j.affection = clamp(j.affection + 0.08);
+  j.wiggleT0 = s.t;
+  if (j.mode === "swim") j.vy -= 25;
+  if (s.t >= j.petReadyAt) {
+    j.petReadyAt = s.t + PET_COOLDOWN;
+    nurEarn(s, EARN.pet, s.queued, n);
+  }
+  requestDeed(s, { kind: "pet" }, s.queued);
+  return true;
+}
+
+/**
+ * A tap while the bowl is open, SCREEN coordinates: on a jelly, pet it; elsewhere in the bowl, the nearest ephyra
+ * comes over; off the bowl, the close-up closes ("close"). Null when the bowl isn't open.
+ */
+export function nurseryTap(s: State, x: number, y: number): "pet" | "call" | "close" | null {
+  const nu = s.nursery;
+  if (!nu?.open) return null;
+  const p = toBowl(x, y);
+  if (!onOpenBowl(p.x, p.y)) {
+    closeNursery(s);
+    return "close";
+  }
+  const n = nurseryAt(s, x, y);
+  if (n >= 0 && petNursling(s, n)) return "pet";
+  let call: Jelly | null = null;
+  for (const j of nu.slots) if (j && j.mode === "swim" && (!call || Math.hypot(j.x - p.x, j.y - p.y) < Math.hypot(call.x - p.x, call.y - p.y))) call = j;
+  if (call) {
+    call.affection = clamp(call.affection + 0.02);
+    const sw = NURSERY.swim;
+    call.target = { x: clamp(p.x, sw.x0, sw.x1), y: clamp(p.y, sw.y0, sw.y1) };
+    call.targetKind = "tap";
+    call.targetUntil = s.t + 4;
+  }
+  return "call";
+}
+
+/**
+ * Sprinkle food into the open bowl at a SCREEN point, as sprinkle() does in the tank (the same rate limit, the
+ * held food's kind): 1-2 pellets near it, inside the bowl's water. Returns how many went in.
+ */
+export function nurserySprinkle(s: State, x: number, y: number, kind?: FoodKind): number {
+  const nu = s.nursery;
+  if (!nu?.open || shopBlocks(s) || !Number.isFinite(x) || !Number.isFinite(y)) return 0;
+  const p = toBowl(x, y);
+  if (!onOpenBowl(p.x, p.y)) return 0;
+  const held = foodKindOf(s.tool);
+  const pellet: FoodKind = kind === 0 || kind === 1 || kind === 2 ? kind : held !== -1 ? held : FLAKES;
+  const pour = s.pour;
+  pour.tokens = Math.min(POUR_BURST, pour.tokens + Math.max(0, s.t - pour.at) * POUR_RATE);
+  pour.at = s.t;
+  let want = Math.min(Math.floor(pour.tokens + 1e-9), nu.rand() < 0.5 ? 1 : 2);
+  let n = 0;
+  for (const f of nu.food) {
+    if (want <= 0) break;
+    if (f.state !== "off") continue;
+    const fy = clamp(p.y + (nu.rand() - 0.5) * 2 * SPRINKLE_SPREAD, NURSERY.surface + 3 * P, NURSERY.floor - 2 * P);
+    const half = Math.sqrt(Math.max(0, (NURSERY.r - 4 * P) ** 2 - fy * fy));
+    f.state = "sink";
+    f.kind = pellet;
+    f.x = clamp(p.x + (nu.rand() - 0.5) * 2 * SPRINKLE_SPREAD, -half, half);
+    f.y = Math.min(fy, floorAt(f.x));
+    f.vy = 18 + nu.rand() * 14;
+    f.age = 0;
+    f.seed = nu.rand() * 10;
+    f.by = -1;
+    want--;
+    n++;
+  }
+  pour.tokens -= n;
+  if (n > 0) pour.last = s.t;
+  return n;
+}
+
+/** The keyboard's F in the bowl: a pinch over nursery jelly `n` (or the hungriest), of the food in hand. */
+export function nurseryFeed(s: State, n = -1): number {
+  const nu = s.nursery;
+  if (!nu?.open) return 0;
+  const j = nu.slots[n] ?? nurslings(s).reduce<Jelly | null>((a, b) => (!a || b.fullness < a.fullness ? b : a), null);
+  const at = j ? { x: j.x, y: Math.max(NURSERY.surface + 30, j.y - geomOf(j.k, j.g).body.top - 50) } : { x: 0, y: NURSERY.surface + 40 };
+  const p = fromBowl(at.x, at.y);
+  return nurserySprinkle(s, p.x, p.y);
+}
+
+/** Nursery jelly `n` for its card and the nursery panel: what jellyInfo gives, and whether it's waiting to move. */
+export function nurseryInfo(s: State, n: number): (JellyInfo & { ready: boolean }) | null {
+  const j = s.nursery?.slots[n];
+  if (!j) return null;
+  return {
+    name: j.name,
+    k: j.k,
+    g: j.g,
+    ageDays: Math.max(0, Math.floor((s.clock - j.born) / 86_400_000)),
+    fullness: j.fullness,
+    mood: nurMood(j),
+    morph: j.morph,
+    trait: j.trait,
+    ready: s.nursery!.ready[n] === true,
+  };
+}
+
+export function renameNursling(s: State, n: number, name: string): boolean {
+  const j = s.nursery?.slots[n];
+  const clean = cleanName(name);
+  if (!j || clean === null) return false;
+  j.name = clean;
+  return true;
+}
+
+/** Where nursery jelly `n`'s body is on screen with the bowl open (tags, pops, the keyboard's ring); null if empty. */
+export function nurseryCentre(s: State, n: number): { x: number; y: number } | null {
+  const j = s.nursery?.slots[n];
+  if (!j) return null;
+  const c = bodyCentre(j);
+  return fromBowl(c.x, c.y);
+}
+
+/** The nursery's step: the zoom, hunger, its pellets, its jellies swimming and growing, and moving out. */
+function stepNursery(s: State, dt: number, events: SimEvent[]): void {
+  const nu = s.nursery;
+  if (!nu) return;
+  if (shopBlocks(s)) nu.open = false;
+  nu.e = s.reducedMotion ? (nu.open ? 1 : 0) : clamp(nu.e + (nu.open ? dt : -dt) / NUR_ZOOM_TIME);
+  const mult = s.growthMultiplier;
+  for (const j of nu.slots) {
+    if (!j) continue;
+    j.fullness = clamp(j.fullness - dt / RATES.hungerActive);
+    j.affection = clamp(j.affection - dt / RATES.affectionDecay);
+  }
+
+  // pellets: x, y are a pellet's middle (local). They sink, rest on the sand (the bowl's filter takes them after a
+  // while: no grime), and polyps draw nearby ones in
+  for (const f of nu.food) {
+    if (f.state === "off") continue;
+    f.age += dt;
+    if (f.state === "sink") {
+      f.y += f.vy * dt;
+      const half = Math.sqrt(Math.max(0, (NURSERY.r - 4 * P) ** 2 - f.y * f.y));
+      f.x = clamp(f.x + Math.sin(f.age * 2.2 + f.seed) * 10 * dt, -half, half);
+      const floor = floorAt(f.x);
+      if (f.y >= floor) {
+        f.y = floor;
+        f.state = "rest";
+        f.age = 0;
+      }
+    } else if ((f.state === "rest" && f.age > 30) || (f.state === "eaten" && f.age > 0.3)) {
+      f.state = "off";
+    }
+    if (f.state !== "sink" && f.state !== "rest") continue;
+    for (const j of nu.slots) {
+      const lp = j && lurePoint(j);
+      if (!lp) continue;
+      const dx = lp.x - f.x;
+      const dy = lp.y - f.y;
+      const d = Math.hypot(dx, dy);
+      if (d < LURE_RADIUS && d > 1) {
+        const v = (12 + 28 * (1 - d / LURE_RADIUS)) * dt;
+        f.x += (dx / d) * v;
+        f.y = Math.min(f.y + (dy / d) * v, floorAt(f.x));
+      }
+    }
+    for (let n = 0; n < nu.slots.length; n++) {
+      const j = nu.slots[n];
+      if (!j || !catches(j, f.x, f.y)) continue;
+      f.state = "eaten";
+      f.age = 0;
+      f.ex = f.x;
+      f.ey = f.y;
+      f.by = n;
+      const fav = favouriteFood(j.k) === f.kind;
+      const meal = fav ? FAV_MEAL : MEAL;
+      j.fullness = clamp(j.fullness + meal.full);
+      j.affection = clamp(j.affection + meal.love);
+      j.wiggleT0 = s.t;
+      if (fav) j.loveT0 = s.t;
+      j.gp += meal.gp * mult;
+      events.push(fav ? { type: "ate", slot: n, food: f.kind, fav: true, nursery: true } : { type: "ate", slot: n, food: f.kind, nursery: true });
+      nurEarn(s, EARN.meal, events, n);
+      break;
+    }
+  }
+
+  // motion: polyps sway on their spots, ephyrae pulse about the bowl (after food first)
+  nu.slots.forEach((j) => {
+    if (!j) return;
+    if (j.mode === "fixed") {
+      j.pulse = (j.pulse + dt / POLYP_SWAY) % 1;
+      j.tent = (j.tent + dt * 0.45) % 1;
+    } else swimNursling(s, nu, j, dt);
+    stepTrail(s, j, dt);
+    stepTilt(j.tilt, j.vx, j.vy, dt, j.mode !== "swim" || j.g === POLYP);
+  });
+
+  // growth: a point a minute while fed (the water is always clear); a polyp buds in the bowl
+  nu.slots.forEach((j, n) => {
+    if (!j) return;
+    if (j.fullness > GOOD_FULLNESS) {
+      j.care += dt * mult;
+      while (j.care >= CARE_SECONDS) {
+        j.care -= CARE_SECONDS;
+        j.gp += 1;
+      }
+    }
+    if (j.g === POLYP && j.gp >= GROWTH[EPHYRA]) budInBowl(s, n, j, events);
+    j.gp = Math.min(j.gp, GROWTH[JUVENILE]);
+  });
+
+  // moving out: an ephyra grown enough for a juvenile goes to the tank when there's room, else it waits
+  nu.slots.forEach((j, n) => {
+    if (!j || j.g < EPHYRA || j.gp < GROWTH[JUVENILE]) {
+      nu.ready[n] = false;
+      return;
+    }
+    const slot = admit(s, saveOf(j), arrival(s));
+    if (slot >= 0) {
+      vacate(nu, n);
+      events.push({ type: "nurseryOut", slot, from: n, auto: true });
+    } else if (!nu.ready[n]) {
+      nu.ready[n] = true;
+      events.push({ type: "nurseryReady", slot: n });
+    }
+  });
+}
+
+/** A polyp in the bowl buds into an ephyra: it leaves its spot and swims ("grew", nursery, and its reward). */
+function budInBowl(s: State, n: number, j: Jelly, events: SimEvent[]): void {
+  j.g = EPHYRA;
+  j.y -= geomOf(j.k, POLYP).body.top;
+  j.anchor = -1;
+  j.mode = "swim";
+  j.vy = -30;
+  j.target = null;
+  j.targetKind = null;
+  keepIn(j);
+  j.wiggleT0 = s.t;
+  events.push({ type: "grew", slot: n, stage: EPHYRA, nursery: true });
+  nurEarn(s, STAGE_REWARD[EPHYRA], events, n);
+}
+
+/** An ephyra in the bowl: after the nearest pellet, a called-for spot, or a wander spot; pulses push it there. */
+function swimNursling(s: State, nu: Nursery, j: Jelly, dt: number): void {
+  let food: Food | null = null;
+  let best = Infinity;
+  for (const f of nu.food) {
+    if (f.state !== "sink" && f.state !== "rest") continue;
+    const d = Math.hypot(f.x - j.x, f.y - j.y);
+    if (d < best) {
+      best = d;
+      food = f;
+    }
+  }
+  if (food) {
+    j.target = { x: food.x, y: food.y - 6 };
+    j.targetKind = "food";
+  } else if (!j.target || j.targetKind === "food" || s.t > j.targetUntil || (j.targetKind === "wander" && Math.hypot(j.target.x - j.x, j.target.y - j.y) < 18)) {
+    j.target = wanderTarget(nu.rand);
+    j.targetKind = "wander";
+    j.targetUntil = s.t + 3 + nu.rand() * 4;
+  }
+  const busy = j.targetKind === "food" || j.targetKind === "tap";
+  const period = (busy ? NUR_SWIM.busy : NUR_SWIM.idle) * (j.fullness < 0.2 ? 1.3 : 1);
+  j.pulse = (j.pulse + dt / period) % 1;
+  j.tent = (j.tent + dt * 0.6) % 1;
+  const tx = j.target.x - j.x;
+  const ty = j.target.y - j.y;
+  const dist = Math.hypot(tx, ty);
+  if (j.pulse < NUR_SWIM.squeeze && dist > 6) {
+    const force = (busy ? NUR_SWIM.forceBusy : NUR_SWIM.forceIdle) * Math.sin((j.pulse / NUR_SWIM.squeeze) * Math.PI);
+    j.vx += (tx / dist) * force * dt;
+    j.vy += (ty / dist) * force * dt;
+  }
+  const drag = Math.exp(-NUR_SWIM.drag * dt);
+  j.vx *= drag;
+  j.vy = j.vy * drag + NUR_SWIM.sink * dt;
+  j.x += j.vx * dt;
+  j.y += j.vy * dt;
+  keepIn(j);
+}
+
+/** The nursery's props (every one written, bowl or not: zeros without one). */
+function writeNursery(v: View, s: State, night: number): void {
+  const nu = s.nursery;
+  const e = nu ? nu.e : 0;
+  const z = zoomAt(e);
+  const shown = Math.round(clamp(e * 4) * 100) / 100;
+  v.nurOpen = shown;
+  v.nurX = z.x;
+  v.nurY = z.y;
+  v.nurS = z.s;
+  v.nurDim = Math.round(0.55 * smooth(e) * 100) / 100;
+  v.nurBowl = nu && !shopBlocks(s) ? Math.round((1 - shown) * 100) / 100 : 0;
+  v.nurReady = nu?.ready.some((r, n) => r && nu.slots[n]) ? 1 : 0;
+  for (let n = 0; n < NUR_CAP; n++) {
+    const j = nu?.slots[n];
+    // a tiny jelly in the hanging bowl per little one: fainter while it's hungry
+    v[`nurDot${n}`] = j ? (j.fullness < GOOD_FULLNESS ? 0.4 : 1) : 0;
+    const ready = !!j && nu!.ready[n] === true;
+    v[`nr${n}x`] = j ? snap(j.x) : 0;
+    v[`nr${n}y`] = j ? snap(j.y - geomOf(j.k, j.g).body.top - 9 * P) : 0;
+    v[`nr${n}o`] = ready ? 1 : 0;
+    writeSlot(v, s, n, j ?? null, night, `nj${n}`, j ? nurMood(j) : undefined);
+  }
+  for (let i = 0; i < NUR_FOOD_N; i++) {
+    const f = nu?.food[i];
+    let x = f?.x ?? 0;
+    let y = f?.y ?? 0;
+    let o = f && (f.state === "sink" || f.state === "rest") ? 1 : 0;
+    if (f?.state === "eaten") {
+      const j = nu!.slots[f.by];
+      const c = j ? bodyCentre(j) : { x: f.ex, y: f.ey };
+      const p = clamp(f.age / 0.3);
+      x = f.ex + (c.x - f.ex) * p;
+      y = f.ey + (c.y - f.ey) * p;
+      o = p < 0.5 ? 1 : 0.5;
+    }
+    v[`nf${i}x`] = snap(x);
+    v[`nf${i}y`] = snap(y);
+    v[`nf${i}o`] = o;
+    for (let k = 0; k < FOOD_KINDS; k++) v[`nf${i}k${k}`] = k === (f?.kind ?? 0) ? 1 : 0;
+  }
+}
+// ---- end nursery ----

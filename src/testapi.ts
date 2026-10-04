@@ -276,6 +276,7 @@ export function createTestHost(q: TestQuery): TestHost {
         s.rand = rng(n);
         s.dirtRand = rng(n + 11);
         s.traitRand = rng(n + 23);
+        s.findRand = rng(n + 31); // v16: sea glass and shells
       },
       /** Put the jelly in `slot` at world (x, y), at rest there. False if the slot is empty. */
       place(slot: number, x: number, y: number): boolean {

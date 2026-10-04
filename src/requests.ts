@@ -14,14 +14,15 @@
  *   "night"    -1; a night visitor spotted (it came into view; only planned at night, by the clock)    (12)
  *   "temp"     species k; the water set to what it likes (only with a jelly that minds, the heater or chiller
  *              that gets there owned, and the water not there already: ./temperature.ts)            (8)
+ *   "seaglass" -1; a piece of sea glass found (v16; only where finds turn up, planned before 20:00)    (8)
  * Unfinished requests don't carry over: a new day (or a day away) replaces them.
  */
 import { FOOD_KINDS, FOOD_NAMES, SPECIES_N, SPECIES_NAMES, favouriteFood, type FoodKind, type Species } from "./species";
 import { rng } from "./dirt";
 import { tempPref } from "./temperature";
 
-export type RequestKind = "feed" | "scrub" | "pet" | "pearl" | "sprinkle" | "visitor" | "ride" | "night" | "temp";
-export const REQUEST_KINDS: readonly RequestKind[] = ["feed", "scrub", "pet", "pearl", "sprinkle", "visitor", "ride", "night", "temp"];
+export type RequestKind = "feed" | "scrub" | "pet" | "pearl" | "sprinkle" | "visitor" | "ride" | "night" | "temp" | "seaglass";
+export const REQUEST_KINDS: readonly RequestKind[] = ["feed", "scrub", "pet", "pearl", "sprinkle", "visitor", "ride", "night", "temp", "seaglass"];
 
 export interface Request {
   kind: RequestKind;
@@ -58,6 +59,8 @@ export interface RequestTank {
   night?: boolean;
   /** ---- temperature ---- the heater and chiller owned, and the water's zone now (-1 cool, 0 room, 1 warm) */
   climate?: { heater: boolean; chiller: boolean; zone: number };
+  /** v16: sea glass can turn up here (the player's own tank) with enough of the day left to find a piece */
+  seaglass?: boolean;
 }
 
 /** Something the player did that a request may count. */
@@ -70,7 +73,8 @@ export type Deed =
   | { kind: "visitor" }
   | { kind: "ride" }
   | { kind: "night" }
-  | { kind: "temp"; k: Species }; // ---- temperature ---- the water suits a jelly of species k
+  | { kind: "temp"; k: Species } // ---- temperature ---- the water suits a jelly of species k
+  | { kind: "seaglass" };
 
 /** At most this many a day. */
 export const REQUESTS_PER_DAY = 2;
@@ -81,8 +85,8 @@ export const PET_N = 5;
 export const SPRINKLE_N = 8;
 /** A pellet counts as "by" a decoration within this many px (world x) of its base. */
 export const SPRINKLE_NEAR = 100;
-// v13: the keepsakes (decorations 5..9), then the bubbler (10)
-const DECOR_NAMES = ["castle", "anchor", "dive helmet", "giant clam", "glow coral", "bottle", "lighthouse", "jelly lantern", "ship's wheel", "postbox", "bubbler"];
+// v13: the keepsakes (decorations 5..9), then the bubbler (10); v16: the collection's wind chime (11) and grotto (12)
+const DECOR_NAMES = ["castle", "anchor", "dive helmet", "giant clam", "glow coral", "bottle", "lighthouse", "jelly lantern", "ship's wheel", "postbox", "bubbler", "wind chime", "shell grotto"];
 
 /** Sand dollars a request pays: 5..15, more for the fussier ones. */
 export function rewardOf(r: Pick<Request, "kind" | "target" | "n">): number {
@@ -103,6 +107,7 @@ export function rewardOf(r: Pick<Request, "kind" | "target" | "n">): number {
     case "night":
       return 12;
     case "temp":
+    case "seaglass":
       return 8;
   }
 }
@@ -132,6 +137,8 @@ export function requestText(r: Request): string {
       return "Spot a night visitor";
     case "temp":
       return `Set the tank to what ${an((SPECIES_NAMES[r.target] ?? "jelly").toLowerCase())} likes`;
+    case "seaglass":
+      return "Find a piece of sea glass";
   }
 }
 
@@ -178,6 +185,7 @@ export function planRequests(day: string, t: RequestTank): DailyRequests {
   const c = t.climate;
   const fussy = c ? kinds.filter((k) => tempPref(k) !== 0 && tempPref(k) !== c.zone && (tempPref(k) > 0 ? c.heater : c.chiller)) : [];
   if (fussy.length) pool.push([2, () => req("temp", 1, pick(fussy))]);
+  if (t.seaglass) pool.push([1, () => req("seaglass", 1)]);
   const items: Request[] = [];
   while (items.length < REQUESTS_PER_DAY && pool.length) {
     const total = pool.reduce((a, p) => a + p[0], 0);

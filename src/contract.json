@@ -1190,6 +1190,20 @@
    "w": 303,
    "h": 201,
    "tab": 2
+  },
+  {
+   "x": 366,
+   "y": 1332,
+   "w": 303,
+   "h": 201,
+   "tab": 1
+  },
+  {
+   "x": 45,
+   "y": 1551,
+   "w": 303,
+   "h": 201,
+   "tab": 1
   }
  ],
  "shopScroll": {
@@ -1208,7 +1222,7 @@
    "trackH": 759
   },
   {
-   "max": 573,
+   "max": 792,
    "viewTop": 216,
    "viewBottom": 975,
    "trackTop": 216,
@@ -1343,6 +1357,21 @@
    "y": 1047,
    "w": 138,
    "h": 66
+  },
+  {
+   "name": "SgChime",
+   "x": 576,
+   "y": 186,
+   "w": 90,
+   "h": 144,
+   "hang": true
+  },
+  {
+   "name": "SgGrotto",
+   "x": 504,
+   "y": 1047,
+   "w": 186,
+   "h": 90
   }
  ],
  "decorLift": 18,
@@ -1596,6 +1625,7 @@
   "gel",
   "heater",
   "chiller",
+  "finds",
   "shopClose",
   "buy0",
   "buy1",
@@ -1633,6 +1663,8 @@
   "buy33",
   "buy34",
   "buy35",
+  "buy36",
+  "buy37",
   "tab0",
   "tab1",
   "tab2",
@@ -1735,6 +1767,16 @@
   "dec10",
   "dec10x",
   "dec10y",
+  "dec11ov",
+  "dec11lift",
+  "dec11",
+  "dec11x",
+  "dec11y",
+  "dec12ov",
+  "dec12lift",
+  "dec12",
+  "dec12x",
+  "dec12y",
   "turtleF0",
   "turtleF1",
   "turtleF2",
@@ -2396,6 +2438,12 @@
   "lock29",
   "own29",
   "away29",
+  "lock36",
+  "own36",
+  "away36",
+  "lock37",
+  "own37",
+  "away37",
   "tab1Y",
   "lock8",
   "own8",
@@ -2486,6 +2534,8 @@
   "cd3n7",
   "cd3n8",
   "cd3n9",
+  "sgJarS",
+  "sgJar",
   "toolFood",
   "b0y",
   "toolShrimp",
@@ -2511,7 +2561,22 @@
   "gelPress",
   "storeHot",
   "storeO",
-  "storeY"
+  "storeY",
+  "sgGlow",
+  "sg0",
+  "sg1",
+  "sg2",
+  "sg3",
+  "sg4",
+  "sg5",
+  "sg6",
+  "sg7",
+  "sg8",
+  "sg9",
+  "sgX",
+  "sgY",
+  "sgO",
+  "sgS"
  ],
  "nested": {
   "pattern": "^j([0-6])(.+)$",
@@ -2624,6 +2689,38 @@
    9
   ],
   "theme": 4
+ },
+ "seaGlass": {
+  "jar": {
+   "x": 534,
+   "y": 21,
+   "hit": {
+    "x": 504,
+    "y": 0,
+    "w": 60,
+    "h": 42
+   }
+  },
+  "items": [
+   "green",
+   "brown",
+   "white",
+   "cobalt",
+   "red",
+   "cowrie",
+   "scallop",
+   "conch",
+   "fossil",
+   "nautilus"
+  ],
+  "decor": [
+   11,
+   12
+  ],
+  "shopItems": [
+   36,
+   37
+  ]
  },
  "store": {
   "x": 216,

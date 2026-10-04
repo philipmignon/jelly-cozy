@@ -9,7 +9,8 @@ import { createSettings } from "./hud";
 import { createJournal } from "./journal";
 import { openAlbum, shrink } from "./album";
 import { createAlbumPage } from "./albumpage";
-import { createKeepNote } from "./keepnote";
+import { createKeepNote, type KeepNoteEntry } from "./keepnote";
+import { createCollectionPage } from "./collection";
 import { captionDate, capture, flash, photoFilename, savePng, toPng } from "./photo";
 import { clearVisit, createBackupPanel, createSharePanel, pendingVisit, showNote, showVisitBar } from "./share";
 import { createOverlay, type JellyCardInfo } from "./overlay";
@@ -20,13 +21,16 @@ import { createRequestNote, type RequestNote } from "./requestnote";
 import { attachRoom, type Room } from "./roomfit";
 import { testQuery } from "./testmode";
 import type { TestHost } from "./testapi";
-import { SPECIES_NAMES, TAB_N, keepsakeOf } from "./species";
+import { SPECIES_NAMES, TAB_N, collectionOf, keepsakeOf } from "./species";
 import { createSpriteGroups, eventGroup, groupsFor, jellyGroups, speciesGroup, useSpriteGroups } from "./spritegroups";
 import {
   K,
   SHOP_ITEMS,
   buy,
   closeShop,
+  collection,
+  FIND_ITEMS,
+  FIND_SETS,
   createState,
   decorAt,
   dropDecor,
@@ -197,17 +201,22 @@ async function main() {
     growthMultiplier: DEMO ? 1 : growthMultiplier,
     requests: !READ_ONLY,
     keepsakes: !READ_ONLY, // v13: milestones only count (and keepsakes only unlock) in the player's own tank
+    finds: !READ_ONLY, // v16: sea glass and shells only turn up in the player's own tank
     ...(READ_ONLY ? {} : { seasonalMorph: (now: number) => seasonalMorph(now, location.search) }),
   });
   const audio = createTankAudio();
   const overlay = createOverlay();
   // v14: the journal's Visitors page (the visitor log) and the photo Album (IndexedDB; null where storage is blocked)
   const albumPage = createAlbumPage(openAlbum, savePng);
-  const book = createJournal(() => journal(state), () => keepsakes(state), { visitors: () => visitorLog(state), album: albumPage });
+  // v16: the Collection drawer (sea glass and shells), after the Keepsakes
+  const collectionPage = createCollectionPage(() => collection(state));
+  const book = createJournal(() => journal(state), () => keepsakes(state), { visitors: () => visitorLog(state), album: albumPage, collection: collectionPage });
   // v13: keepsake notes wait their turn: after the away note, never over a tip or another note.
   // Milestones an older save already reached on load arrive as one summary (one entry in the queue).
-  const keepNote = createKeepNote(() => book.open("keepsakes"));
-  const keepQueue: number[][] = [];
+  const keepNote = createKeepNote((place) => book.open(place === "collection" ? "collection" : "keepsakes"));
+  const keepQueue: KeepNoteEntry[][] = [];
+  const keepEntries = (ms: number[]): KeepNoteEntry[] =>
+    ms.flatMap((m) => (MILESTONES[m] ? [{ m, note: MILESTONES[m].note, title: MILESTONES[m].title, reward: MILESTONES[m].reward }] : []));
   let keepReady = false;
   let keepShowing = false;
   const showKeeps = async () => {
@@ -218,16 +227,17 @@ async function main() {
         await new Promise((r) => setTimeout(r, 400));
         continue;
       }
-      const ms = keepQueue.shift()!;
+      const entries = keepQueue.shift()!;
+      if (!entries.length) continue;
       audio.play("unlock");
       buzz([20, 40, 20]);
-      await keepNote.show(ms.flatMap((m) => (MILESTONES[m] ? [{ m, note: MILESTONES[m].note, title: MILESTONES[m].title, reward: MILESTONES[m].reward }] : [])));
+      await keepNote.show(entries);
     }
     keepShowing = false;
   };
   const loadedKeeps = keepsakesAtLoad(state);
   if (loadedKeeps.length) {
-    keepQueue.push(loadedKeeps);
+    keepQueue.push(keepEntries(loadedKeeps));
     persist(state); // their rewards are in: keep them even if the page closes before the next autosave
   }
   const sharePanel = createSharePanel(
@@ -413,6 +423,13 @@ async function main() {
   let dragEndedAt = -Infinity;
   const carrying = () => dragging >= 0 || performance.now() - dragEndedAt < 400;
   for (const name of Object.keys(press) as ButtonName[]) on(name, () => carrying() || press[name]());
+  // v16: the jar in the hood opens the journal on the Collection (not in a read-only tank: it isn't shown there)
+  on("finds", () => {
+    if (READ_ONLY || carrying() || isShopOpen(state) || book.isOpen) return;
+    overlay.closeCard();
+    audio.play("ui");
+    book.open("collection");
+  });
   Array.from({ length: TAB_N }, (_, t) => t).forEach((t) =>
     on(`tab${t}`, () => {
       if (!isShopOpen(state)) return;
@@ -453,6 +470,15 @@ async function main() {
       if (m && c) {
         const at = client(c.x + c.w / 2, c.y + 30 - state.shopScroll);
         overlay.nameTag(`Keepsake: ${m.title}`, at.x, at.y);
+      }
+    } else if (r === "collection") {
+      // v16: a collection set's reward: the card's tag says which set leaves it
+      audio.play("ui");
+      const st = FIND_SETS[collectionOf(SHOP_ITEMS[i])];
+      const c = (K.shopCards as unknown as ({ x: number; y: number; w: number } | null)[] | undefined)?.[i];
+      if (st && c) {
+        const at = client(c.x + c.w / 2, c.y + 30 - state.shopScroll);
+        overlay.nameTag(`Collection: ${st.title}`, at.x, at.y);
       }
     } else if (r === "selected") {
       audio.play("ui"); // an owned theme picked again
@@ -874,6 +900,32 @@ async function main() {
           // v13: a jelly rode the bubbler to the top: a soft pop where you can see it
           if (e.seen) audio.play("plop");
           break;
+        case "found": {
+          // v16: sea glass or a shell rises from where it was found and flies to the jar: a soft chime; a new kind
+          // gets its name over the spot
+          audio.play("chime");
+          buzz(10);
+          const it = FIND_ITEMS[e.find ?? -1];
+          if (it && e.first && e.x !== undefined && e.y !== undefined) {
+            const at = wclient(e.x, e.y - 120);
+            overlay.nameTag(`New: ${it.name}`, at.x, at.y);
+          }
+          persist(state);
+          break;
+        }
+        case "setDone": {
+          // v16: a set is complete: its decoration is in (with a sparkle); a note once the find has landed in the jar
+          const st = FIND_SETS[e.set ?? -1];
+          if (st) {
+            const entry: KeepNoteEntry = { m: -1, note: st.note, title: st.title, reward: st.reward, art: `sgr${e.set}`, heading: "Set complete!", place: "collection" };
+            setTimeout(() => {
+              keepQueue.push([entry]);
+              void showKeeps();
+            }, reduceMotion ? 1600 : 2500);
+          }
+          persist(state);
+          break;
+        }
         case "themed":
           audio.play("unlock");
           persist(state);
@@ -884,7 +936,7 @@ async function main() {
           break;
         case "keepsake":
           // v13: a milestone reached in play: its keepsake is already in (with a sparkle); a note says so
-          if (e.keepsake !== undefined) keepQueue.push([e.keepsake]);
+          if (e.keepsake !== undefined) keepQueue.push(keepEntries([e.keepsake]));
           persist(state);
           void showKeeps();
           break;

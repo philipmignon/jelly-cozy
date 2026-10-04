@@ -49,6 +49,11 @@
  *                       a little more fullness and a bigger happy flush
  *   "rode"    slot, x, y, seen  (v13) a jelly rode the bubbler's column to the top (x: the column, y: the jelly);
  *                       `seen` when the bubbler was on screen (that's what the "watch a jelly ride" request counts)
+ *   "found"   find, source, x, y, first, amount  (v16) a bit of sea glass or a shell turned up (index into FIND_ITEMS)
+ *                       where it was found (world); `first` the first of its kind; a duplicate's sand dollars come
+ *                       as `amount` with an "earned" (same x, y) straight after. Only with SimOptions.finds
+ *   "setDone" set       (v16) the find before it completed a collection set (index into FIND_SETS): its decoration
+ *                       is already in the tank (with a sparkle), the shop's card unlocked. Once per set, ever
  *
  * v13 PERSONALITIES (./traits.ts): every jelly has a trait for life (Jelly.trait; saves before v13 derive one from
  * the name). Shy ones hide by the rocks when the glass is tapped near them or a held item is swept past fast;
@@ -87,6 +92,7 @@ import {
   foodItem,
   themeItem,
   keepsakeOf,
+  collectionOf,
   SPECIES_N,
   AWAY_GROWTH_CAP,
   AWAY_LINES_MAX,
@@ -272,6 +278,24 @@ import { MILESTONES, copyKeep, countDay, isEarned, keepFacts, keepOf, newlyReach
 import { GEL_N, anyGel, gelFields, gelsOf, nextGel, setGel, uvLightOf, type GelState } from "./gels";
 // ---- temperature ----
 import { climateField, climateOf, comfortOf, driftTemp, setPoint, stepClimate, tempGrowth, tempMood, tempReading, toggleDevice, zoneOf, TEMP_NEAR, type Climate, type SaveClimate } from "./temperature";
+import {
+  FIND_ITEMS,
+  FIND_N,
+  FIND_SETS,
+  GLASS,
+  SIFT_STEP,
+  addFind,
+  completeSets,
+  copyFinds,
+  findChance,
+  findsOf,
+  newFinds,
+  pickFind,
+  setDone,
+  setProgress,
+  type FindSave,
+  type FindSource,
+} from "./finds";
 
 export { K, clamp, sandAt, specProps, SHOP_ITEMS, POLYP_ANCHORS, SETTLE_SPOTS, DECOR, TAB_ITEMS, NAMES, OPEN_SAND, OPEN_SANDS, TIERS, MAX_SLOTS, geomOf };
 export type { Species, Stage, Snail, Walker, Cam, Visit, VisitorKind, Spot, SaveSpot, FoodKind };
@@ -279,7 +303,8 @@ export { favouriteFood, FOOD_NAMES, FOOD_KINDS, THEME_N, THEME_NAMES, foodItem, 
 export { SPOT_N, murkOf, spotsForMurk };
 export { VISITORS };
 export { MORPH_NONE, MORPH_CLASSIC, MORPH_GHOST, requestText, rewardOf };
-export type { DailyRequests, Request, RequestKind, KeepSave };
+export type { DailyRequests, Request, RequestKind, KeepSave, FindSave, FindSource };
+export { FIND_ITEMS, FIND_SETS };
 export { MILESTONES };
 export { TRAIT_NAMES, TRAIT_PHRASES, traitFromName };
 export type { Trait };
@@ -398,6 +423,8 @@ export interface Save {
   /** ---- temperature ---- (optional): the heater and chiller, the thermostat setting and the water's °C (./temperature.ts);
    *  absent = neither owned, room temperature */
   climate?: SaveClimate;
+  /** v16 (optional): sea glass and shells found, the sets completed (./finds.ts); absent until the first find */
+  finds?: FindSave;
 }
 
 // ---------------------------------------------------------------- state
@@ -472,7 +499,9 @@ export interface Jelly {
 export type SimEventType = "ate" | "pulse" | "cleaned" | "grew" | "adult" | "earned" | "baby" | "dug" | "shrimpAte" | "pearlReady" | "pearl" | "rehomed" | "upgraded" | "revealed" | "visitorArrived" | "visitorTapped" | "visitorLeft" | "spotCleaned" | "themed" | "requestDone" | "rode" | "keepsake"
   // ---- lamp gels ---- "gel" (gel): a gel went on the lamp; ---- temperature ---- "thermo" (dir, set): a shelf unit
   // was switched; "settled" (set, temp): the water reached its setting
-  | "gel" | "thermo" | "settled";
+  | "gel" | "thermo" | "settled"
+  // v16 sea glass: "found" (find, source, first, amount), "setDone" (set)
+  | "found" | "setDone";
 export interface SimEvent {
   type: SimEventType;
   slot?: number;
@@ -498,15 +527,18 @@ export interface SimEvent {
   seen?: boolean;
   /** v13 "keepsake": which milestone (index into MILESTONES) */
   keepsake?: number;
-  /** v14 "visitorArrived": the first time this kind ever came (it's new in the visitor log) */
+  /** v14 "visitorArrived": the first time this kind ever came (it's new in the visitor log); v16 "found": the first of its kind */
   first?: boolean;
   /** ---- lamp gels ---- "gel": the gel now on the lamp (0 Clear .. 3 UV) */
   gel?: number;
   /** ---- temperature ---- "thermo": which unit (1 heater, -1 chiller); "thermo", "settled": the setting (-1 cool, 0 room,
-   *  1 warm) and the water's temperature (°C) */
+   *  1 warm) and the water's temperature (°C). v16 "setDone": `set` is which collection set (index into FIND_SETS) */
   dir?: number;
   set?: number;
   temp?: number;
+  /** v16 "found": which find (index into FIND_ITEMS) and what turned it up */
+  find?: number;
+  source?: FindSource;
 }
 
 export interface State {
@@ -617,6 +649,13 @@ export interface State {
   gels: GelState;
   /** ---- temperature ---- the heater, the chiller, the setting and the water (./temperature.ts) */
   climate: Climate;
+  /** v16: sea glass and shells (null: none found yet), whether finds turn up (SimOptions.finds), their own random
+   *  stream (so the rest plays out as it did), the find on its way to the jar, and the sponge's travel on the sand */
+  finds: FindSave | null;
+  findsOn: boolean;
+  findRand: () => number;
+  find: { item: number; x: number; y: number; t0: number } | null;
+  sift: number;
 }
 
 /** v8: what the player has in hand. v11: "shrimp" (the brine shrimp jar) and "plankton" (the bottle) are foods too. */
@@ -643,6 +682,8 @@ export interface SimOptions {
   requests?: boolean;
   /** v13: evaluate the journal's milestones and grant keepsakes (the host's own tank). Off by default, like requests. */
   keepsakes?: boolean;
+  /** v16: sea glass and shells turn up (the host's own tank). Off by default: the demo, visits and tests find nothing. */
+  finds?: boolean;
   /**
    * Tests (?seed=N, src/testmode.ts): the dirt's and the traits' own random streams start from this instead of the
    * save's clock, so a seeded tank (with `rand` seeded too) plays out the same whenever it is loaded.
@@ -944,6 +985,7 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
     ...seenField(visitorsSeenOf(raw.visitorsSeen)),
     ...gelFields(gelsOf(raw.gels, raw.gel)), // ---- lamp gels ----
     ...climateField(climateOf(raw.climate)), // ---- temperature ----
+    ...findsField(findsOf(raw.finds)),
   };
 }
 
@@ -951,6 +993,8 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
 const requestsField = (r: DailyRequests | null): { requests?: DailyRequests } => (r ? { requests: copyRequests(r) } : {});
 /** v13: the optional `keep` save field: only there once keepsakes have been evaluated. */
 const keepField = (k: KeepSave | null): { keep?: KeepSave } => (k ? { keep: copyKeep(k) } : {});
+/** v16: the optional `finds` save field: only there once something has been found. */
+const findsField = (f: FindSave | null): { finds?: FindSave } => (f ? { finds: copyFinds(f) } : {});
 /** v15: which owned decorations a save has put away (missing or damaged: none; only owned ones can be). */
 const storedOf = (raw: unknown, owned: readonly boolean[]) => Array.from({ length: DECOR_N }, (_, i) => owned[i] === true && Array.isArray(raw) && raw[i] === true);
 /** v15: the optional `stored` save field: only there while something is put away. */
@@ -1338,10 +1382,16 @@ export function createState(save: Save, rand: () => number = Math.random, opts: 
     visitorsSeen: visitorsSeenOf(save.visitorsSeen),
     gels: gelsOf(save.gels, save.gel), // ---- lamp gels ----
     climate: climateOf(save.climate), // ---- temperature ----
+    finds: findsOf(save.finds),
+    findsOn: opts.finds === true,
+    findRand: rng((seed ?? Math.floor(clock / 1000)) + 31),
+    find: null,
+    sift: 0,
   };
   state.theme = themeOf(save.theme, state.themes);
   for (const j of jellies(state)) noteJelly(state, j);
   if (state.keepOn) state.keepAtLoad = loadKeepsakes(state, save);
+  if (state.findsOn) loadFinds(state);
   // the hints start where they belong: no fade-in on load
   state.hints = { l: hintTarget(state, -1), r: hintTarget(state, 1) };
   return state;
@@ -1377,6 +1427,7 @@ export function toSave(s: State, now: number): Save {
     ...seenField(s.visitorsSeen),
     ...gelFields(s.gels), // ---- lamp gels ----
     ...climateField(s.climate), // ---- temperature ----
+    ...findsField(s.finds),
   };
 }
 
@@ -1690,6 +1741,7 @@ function spotGone(s: State, i: number, paid: boolean): void {
   const before = s.dollars;
   s.dollars = Math.min(MAX_DOLLARS, s.dollars + SPOT_PAY);
   if (s.dollars > before) s.queued.push({ type: "earned", amount: s.dollars - before, x: sp.x, y: sp.y });
+  rollFind(s, "scrub", sp.x, sp.y, s.queued); // v16: something was stuck under it
 }
 
 /**
@@ -1711,7 +1763,26 @@ export function scrubAt(s: State, x: number, y: number, distance: number): numbe
     if (sp.dirt <= 1e-9) spotGone(s, i, true);
   });
   syncMurk(s);
+  siftAt(s, x, y, distance);
   return got;
+}
+
+/** v16: is a WORLD point on the sand (the sponge there sifts it)? */
+export const onSand = (s: State, x: number, y: number) =>
+  x >= K.glassL && x <= rightGlass(s) && y >= sandAt(x) - 2 * P && y <= K.waterBot;
+
+/**
+ * v16: the sponge rubbed over the sand sifts it: every SIFT_STEP px of it (one call counts at most SCRUB_STEP_MAX)
+ * is a chance of a find there. Called by scrubAt; returns whether the point was on the sand.
+ */
+function siftAt(s: State, x: number, y: number, distance: number): boolean {
+  if (!s.findsOn || !onSand(s, x, y)) return false;
+  s.sift += clamp(distance, 0, SCRUB_STEP_MAX);
+  if (s.sift >= SIFT_STEP) {
+    s.sift -= SIFT_STEP;
+    rollFind(s, "sift", x, sandAt(x), s.queued);
+  }
+  return true;
 }
 
 /** Dirty spots on the glass now: slot, where (world), dirt and kind. */
@@ -1870,7 +1941,7 @@ export function closeShop(s: State): void {
  * already that big, or the theme already in use). v15: an owned decoration's card puts it away ("putAway") or, if
  * it's in the drawer, places it again ("placed"): no charge, the host persists. The shop stays open for both.
  */
-export type BuyResult = "bought" | "cantAfford" | "tankFull" | "owned" | "needsMedium" | "needsLarge" | "selected" | "keepsake" | "putAway" | "placed";
+export type BuyResult = "bought" | "cantAfford" | "tankFull" | "owned" | "needsMedium" | "needsLarge" | "selected" | "keepsake" | "putAway" | "placed" | "collection";
 
 /** A unique name for a new jelly. */
 const newName = (s: State) => pickName(jellies(s).map((j) => j.name), s.rand());
@@ -2002,6 +2073,8 @@ export function buy(s: State, i: number): BuyResult {
   // once earned it's owned like a bought one (a theme can be picked again, a decoration is already in)
   const owns = item.kind === "theme" ? s.themes[item.theme] === true : item.kind === "decor" && s.owned[item.d] === true;
   if (keepsakeOf(item) >= 0 && !owns) return "keepsake";
+  // v16: the collection's set rewards aren't sold either: the card says which set leaves it ("collection")
+  if (collectionOf(item) >= 0 && !owns) return "collection";
   if (item.kind === "theme") {
     if (s.themes[item.theme]) return item.theme === s.theme ? "owned" : setTheme(s, item.theme) ? "selected" : "owned";
     if (s.dollars < item.price) return "cantAfford";
@@ -2247,7 +2320,7 @@ export function decorOverlaps(s: State): number[] {
   const w = DECOR[n]!.w;
   const out: number[] = [];
   for (let m = 0; m < DECOR_N; m++) {
-    if (m === n || !placed(s, m)) continue;
+    if (m === n || !placed(s, m) || DECOR[m]!.hang !== DECOR[n]!.hang) continue; // v16: one hanging from the hood is in nobody's way on the sand
     const gap = Math.abs(x - s.decorX[m]!) - (w + DECOR[m]!.w) / 2;
     if (gap < -OVERLAP_MIN) out.push(m);
   }
@@ -2281,6 +2354,8 @@ const requestTank = (s: State) => ({
   night: isNightByClock(s.clock) && ![5, 6].includes(new Date(s.clock).getHours()),
   // ---- temperature ---- what the thermostat can do, and where the water is now
   climate: { heater: s.climate.heater, chiller: s.climate.chiller, zone: zoneOf(s.climate.temp) },
+  // v16: a piece of sea glass can turn up in the player's own tank, and there's enough of the day left to find one
+  seaglass: s.findsOn && new Date(s.clock).getHours() < 20,
 });
 
 /** Plan today's requests if the day has turned (or none were planned yet). Unfinished ones from another day just go. */
@@ -2312,6 +2387,7 @@ function stepRequests(s: State, events: SimEvent[]): void {
     else if (e.type === "pearl") requestDeed(s, { kind: "pearl" }, events);
     else if (e.type === "visitorTapped") requestDeed(s, { kind: "visitor" }, events);
     else if (e.type === "rode" && e.seen) requestDeed(s, { kind: "ride" }, events);
+    else if (e.type === "found" && FIND_ITEMS[e.find ?? -1]?.set === GLASS) requestDeed(s, { kind: "seaglass" }, events);
     else if (e.type === "visitorArrived" && e.kind && VISITOR_NIGHT[VISITORS.indexOf(e.kind)]) requestDeed(s, { kind: "night" }, events);
   }
   // ---- temperature ---- "set the tank to what a <species> likes": done once the water suits one of them
@@ -2392,6 +2468,138 @@ export function keepsakes(s: State): { m: number; title: string; progress: numbe
 
 /** v13: the milestones granted quietly while loading (an older save that already reached them), for one summary note. */
 export const keepsakesAtLoad = (s: State): number[] => [...s.keepAtLoad];
+
+// ---- sea glass ---- (v16) finds, the collection and its set rewards (./finds.ts)
+
+/** Set `set`'s reward: its decoration goes in where there's room (one already owned stays put, or put away). */
+function grantSet(s: State, set: number): number {
+  const d = FIND_SETS[set]?.decor ?? -1;
+  if (d < 0 || d >= DECOR_N) return -1;
+  if (!s.owned[d]) s.decorX[d] = clearSpotFor(s, d);
+  s.owned[d] = true;
+  return d;
+}
+
+/** At load (SimOptions.finds): rewards already earned are made sure of (re-granted, never announced again). */
+function loadFinds(s: State): void {
+  const f = s.finds;
+  if (!f) return;
+  f.sets &= completeSets(f);
+  FIND_SETS.forEach((_, set) => setDone(f, set) && grantSet(s, set));
+}
+
+/** Today's "Find a piece of sea glass" request is open: sea glass turns up more often. */
+const glassWanted = (s: State) => s.requestsOn && !!s.requests?.items.some((r) => r.kind === "seaglass" && !r.done && s.requests?.day === dayKey(s.clock));
+
+/**
+ * Maybe a find, from `src` at WORLD (x, y): its chance (./finds.ts findChance, slower after the day's first few),
+ * then which kind. One at a time: while one is still on its way to the jar, nothing else turns up. A first of its
+ * kind is just kept; a duplicate pays its few sand dollars; a set completed leaves its decoration (with a sparkle).
+ */
+function rollFind(s: State, src: FindSource, x: number, y: number, out: SimEvent[]): void {
+  if (!s.findsOn || s.find || !Number.isFinite(x) || !Number.isFinite(y)) return;
+  const day = dayKey(s.clock);
+  if (s.findRand() >= findChance(src, s.finds, day)) return;
+  const f = (s.finds ??= newFinds());
+  const item = pickFind(f, s.findRand(), glassWanted(s));
+  const got = addFind(f, item, day);
+  s.find = { item, x, y, t0: s.t };
+  out.push({ type: "found", find: item, source: src, x, y, first: got.first, ...(got.pay ? { amount: got.pay } : {}) });
+  if (got.pay) {
+    const before = s.dollars;
+    s.dollars = Math.min(MAX_DOLLARS, s.dollars + got.pay);
+    if (s.dollars > before) out.push({ type: "earned", amount: s.dollars - before, x, y });
+  }
+  for (const set of got.sets) {
+    const d = grantSet(s, set);
+    if (d >= 0 && placed(s, d)) s.fx = { x: s.decorX[d] ?? DECOR[d]!.x, y: decorBaseY(s, d) - DECOR[d]!.h / 2, t0: s.t };
+    out.push({ type: "setDone", set });
+  }
+}
+
+/** v16: the collection for the journal's drawer: each kind (how many, which set) and each set's progress. */
+export function collection(s: State): {
+  items: { i: number; key: string; name: string; set: number; rare: number; n: number }[];
+  sets: { set: number; title: string; hint: string; progress: number; n: number; done: boolean; item: number; reward: string }[];
+  total: number;
+} {
+  const f = s.finds ?? newFinds();
+  return {
+    items: FIND_ITEMS.map((it, i) => ({ i, key: it.key, name: it.name, set: it.set, rare: it.rare, n: f.n[i] ?? 0 })),
+    sets: FIND_SETS.map((st, set) => ({ set, title: st.title, hint: st.hint, progress: setProgress(f, set), n: st.items.length, done: setDone(f, set), item: st.item, reward: st.reward })),
+    total: f.n.reduce((a, b) => a + b, 0),
+  };
+}
+
+/** How long a find takes: rising from where it was found, a moment to see it, the flight into the jar, the jar's bump. */
+const SG_RISE = 0.9;
+const SG_HOLD = 0.55;
+const SG_FLY = 0.6;
+const SG_BUMP = 0.35;
+/** reduce motion: it just shows over where it was found, then fades */
+const SG_STILL = 1.5;
+/** how far it rises (artboard px) */
+const SG_LIFT = 42;
+/** the jar in the hood (screen, artboard units): its middle, where a find flies to (contract seaGlass.jar) */
+const SG_JAR = (() => {
+  const o = (K as unknown as { seaGlass?: { jar?: { x?: number; y?: number } } }).seaGlass?.jar ?? {};
+  return { x: o.x ?? 546, y: o.y ?? 21 };
+})();
+const sgDone = (s: State) => s.find !== null && s.t - s.find.t0 >= (s.reducedMotion ? SG_STILL : SG_RISE + SG_HOLD + SG_FLY + SG_BUMP);
+
+/** v16: the find on its way (screen space, so it can fly into the hood's jar), and the jar. */
+function writeFind(v: View, s: State): void {
+  const f = sgDone(s) ? null : s.find;
+  let x = 0;
+  let y = 0;
+  let o = 0;
+  let sc = 1;
+  let glow = 0;
+  let jar = 1;
+  if (f) {
+    const age = s.t - f.t0;
+    // where it came from, kept inside the glass (a crab's dig off screen comes in from the edge)
+    const x0 = clamp(worldToScreen(s, f.x), K.glassL + 24, K.glassR - 24);
+    const y0 = clamp(worldToScreenY(s, f.y), K.waterTop + SG_LIFT + 24, K.waterBot - 6);
+    x = x0;
+    y = y0 - SG_LIFT * 0.6;
+    if (s.reducedMotion) {
+      o = age < 0.2 ? age / 0.2 : age > SG_STILL - 0.3 ? clamp((SG_STILL - age) / 0.3) : 1;
+      glow = o * 0.6;
+    } else if (age < SG_RISE + SG_HOLD) {
+      const e = 1 - (1 - clamp(age / SG_RISE)) ** 3;
+      y = y0 - SG_LIFT * e;
+      o = clamp(age / 0.15);
+      glow = age < SG_RISE ? 0.4 + 0.6 * e : 1 - 0.6 * ((age - SG_RISE) / SG_HOLD);
+    } else if (age < SG_RISE + SG_HOLD + SG_FLY) {
+      // an arc up and over into the jar, shrinking as it goes
+      const q = clamp((age - SG_RISE - SG_HOLD) / SG_FLY);
+      const e = q * q * (3 - 2 * q);
+      const ax = x0;
+      const ay = y0 - SG_LIFT;
+      const cx = (ax + SG_JAR.x) / 2;
+      const cy = Math.min(ay, SG_JAR.y) - 60;
+      x = (1 - e) ** 2 * ax + 2 * (1 - e) * e * cx + e * e * SG_JAR.x;
+      y = (1 - e) ** 2 * ay + 2 * (1 - e) * e * cy + e * e * SG_JAR.y;
+      sc = 1 - 0.45 * e;
+      o = 1;
+      glow = 0.4 * (1 - e);
+    } else {
+      const q = clamp((age - SG_RISE - SG_HOLD - SG_FLY) / SG_BUMP);
+      jar = 1 + 0.22 * Math.sin(Math.PI * q);
+    }
+  }
+  v.sgX = snap(x);
+  v.sgY = snap(y);
+  v.sgO = Math.round(clamp(o) * 100) / 100;
+  v.sgS = Math.round(sc * 100) / 100;
+  v.sgGlow = Math.round(clamp(glow) * 100) / 100;
+  for (let i = 0; i < FIND_N; i++) v[`sg${i}`] = f && f.item === i ? 1 : 0;
+  v.sgJar = s.findsOn ? 1 : 0;
+  v.sgJarS = Math.round(jar * 100) / 100;
+}
+
+// ---- end sea glass ----
 
 /** Where the pearl is (follows the clam). */
 export function pearlCentre(s: State): { x: number; y: number } {
@@ -2988,7 +3196,8 @@ type SandRun = { x: number; w: number; tier?: number; cost?: number };
  */
 export function clearSpotFor(s: State, n: number): number {
   const d = DECOR[n]!;
-  const taken: SandRun[] = s.owned.flatMap((_, m) => (placed(s, m) && m !== n ? [{ x: s.decorX[m] ?? DECOR[m]!.x, w: DECOR[m]!.w }] : []));
+  if (d.hang) return decorClampX(n, d.x, s.tier); // v16: the wind chime hangs from the hood where it always does
+  const taken: SandRun[] = s.owned.flatMap((_, m) => (placed(s, m) && m !== n && !DECOR[m]!.hang ? [{ x: s.decorX[m] ?? DECOR[m]!.x, w: DECOR[m]!.w }] : []));
   const k = K as unknown as { chest?: SandRun; seasons?: Record<string, { sand?: SandRun[] }> };
   if (k.chest) taken.push({ ...k.chest, cost: 4 });
   if (s.event) for (const r of k.seasons?.[s.event]?.sand ?? []) if ((r.tier ?? 0) <= s.tier) taken.push({ ...r, cost: 0.5 });
@@ -3109,7 +3318,9 @@ function stepRide(s: State, slot: number, j: Jelly, b: Geom["bounds"], events: S
   // over the top: drift back down beside the column, on the roomier side
   j.ride = 0;
   const v = viewSpan(s);
-  events.push({ type: "rode", slot, x: col.x, y: c.y, seen: col.x >= v.x0 && col.x <= v.x1 });
+  const seen = col.x >= v.x0 && col.x <= v.x1;
+  events.push({ type: "rode", slot, x: col.x, y: c.y, seen });
+  if (seen) rollFind(s, "ride", col.x, col.bottom, events); // v16: the bubbles stirred something up from the crater
   const side = col.x - b.x0 > b.x1 - col.x ? -1 : 1;
   j.vx += side * RIDE_KICK; // it lets go and tips out of the column
   j.vy = Math.max(0, j.vy);
@@ -3445,6 +3656,7 @@ export function step(s: State, dt: number): SimEvent[] {
   // v12: today's requests (planned on the first step of a day) count what just happened
   stepRequests(s, events);
   stepKeepsakes(s, events);
+  if (sgDone(s)) s.find = null; // v16: the find is in the jar: the next can turn up
 
   return events;
 }
@@ -3557,6 +3769,7 @@ function stepHelpers(s: State, dt: number, events: SimEvent[]): void {
     s.fx = { x: s.crab.x, y: s.crab.y - CRAB_SIZE.h / 2, t0: s.t };
     events.push({ type: "dug", amount: DIG_REWARD });
     earn(s, DIG_REWARD, events);
+    rollFind(s, "dig", s.crab.x, s.crab.y - CRAB_SIZE.h / 2, events); // v16: and now and then a little more
   }
 }
 
@@ -3809,7 +4022,7 @@ export function view(s: State): View {
       return;
     }
     // v13: a keepsake's card is locked until its milestone is reached, whatever the dollars
-    const keep = keepsakeOf(item) >= 0;
+    const keep = keepsakeOf(item) >= 0 || collectionOf(item) >= 0; // v16: a set reward too
     if (item.kind === "theme") {
       // v11: owned themes stay bright (tap to use one again): "IN USE" on the active one, "OWNED" on the rest
       const has = s.themes[item.theme] === true;
@@ -3869,6 +4082,7 @@ export function view(s: State): View {
   // slow, and the parallax layers move with the camera
   v.calm = s.reducedMotion ? 1 : 0;
   v.pearl = pearlShowing(s) ? 1 : 0;
+  writeFind(v, s);
 
   // helpers
   const sn = s.snail;

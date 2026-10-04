@@ -6,6 +6,7 @@
 import contract from "./contract.json";
 import { SEASONS } from "./season";
 import { GEL_N } from "./gels";
+import { FIND_N } from "./finds";
 
 export interface Body {
   /** half body width */
@@ -499,7 +500,7 @@ export const THEME_NAMES = ["Reef", "Kelp Forest", "Coral Garden", "Arctic", "Mo
 
 export type ShopItem =
   | { name: string; price: number; kind: "polyp"; k: Species; needTier?: number }
-  | { name: string; price: number; kind: "decor"; d: number; keepsake?: number }
+  | { name: string; price: number; kind: "decor"; d: number; keepsake?: number; collection?: number }
   | { name: string; price: number; kind: "helper"; h: number }
   | { name: string; price: number; kind: "tank"; tier: number }
   | { name: string; price: number; kind: "food"; f: FoodKind }
@@ -549,17 +550,27 @@ export const SHOP_ITEMS: readonly ShopItem[] = [
   // ---- temperature ---- (SUPPLIES tab): units on the shelf's back wall; tap one to switch it on or off
   { name: "HEATER", price: 90, kind: "climate", dir: 1 },
   { name: "CHILLER", price: 110, kind: "climate", dir: -1 },
+  // ---- sea glass ---- the collection's set rewards (./finds.ts): never sold, `collection` = the set that leaves it
+  { name: "SEA-GLASS CHIME", price: 0, kind: "decor", d: 11, collection: 0 },
+  { name: "SHELL GROTTO", price: 0, kind: "decor", d: 12, collection: 1 },
+  // ---- end sea glass ----
 ];
 /** v13: the milestone that earns shop item `it` (./keepsakes.ts), or -1 for anything the shop sells. */
 export const keepsakeOf = (it: ShopItem | undefined): number => (it && (it.kind === "decor" || it.kind === "theme") ? it.keepsake ?? -1 : -1);
+/** v16: the collection set that earns shop item `it` (./finds.ts), or -1. */
+export const collectionOf = (it: ShopItem | undefined): number => (it && it.kind === "decor" ? it.collection ?? -1 : -1);
 /** The shop item that sells food kind f (18 BRINE SHRIMP, 19 PLANKTON), -1 for flakes. */
 export const foodItem = (f: number) => SHOP_ITEMS.findIndex((it) => it.kind === "food" && it.f === f);
 /** The shop item for theme n (20 REEF .. 23 ARCTIC). */
 export const themeItem = (n: number) => SHOP_ITEMS.findIndex((it) => it.kind === "theme" && it.theme === n);
 /** The shop item that upgrades to tier t (11 MEDIUM, 12 LARGE). */
 export const tankItem = (t: number) => SHOP_ITEMS.findIndex((it) => it.kind === "tank" && it.tier === t);
-/** v13: decorations 0..4 are sold, 5..9 are keepsakes (from KEEP_DECOR0), 10 is the bubbler (sold, shop item 24) */
-export const DECOR_N = 11;
+/** v13: decorations 0..4 are sold, 5..9 are keepsakes (from KEEP_DECOR0), 10 is the bubbler (sold, shop item 24);
+ *  v16: 11 the sea-glass wind chime (hangs from the hood), 12 the shell grotto: the collection's set rewards */
+export const DECOR_N = 13;
+/** v16: the sea-glass wind chime and the shell grotto (./finds.ts FIND_SETS) */
+export const SG_CHIME = 11;
+export const SG_GROTTO = 12;
 export const KEEP_DECOR0 = 5;
 /** v13: the bubbler's decoration index (shop item 24) */
 export const BUBBLER = 10;
@@ -570,7 +581,7 @@ export const CRAB = 2;
 /** Shop tabs: JELLIES, DECOR, SUPPLIES (helpers + v11 foods), TANK (sizes + v11 themes), as item index ranges. */
 export const TAB_ITEMS: readonly (readonly number[])[] = [
   [0, 13, 1, 14, 2, 15, 16, 17], // JELLIES scrolls (contract.shopScroll)
-  [3, 4, 5, 6, 7, 24, 25, 26, 27, 28, 29], // v13: the bubbler, then the keepsakes; DECOR and TANK scroll too (contract.shopScrollTabs)
+  [3, 4, 5, 6, 7, 24, 25, 26, 27, 28, 29, 36, 37], // v13: the bubbler, then the keepsakes (v16: and the collection's rewards); DECOR and TANK scroll too (contract.shopScrollTabs)
   [8, 9, 10, 18, 19, 34, 35], // ---- temperature ---- the heater and the chiller
   [11, 12, 20, 21, 22, 23, 30, 31, 32, 33], // ---- lamp gels ---- after the themes
 ];
@@ -691,6 +702,8 @@ export interface DecorGeom {
   /** x range that keeps the art inside the glass (always includes the default x) */
   x0: number;
   x1: number;
+  /** v16: it hangs from the hood: its base y stays put wherever it's moved, and nothing on the sand is in its way */
+  hang: boolean;
 }
 
 /** gen.py's v2 spots and the art's measured extents (half width taken from the wider side). */
@@ -707,8 +720,13 @@ const DECOR_FALLBACK: Rect[] = [
   { x: 138, y: 1047, w: 108, h: 78 }, // ship's wheel
   { x: 564, y: 1047, w: 54, h: 81 }, // postbox
   { x: 420, y: 1047, w: 138, h: 66 }, // v13: bubbler (decor 10)
+  // ---- sea glass ---- (gen.py's sea glass block): the wind chime hangs from the hood (its base is the lowest bead)
+  { x: 576, y: 186, w: 72, h: 144 }, // v16: sea-glass wind chime (decor 11)
+  { x: 504, y: 1047, w: 120, h: 75 }, // v16: shell grotto (decor 12)
 ];
-const DECOR_NAMES = ["Castle", "Anchor", "Helmet", "Clam", "GlowCoral", "Bottle", "Lighthouse", "Lantern", "Wheel", "Postbox", "Bubbler"];
+const DECOR_NAMES = ["Castle", "Anchor", "Helmet", "Clam", "GlowCoral", "Bottle", "Lighthouse", "Lantern", "Wheel", "Postbox", "Bubbler", "SgChime", "SgGrotto"];
+/** v16: decorations that hang from the hood instead of standing on the sand (fallback; contract decor[n].hang) */
+const HANG_FALLBACK = [SG_CHIME];
 
 export const DECOR: DecorGeom[] = DECOR_FALLBACK.map((fb, n) => {
   const raw: unknown = Array.isArray(K.decor) ? K.decor[n] : null;
@@ -728,6 +746,7 @@ export const DECOR: DecorGeom[] = DECOR_FALLBACK.map((fb, n) => {
     sink: y - sandAt(x),
     x0: Math.min(lo, x),
     x1: Math.max(hi, x),
+    hang: typeof o.hang === "boolean" ? o.hang : HANG_FALLBACK.includes(n),
   };
 });
 
@@ -760,6 +779,7 @@ export const decorClampX = (n: number, x: number, tier = 0) => {
 /** Base y for a decoration at x: the sand top there plus its default depth, never below the water's bottom edge. */
 export const decorY = (n: number, x: number) => {
   const d = DECOR[n]!;
+  if (d.hang) return d.y; // v16: it hangs from the hood
   return Math.min(Math.max(K.waterBot, d.y), snap(sandAt(x) + d.sink));
 };
 
@@ -822,6 +842,10 @@ export function specProps(foodN = K.foodN): string[] {
   // v15: put away: the overlap outlines while carrying one, the drawer; reduce motion's `calm` for the .riv's own loops
   for (let d = 0; d < DECOR_N; d++) out.push(`dec${d}ov`);
   out.push("storeO", "storeY", "storeHot", "calm");
+  // ---- sea glass ---- (v16) a find rising from where it was found and flying to the jar in the hood: where (screen),
+  // how bright and big, its glow, which kind (sg{i}, one-hot); the jar (shown in the player's own tank) and its bump
+  out.push("sgX", "sgY", "sgO", "sgS", "sgGlow", "sgJar", "sgJarS");
+  for (let i = 0; i < FIND_N; i++) out.push(`sg${i}`);
   out.push("snailOn", "snailX", "snailY", "snailSX", "snailF0", "snailF1");
   for (const h of ["shrimp", "crab"]) out.push(`${h}On`, `${h}X`, `${h}Y`, `${h}SX`, `${h}F0`, `${h}F1`, `${h}F2`, `${h}F3`);
   out.push("camX", "camY", "camZ", "wallX", "panL", "panR");

@@ -200,13 +200,19 @@ export interface DescribeInfo {
   morph?: number;
   trait?: unknown;
   personality?: unknown;
+  /** v16: its mate's name when it's paired */
+  mate?: string | null;
 }
+
+/** v16: each colour morph as said (0 none: nothing). */
+const COLOUR_SAID: Readonly<Record<number, string>> = { 1: "rare colour", 2: "ghost colour", 4: "dusk colour", 5: "pearl colour" };
 
 /** "Muffin, juvenile moon jelly, full, happy, shy" */
 export function describeJelly(i: DescribeInfo): string {
   const trait = [i.trait, i.personality].find((t): t is string => typeof t === "string" && t.trim() !== "");
-  const colour = i.morph === 1 ? "rare colour" : i.morph === 2 ? "ghost colour" : "";
-  return [i.name, jellyKind(i.k, i.g), colour, fullnessWord(i.fullness), moodWord(i.mood), trait?.toLowerCase()].filter(Boolean).join(", ");
+  const colour = COLOUR_SAID[i.morph ?? 0] ?? "";
+  const mate = i.mate ? `paired with ${i.mate}` : "";
+  return [i.name, jellyKind(i.k, i.g), colour, fullnessWord(i.fullness), moodWord(i.mood), trait?.toLowerCase(), mate].filter(Boolean).join(", ");
 }
 
 /** A sim event worth saying out loud, as the step gives it (sim.ts SimEvent). */
@@ -224,6 +230,9 @@ export interface SayEvent {
   seen?: boolean;
   /** v14 "visitorArrived": the first time this kind ever came */
   first?: boolean;
+  /** v16 "baby": the parent's slot, and the other parent's for a pair's baby; "paired": the new pair's second jelly */
+  parent?: number;
+  mate?: number;
 }
 
 /** v14: how each night visitor's arrival is said (they're rare: worth a line of their own). */
@@ -260,8 +269,18 @@ export function eventWords(
       const kind = jellyKind(j.k, j.g);
       return { text: j.g === 1 ? `${j.name} budded into ${article(kind)} ${kind}.` : `${j.name} grew into ${article(kind)} ${kind}.`, low: false };
     }
-    case "baby":
-      return j ? { text: `A new jelly was born: ${j.name}, ${article(jellyKind(j.k, j.g))} ${jellyKind(j.k, j.g)}.`, low: false } : null;
+    case "baby": {
+      if (!j) return null;
+      // v16: a pair's baby names both parents
+      const pa = e.mate !== undefined && e.parent !== undefined ? jelly(e.parent) : null;
+      const pb = pa && e.mate !== undefined ? jelly(e.mate) : null;
+      const from = pa && pb ? ` to ${pa.name} and ${pb.name}` : "";
+      return { text: `A new jelly was born${from}: ${j.name}, ${article(jellyKind(j.k, j.g))} ${jellyKind(j.k, j.g)}.`, low: false };
+    }
+    case "paired": {
+      const m = e.mate !== undefined ? jelly(e.mate) : null;
+      return j && m ? { text: `${j.name} and ${m.name} are a pair now.`, low: false } : null;
+    }
     case "pearlReady":
       return { text: "The pearl is ready.", low: false };
     case "pearl":

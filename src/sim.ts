@@ -22,7 +22,9 @@
  *   "grew"    slot, stage  a jelly reached a new stage (1 ephyra, 2 juvenile, 3 adult); one per stage
  *   "adult"   slot      it just became an adult (fires after its "grew")
  *   "earned"  amount, slot?, x?, y?  dollars were added (meal, clean, pet, stage reward, rehoming)
- *   "baby"    slot, parent  an adult released a polyp of its species into `slot`
+ *   "baby"    slot, parent  an adult released a polyp of its species into `slot`; v16: `mate` too when the
+ *                       baby is a pair's (the other parent's slot)
+ *   "paired"  slot, mate, x, y  (v16) two jellies became a pair (SimOptions.pairs; ./pairs.ts); a sparkle at x, y
  *   "dug"     amount    the hermit crab turned up a sand dollar (an "earned" comes with it)
  *   "shrimpAte"         the cleaner shrimp ate a pellet off the sand
  *   "pearlReady"        today's pearl appeared in the clam (once per day; also on the first step after load)
@@ -114,10 +116,13 @@ import {
   MOON,
   MORPH_CHANCE,
   MORPH_CLASSIC,
+  MORPH_DUSK,
   MORPH_GHOST,
   MORPH_IDS,
   MORPH_INHERIT,
+  MORPH_KNOWN,
   MORPH_NONE,
+  MORPH_PEARL,
   SEASON_MORPH_CHANCE,
   NIGHT_FROM,
   OPEN_SAND,
@@ -268,13 +273,14 @@ import { COLUMN_HALF, CURRENT_HALF, CURRENT_PUSH, CURRENT_TOP_GAP, GLIDE_SHARE, 
 import { SEASONS, type SeasonId } from "./season";
 import { SPRINKLE_NEAR, advance, copyRequests, planRequests, requestText, requestsOf, rewardOf, type DailyRequests, type Deed, type Request, type RequestKind } from "./requests";
 import { MILESTONES, copyKeep, countDay, isEarned, keepFacts, keepOf, newlyReached, progressOf, seedKeep, type KeepSave } from "./keepsakes";
+import { PAIR_DRIFT, PAIR_NEAR, PAIR_SECONDS, PAIR_SIDE, PAIR_SPARK_EVERY, PAIR_SPARK_NEAR, PAIR_SPARK_TIME, bondKey, canPair, pairMorph, pairTrait, stepBond } from "./pairs";
 
 export { K, clamp, sandAt, specProps, SHOP_ITEMS, POLYP_ANCHORS, SETTLE_SPOTS, DECOR, TAB_ITEMS, NAMES, OPEN_SAND, OPEN_SANDS, TIERS, MAX_SLOTS, geomOf };
 export type { Species, Stage, Snail, Walker, Cam, Visit, VisitorKind, Spot, SaveSpot, FoodKind };
 export { favouriteFood, FOOD_NAMES, FOOD_KINDS, THEME_N, THEME_NAMES, foodItem, themeItem };
 export { SPOT_N, murkOf, spotsForMurk };
 export { VISITORS };
-export { MORPH_NONE, MORPH_CLASSIC, MORPH_GHOST, requestText, rewardOf };
+export { MORPH_NONE, MORPH_CLASSIC, MORPH_GHOST, MORPH_DUSK, MORPH_PEARL, requestText, rewardOf };
 export type { DailyRequests, Request, RequestKind, KeepSave };
 export { MILESTONES };
 export { TRAIT_NAMES, TRAIT_PHRASES, traitFromName };
@@ -315,6 +321,8 @@ export interface SaveJelly {
   /** v13 (optional): its personality, 0 shy, 1 curious, 2 sleepy, 3 social (./traits.ts). Missing: derived from
    *  its name and species (traitFromName), so older saves load the same every time */
   trait?: number;
+  /** v16 (optional): its mate's slot (./pairs.ts), on both of a pair; absent = not paired */
+  pair?: number;
 }
 
 /** v7: what the jelly journal knows about one species (journal(s)[k]). */
@@ -457,9 +465,11 @@ export interface Jelly {
   trait: Trait;
   /** v13: a bubbler ride: 0 none, 1 heading for the column, 2 rising in it */
   ride: number;
+  /** v16: its mate's slot (./pairs.ts), -1 when it isn't paired */
+  pair: number;
 }
 
-export type SimEventType = "ate" | "pulse" | "cleaned" | "grew" | "adult" | "earned" | "baby" | "dug" | "shrimpAte" | "pearlReady" | "pearl" | "rehomed" | "upgraded" | "revealed" | "visitorArrived" | "visitorTapped" | "visitorLeft" | "spotCleaned" | "themed" | "requestDone" | "rode" | "keepsake";
+export type SimEventType = "ate" | "pulse" | "cleaned" | "grew" | "adult" | "earned" | "baby" | "dug" | "shrimpAte" | "pearlReady" | "pearl" | "rehomed" | "upgraded" | "revealed" | "visitorArrived" | "visitorTapped" | "visitorLeft" | "spotCleaned" | "themed" | "requestDone" | "rode" | "keepsake" | "paired";
 export interface SimEvent {
   type: SimEventType;
   slot?: number;
@@ -487,6 +497,8 @@ export interface SimEvent {
   keepsake?: number;
   /** v14 "visitorArrived": the first time this kind ever came (it's new in the visitor log) */
   first?: boolean;
+  /** v16 "baby": the other parent's slot when the baby came from a pair; "paired": the second jelly of the new pair */
+  mate?: number;
 }
 
 export interface State {
@@ -593,6 +605,14 @@ export interface State {
   keepAtLoad: number[];
   /** v14: the visitor log (./visitlog.ts) */
   visitorsSeen: VisitorsSeen;
+  /** v16: SimOptions.pairs: unpaired jellies bond and pair, pairs drift together and have babies together */
+  pairsOn: boolean;
+  /** v16: how long each two jellies that could pair have been together (bondKey -> growth-scaled s). Not saved. */
+  bonds: Map<string, number>;
+  /** v16: the sparkle a pair shares (the two slots, when it started), when the next is due and which pair had the last */
+  pairFx: { a: number; b: number; t0: number } | null;
+  pairFxAt: number;
+  pairFxLast: number;
 }
 
 /** v8: what the player has in hand. v11: "shrimp" (the brine shrimp jar) and "plankton" (the bottle) are foods too. */
@@ -619,6 +639,12 @@ export interface SimOptions {
   requests?: boolean;
   /** v13: evaluate the journal's milestones and grant keepsakes (the host's own tank). Off by default, like requests. */
   keepsakes?: boolean;
+  /**
+   * v16: pairs (./pairs.ts): two content adults of a species that keep close become a pair, drift together now and
+   * then and have their babies together (colour genetics). Off by default, like requests: the demo, visits and older
+   * tests don't get them. Off, saved pairs are kept as loaded but do nothing.
+   */
+  pairs?: boolean;
   /**
    * Tests (?seed=N, src/testmode.ts): the dirt's and the traits' own random streams start from this instead of the
    * save's clock, so a seeded tank (with `rand` seeded too) plays out the same whenever it is loaded.
@@ -689,12 +715,14 @@ const blankEntry = (): JournalEntry => ({ seen: false, raised: 0, firstAdultAt: 
 const traitOfSave = (j: Pick<SaveJelly, "trait" | "name" | "k">): Trait => traitOf(j.trait) ?? traitFromName(j.name, j.k);
 
 /** v12: a saved morph as an id: v7..v9's true is the classic one; anything unknown is none. */
-export const morphOf = (v: unknown): number => (v === true ? MORPH_CLASSIC : typeof v === "number" && Number.isInteger(v) && v > 0 && v < MORPH_IDS ? v : MORPH_NONE);
+export const morphOf = (v: unknown): number => (v === true ? MORPH_CLASSIC : typeof v === "number" && v > 0 && MORPH_KNOWN.includes(v) ? v : MORPH_NONE);
 /** v12: a morph id's bit in JournalEntry.morphSeen (0 for none). */
 export const morphBit = (id: number): number => (id > MORPH_NONE && id < MORPH_IDS ? 1 << (id - 1) : 0);
+/** v16: the morphSeen bits of the morphs this build knows (a reserved id's bit is dropped). */
+const MORPH_SEEN_MASK = MORPH_KNOWN.reduce((m, id) => m | morphBit(id), 0);
 /** v12: a saved morphSeen as a bitmask: v7..v9's true is the classic one. */
 const morphSeenOf = (v: unknown): number =>
-  v === true ? morphBit(MORPH_CLASSIC) : typeof v === "number" && Number.isInteger(v) && v > 0 ? v & ((1 << (MORPH_IDS - 1)) - 1) : 0;
+  v === true ? morphBit(MORPH_CLASSIC) : typeof v === "number" && Number.isInteger(v) && v > 0 ? v & MORPH_SEEN_MASK : 0;
 /** v12: has this journal entry seen morph `id`? */
 export const morphSeen = (e: Pick<JournalEntry, "morphSeen">, id: number): boolean => (e.morphSeen & morphBit(id)) !== 0;
 export const emptyJournal = (): JournalEntry[] => Array.from({ length: SPECIES_N }, blankEntry);
@@ -885,6 +913,7 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
       content: clamp(finite(o.content, 0), 0, BABY_SECONDS),
       morph: morphOf(o.morph),
       trait: traitOf(o.trait) ?? traitFromName(name, speciesOf(o.k)),
+      ...pairField(o.pair),
     });
   }
   const ownedIn = Array.isArray(raw.owned) ? raw.owned : [];
@@ -921,6 +950,8 @@ function sanitize(raw: Record<string, unknown>, now: number): Save {
   };
 }
 
+/** v16: the optional `pair` field of a saved jelly: a slot index, else absent (createState checks both sides agree). */
+const pairField = (v: unknown): { pair?: number } => (typeof v === "number" && Number.isInteger(v) && v >= 0 && v < MAX_SLOTS ? { pair: v } : {});
 /** v12: the optional `requests` save field: only there once a day has been planned. */
 const requestsField = (r: DailyRequests | null): { requests?: DailyRequests } => (r ? { requests: copyRequests(r) } : {});
 /** v13: the optional `keep` save field: only there once keepsakes have been evaluated. */
@@ -1199,6 +1230,7 @@ function makeJelly(sj: SaveJelly, slot: number, slots: (Jelly | null)[], tier: n
     morph: morphOf(sj.morph),
     trait: traitOfSave(sj),
     ride: 0,
+    pair: typeof sj.pair === "number" ? sj.pair : -1,
   };
   if (j.mode === "fixed") {
     const ok =
@@ -1306,7 +1338,13 @@ export function createState(save: Save, rand: () => number = Math.random, opts: 
     keepOn: opts.keepsakes === true,
     keepAtLoad: [],
     visitorsSeen: visitorsSeenOf(save.visitorsSeen),
+    pairsOn: opts.pairs === true,
+    bonds: new Map(),
+    pairFx: null,
+    pairFxAt: PAIR_SPARK_EVERY / 2,
+    pairFxLast: -1,
   };
+  fixPairs(state.slots);
   state.theme = themeOf(save.theme, state.themes);
   for (const j of jellies(state)) noteJelly(state, j);
   if (state.keepOn) state.keepAtLoad = loadKeepsakes(state, save);
@@ -1320,7 +1358,7 @@ export function toSave(s: State, now: number): Save {
     v: 12,
     slots: s.slots.map((j) =>
       j
-        ? { k: j.k, g: j.g, gp: j.gp, care: j.care, fullness: j.fullness, affection: j.affection, anchor: j.anchor, spot: j.spot, name: j.name, born: j.born, content: j.content, morph: j.morph, trait: j.trait }
+        ? { k: j.k, g: j.g, gp: j.gp, care: j.care, fullness: j.fullness, affection: j.affection, anchor: j.anchor, spot: j.spot, name: j.name, born: j.born, content: j.content, morph: j.morph, trait: j.trait, ...(j.pair >= 0 ? { pair: j.pair } : {}) }
         : null,
     ),
     dollars: s.dollars,
@@ -1753,6 +1791,8 @@ export function rehome(s: State, slot: number): { name: string; dollars: number 
   // pellets on their way into it finish on their own
   for (const f of s.food) if (f.by === slot && f.state === "eaten") f.by = -1;
   s.slots[slot] = null;
+  // v16: its pair ends (its mate stays, free to pair again), and so does any bond with it
+  unpair(s, slot);
   return { name: j.name, dollars: got };
 }
 
@@ -1845,7 +1885,9 @@ const newName = (s: State) => pickName(jellies(s).map((j) => j.name), s.rand());
  * morph MORPH_INHERIT of the time; otherwise (and always for a plain parent) the base roll, then, while a
  * season offers a morph (SimOptions.seasonalMorph), SEASON_MORPH_CHANCE of that. Draws only from s.rand.
  */
-function birthMorph(s: State, parent: Jelly | null): number {
+function birthMorph(s: State, parent: Jelly | null, mate: Jelly | null = null): number {
+  // v16: a pair's baby takes its colour from either parent, or now and then a new one (./pairs.ts)
+  if (parent && mate) return pairMorph(s.rand, parent.morph, mate.morph, (s.seasonalMorph && morphOf(s.seasonalMorph(s.clock))) || MORPH_NONE);
   if (parent && parent.morph !== MORPH_NONE && s.rand() < MORPH_INHERIT) return parent.morph;
   if (s.rand() < MORPH_CHANCE) return MORPH_CLASSIC;
   if (!parent || !s.seasonalMorph) return MORPH_NONE;
@@ -1853,14 +1895,17 @@ function birthMorph(s: State, parent: Jelly | null): number {
   return season !== MORPH_NONE && s.rand() < SEASON_MORPH_CHANCE ? season : MORPH_NONE;
 }
 
-/** Put a new polyp of species k into a free slot at a free rock anchor; null if there's no room (the tier's max). */
-function addPolyp(s: State, k: Species, parent: Jelly | null = null): { slot: number; j: Jelly } | null {
+/**
+ * Put a new polyp of species k into a free slot at a free rock anchor; null if there's no room (the tier's max).
+ * v16: `mate` is the other parent of a pair's baby (its colour and trait come from either parent).
+ */
+function addPolyp(s: State, k: Species, parent: Jelly | null = null, mate: Jelly | null = null): { slot: number; j: Jelly } | null {
   const slot = s.slots.findIndex((j) => !j);
   const anchor = freeAnchor(s.slots, s.tier);
   if (slot < 0 || anchor < 0 || jellyCount(s) >= maxJellies(s)) return null;
-  const morph = birthMorph(s, parent);
+  const morph = birthMorph(s, parent, mate);
   // v13: a personality of its own, or (sometimes) its parent's; from the traits' own random stream
-  const trait = rollTrait(s.traitRand, parent ? parent.trait : null);
+  const trait = parent && mate ? pairTrait(s.traitRand, parent.trait, mate.trait) : rollTrait(s.traitRand, parent ? parent.trait : null);
   const j = makeJelly({ ...freshJelly(k, POLYP, newName(s), s.clock, morph, trait), anchor }, slot, s.slots, s.tier, rightGlass(s));
   s.slots[slot] = j;
   noteJelly(s, j);
@@ -1992,12 +2037,15 @@ export interface JellyInfo {
   morph: number;
   /** v13: its personality (TRAIT_NAMES / TRAIT_PHRASES) */
   trait: Trait;
+  /** v16: its mate's name, null when it isn't paired */
+  mate: string | null;
 }
 
 export function jellyInfo(s: State, slot: number): JellyInfo | null {
   const j = s.slots[slot];
   if (!j) return null;
-  return { name: j.name, k: j.k, g: j.g, ageDays: Math.max(0, Math.floor((s.clock - j.born) / 86_400_000)), fullness: j.fullness, mood: moodOf(s, j), morph: j.morph, trait: j.trait };
+  const mate = s.slots[mateSlot(s, slot)];
+  return { name: j.name, k: j.k, g: j.g, ageDays: Math.max(0, Math.floor((s.clock - j.born) / 86_400_000)), fullness: j.fullness, mood: moodOf(s, j), morph: j.morph, trait: j.trait, mate: mate ? mate.name : null };
 }
 
 /** Trimmed, 1..12 characters; anything else is ignored. Returns whether the name changed. */
@@ -3096,6 +3144,12 @@ function chooseTargets(s: State, events: SimEvent[]): void {
         const gt = gatherTarget(j.target, point, slot, social ? Math.max(calm, SOCIAL_PULL) : calm, (slot * 0.618034 + 0.3) % 1);
         j.target = { x: clamp(gt.x, b.x0, b.x1), y: low ? j.target.y : clamp(gt.y, b.y0, b.y1) };
       }
+      // v16: a paired swimmer drifts over beside its mate now and then
+      const mate = mateOf(s, slot);
+      if (mate && mate.mode === "swim" && s.rand() < PAIR_DRIFT) {
+        const side = Math.sign(j.x - mate.x) || 1;
+        j.target = { x: clamp(mate.x + side * PAIR_SIDE, b.x0, b.x1), y: low ? j.target.y : clamp(mate.y + (slot % 2 ? 15 : -15), b.y0, b.y1) };
+      }
     }
     // v13: a curious jelly comes over to look at whatever you're holding in the water (beside it, a little below)
     if (held && j.trait === CURIOUS && j.targetKind === "wander") {
@@ -3313,6 +3367,7 @@ export function step(s: State, dt: number): SimEvent[] {
     while (j.g < ADULT && j.gp >= GROWTH[(j.g + 1) as Stage]) stageUp(s, i, j, events);
   });
 
+  stepPairs(s, dt, events);
   babies(s, dt, events);
   stepVisitors(s, dt, events);
   syncMurk(s);
@@ -3449,12 +3504,119 @@ function babies(s: State, dt: number, events: SimEvent[]): void {
     if (!j || j.g !== ADULT || moodOf(s, j) <= BABY_MOOD) return;
     j.content = Math.min(BABY_SECONDS, j.content + dt * s.growthMultiplier);
     if (j.content < BABY_SECONDS) return;
-    const born = addPolyp(s, j.k, j);
+    // v16: a paired jelly's baby is the pair's: both parents pass things on, and both start a new wait
+    const mate = mateOf(s, parent);
+    const born = addPolyp(s, j.k, j, mate);
     if (!born) return; // full: hold at the threshold
     j.content = 0;
     j.wiggleT0 = s.t;
-    events.push({ type: "baby", slot: born.slot, parent });
+    if (mate) {
+      mate.content = 0;
+      mate.wiggleT0 = s.t;
+      events.push({ type: "baby", slot: born.slot, parent, mate: j.pair });
+    } else events.push({ type: "baby", slot: born.slot, parent });
   });
+}
+
+// ---------------------------------------------------------------- v16: pairs (./pairs.ts)
+
+/** The jelly in `slot`'s mate while pairs are on, else null. */
+function mateOf(s: State, slot: number): Jelly | null {
+  const j = s.slots[slot];
+  if (!s.pairsOn || !j || j.pair < 0) return null;
+  const m = s.slots[j.pair];
+  return m && m.pair === slot ? m : null;
+}
+
+/** The slot of `slot`'s mate (-1 when it has none), whether or not pairs are on. */
+export const mateSlot = (s: State, slot: number): number => {
+  const j = s.slots[slot];
+  return j && j.pair >= 0 && s.slots[j.pair]?.pair === slot ? j.pair : -1;
+};
+
+/** The pairs in the tank, each once ([a, b], a < b). */
+export const pairs = (s: State): [number, number][] =>
+  s.slots.flatMap((_, a) => {
+    const b = mateSlot(s, a);
+    return b > a ? [[a, b] as [number, number]] : [];
+  });
+
+/** A pair only holds when both sides agree, both are adults of one species: anything else (a hand-edited save) is dropped. */
+function fixPairs(slots: (Jelly | null)[]): void {
+  slots.forEach((j, a) => {
+    if (!j || j.pair < 0) return;
+    const m = slots[j.pair];
+    if (j.pair === a || !m || m.pair !== a || m.k !== j.k || m.g !== ADULT || j.g !== ADULT) j.pair = -1;
+  });
+}
+
+/** `slot` has gone (rehomed): its mate is free again, and every bond with it is forgotten. */
+function unpair(s: State, slot: number): void {
+  for (const j of s.slots) if (j && j.pair === slot) j.pair = -1;
+  for (const key of [...s.bonds.keys()]) if (key.split("-").includes(String(slot))) s.bonds.delete(key);
+  if (s.pairFx && (s.pairFx.a === slot || s.pairFx.b === slot)) s.pairFx = null;
+}
+
+/** Pair two jellies now (tests and the e2e; the game pairs them through stepPairs). False if they can't pair. */
+export function pairUp(s: State, a: number, b: number): boolean {
+  const ja = s.slots[a];
+  const jb = s.slots[b];
+  if (!ja || !jb || a === b || !canPair(ja, jb)) return false;
+  ja.pair = b;
+  jb.pair = a;
+  s.bonds.delete(bondKey(a, b));
+  return true;
+}
+
+/**
+ * Two content adults of a species that keep close bond, and pair after PAIR_SECONDS (growth-scaled) together: a sparkle
+ * between them and a "paired" event. Pairs close together share a tiny sparkle now and then, taking turns.
+ */
+function stepPairs(s: State, dt: number, events: SimEvent[]): void {
+  if (!s.pairsOn) return;
+  for (let a = 0; a < s.slots.length; a++) {
+    for (let b = a + 1; b < s.slots.length; b++) {
+      const ja = s.slots[a];
+      const jb = s.slots[b];
+      if (!ja || !jb || !canPair(ja, jb)) continue;
+      const key = bondKey(a, b);
+      const ca = bodyCentre(ja);
+      const cb = bodyCentre(jb);
+      const together = Math.hypot(ca.x - cb.x, ca.y - cb.y) < PAIR_NEAR && moodOf(s, ja) > BABY_MOOD && moodOf(s, jb) > BABY_MOOD;
+      const bond = stepBond(s.bonds.get(key) ?? 0, together, dt, s.growthMultiplier);
+      if (bond <= 0) s.bonds.delete(key);
+      else s.bonds.set(key, bond);
+      if (bond < PAIR_SECONDS || !pairUp(s, a, b)) continue;
+      s.fx = { x: (ca.x + cb.x) / 2, y: (ca.y + cb.y) / 2, t0: s.t };
+      ja.wiggleT0 = s.t;
+      jb.wiggleT0 = s.t;
+      events.push({ type: "paired", slot: a, mate: b, x: s.fx.x, y: s.fx.y });
+    }
+  }
+  if (s.pairFx && s.t - s.pairFx.t0 >= PAIR_SPARK_TIME) s.pairFx = null;
+  if (s.pairFx || s.t < s.pairFxAt) return;
+  s.pairFxAt = s.t + PAIR_SPARK_EVERY;
+  // the pairs close enough to share one, taking turns: the first after the last one that sparkled
+  const near = pairs(s).filter(([a, b]) => {
+    const ca = bodyCentre(s.slots[a]!);
+    const cb = bodyCentre(s.slots[b]!);
+    return Math.hypot(ca.x - cb.x, ca.y - cb.y) < PAIR_SPARK_NEAR;
+  });
+  if (!near.length) return;
+  const next = near.find(([a]) => a > s.pairFxLast) ?? near[0]!;
+  s.pairFxLast = next[0];
+  s.pairFx = { a: next[0], b: next[1], t0: s.t };
+}
+
+/** Where a pair's shared sparkle is now (world): just above the middle of the two bells. */
+function pairSparkAt(s: State): { x: number; y: number } | null {
+  const fx = s.pairFx;
+  const ja = fx ? s.slots[fx.a] : null;
+  const jb = fx ? s.slots[fx.b] : null;
+  if (!ja || !jb) return null;
+  const ca = bodyCentre(ja);
+  const cb = bodyCentre(jb);
+  return { x: (ca.x + cb.x) / 2, y: Math.min(ca.y, cb.y) - 18 };
 }
 
 // ---------------------------------------------------------------- view
@@ -3487,7 +3649,7 @@ const NEEDS17 = K.props.includes("needs17");
 function writeSlot(v: View, s: State, slot: number, j: Jelly | null, night: number): void {
   const p = `j${slot}`;
   if (!j) {
-    for (const name of ["on", "x", "y", "healthy", "pale", "flush", "glow", "morph", "rot", "ghost", "nglow"]) v[p + name] = 0;
+    for (const name of ["on", "x", "y", "healthy", "pale", "flush", "glow", "morph", "rot", "ghost", "nglow", "dusk", "pearl"]) v[p + name] = 0;
     for (let i = 0; i < SPECIES_N; i++) v[`${p}k${i}`] = 0;
     for (let i = 0; i < 4; i++) v[`${p}g${i}`] = 0;
     for (const g of ["bf", "tf"]) for (let i = 0; i < FRAME_N; i++) v[`${p}${g}${i}`] = 0;
@@ -3527,10 +3689,15 @@ function writeSlot(v: View, s: State, slot: number, j: Jelly | null, night: numb
   const pale = m < 0.35 ? 1 : 0;
   const morph = j.morph === MORPH_CLASSIC && !pale ? 1 : 0;
   const ghost = j.morph === MORPH_GHOST && !pale ? 1 : 0;
+  // v16: a pair's new colours (./pairs.ts)
+  const dusk = j.morph === MORPH_DUSK && !pale ? 1 : 0;
+  const pearl = j.morph === MORPH_PEARL && !pale ? 1 : 0;
   v[p + "pale"] = pale;
   v[p + "morph"] = morph;
   v[p + "ghost"] = ghost;
-  v[p + "healthy"] = pale || morph || ghost ? 0 : 1;
+  v[p + "dusk"] = dusk;
+  v[p + "pearl"] = pearl;
+  v[p + "healthy"] = pale || morph || ghost || dusk || pearl ? 0 : 1;
   // rosy flush over whichever body is showing, fading out in steps; a favourite meal holds it longer (v11)
   const fp = (s.t - j.wiggleT0) / FLUSH_TIME;
   const lp = (s.t - j.loveT0) / LOVE_FLUSH_TIME;
@@ -3599,6 +3766,15 @@ export function view(s: State): View {
     v.rs = 1;
     v.ro = 0;
   }
+
+  // v16: the tiny sparkle a pair shares: pops in, twinkles (small, big, small; reduce motion: the big one, still), fades
+  const ps = pairSparkAt(s);
+  const pp = s.pairFx ? clamp((s.t - s.pairFx.t0) / PAIR_SPARK_TIME) : 1;
+  v.pairX = ps ? snap(ps.x) : 0;
+  v.pairY = ps ? snap(ps.y) : 0;
+  v.pairO = ps && pp < 1 ? Math.round((pp < 0.15 ? pp / 0.15 : pp > 0.7 ? (1 - pp) / 0.3 : 1) * 20) / 20 : 0;
+  const pf = s.reducedMotion ? 1 : [0, 1, 2, 1, 0][Math.min(4, Math.floor(pp * 5))]!;
+  for (let f = 0; f < 3; f++) v[`pairF${f}`] = f === pf ? 1 : 0;
 
   // sparkle burst: pops, grows and fades
   const xp = s.fx ? (s.t - s.fx.t0) / FX_TIME : 1;

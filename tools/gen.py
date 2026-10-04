@@ -201,11 +201,12 @@ def sprite(name, px):
 # its group, and the host fetches that file when a jelly of the species (or the event) shows up. Everything else
 # (tank, decor, shop, helpers, visitors) stays embedded. A new species or event needs nothing more than a line here.
 EVENT_GROUPS = {"hw_": "ev-halloween"}  # sprite-name prefix -> group
+MO_GROUPS = {"mo_dusk_": "mo-dusk", "mo_pearl_": "mo-pearl"}  # ---- pair colours ---- a pair's colours, one group each
 
 
 def asset_group(name):
     """The group sprite `name` loads with, or None to embed it in the .riv."""
-    for prefix, group in EVENT_GROUPS.items():
+    for prefix, group in (*EVENT_GROUPS.items(), *MO_GROUPS.items()):  # ---- pair colours ---- (MO_GROUPS)
         if name.startswith(prefix):
             return group
     if name.startswith(("Bell", "Tent")):  # the v1 moon adult kept its bare names (sprite_name)
@@ -8118,13 +8119,158 @@ for i in range(FOOD_N):
     mid.append(node(f"Food{i}", [k2, k1, k0], opacity=0,
                     binds=[bind(prop(f"food{i}x"), 13), bind(prop(f"food{i}y"), 14), bind(prop(f"food{i}o"), 18)]))
 
+# ---- pair colours ---- (v16) the two colours only a pair's baby can have (src/pairs.ts): Dusk (morph id 4, Jelly VM
+# `dusk`) and Pearl (5, `pearl`). Like the ghost, each is a palette group per species and stage (Dusk / Pearl), drawn by
+# recolouring the healthy bell sprite by lightness, so every species keeps its own markings:
+#   Dusk   an evening sky down the bell: violet at the crown through mauve to a rose-peach rim, in dithered bands, with
+#          a few first stars twinkling on the crown (DuskStar, one set per pulse frame) and a soft rose-violet halo.
+#   Pearl  nacre: lilac-grey shadows to pure white light, an iridescent sheen of pink, mint, lavender and cream sliding
+#          across the bell as it pulses, opal glints round it (PearlOpal) and a pale halo.
+# Every sprite is named mo_dusk_* / mo_pearl_*: MO_GROUPS packs them into their own groups (mo-dusk, mo-pearl), so a
+# tank without such a jelly downloads none of it. The usual tentacles stay as they are under both.
+MO_DUSK_TOP = ramp("1a1040", "2e1e6c", "4a3299", "6e52c4", "9a80e6", "cbb8ff")  # the crown: violet night
+MO_DUSK_MID = ramp("2a0e44", "561e74", "8a3c9e", "b85cbc", "e08ad2", "f8c4ea")  # mauve
+MO_DUSK_RIM = ramp("3e0e2c", "7a204c", "b44266", "e66c7e", "ff9c96", "ffd2bc")  # the rim: rose afterglow
+MO_PEARL = ramp("5e4c6a", "947e94", "c8b4bc", "eadcdc", "fbf3ee", "fffdf8")  # warm nacre (the ghost is cool and see-through)
+MO_OPAL = (hx("ffb8d8"), hx("b8f0dc"), hx("c8c0ff"), hx("ffe6b0"))  # pink, mint, lavender, gold
+# sprite part -> (prefix, suffix): mo_dusk_MoonAdult0, mo_dusk_MoonAdultStar0, mo_pearl_MoonAdult0, mo_pearl_MoonAdultOpal0
+MO_PARTS = {"Dusk": ("mo_dusk_", ""), "DuskStar": ("mo_dusk_", "Star"), "Pearl": ("mo_pearl_", ""), "PearlOpal": ("mo_pearl_", "Opal")}
+MO_PALS = (("du", "Dusk", "dusk"), ("pe", "Pearl", "pearl"))
+_mo_ref = {}
+
+
+def mo_ref(k, g):
+    """The stage's healthy bell over all its pulse frames: (top y, rim y, pixels inside every frame)."""
+    if (k, g) not in _mo_ref:
+        frames = [species_body(k, g, f, "h") for f in range(nbf(k, g))]
+        ys = [y for (_, y) in frames[0].d]
+        inside = set(frames[0].d)
+        for fr in frames[1:]:
+            inside &= set(fr.d)
+        _mo_ref[(k, g)] = (min(ys), max(ys), inside)
+    return _mo_ref[(k, g)]
+
+
+def mo_ramp(rmp, lum, x, y, gamma=0.75):
+    """The ramp's colour for a lightness: its nearest step, ordered-dithered between steps (few colours, crisp pixels)."""
+    t = (0.1 + 0.9 * lum ** gamma) * (len(rmp) - 1) + bay(x, y) * 0.3
+    return rmp[max(0, min(len(rmp) - 1, round(t)))]
+
+
+def mo_lum(c):
+    return (0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]) / 255
+
+
+def mo_dusk(k, g, f):
+    """The healthy bell recoloured top to bottom: violet, mauve, rose; five dithered bands so it stays pixel art."""
+    y0, y1, _ = mo_ref(k, g)
+    src = species_body(k, g, f, "h")
+    px = Px()
+    for (x, y), c in src.d.items():
+        v = (y - y0) / max(1, y1 - y0) + bay(x, y) * 0.3
+        band = max(0, min(4, int(v * 5)))
+        lum = mo_lum(c)
+        top, mid, rim = (mo_ramp(r, lum, x, y, 1.15) for r in (MO_DUSK_TOP, MO_DUSK_MID, MO_DUSK_RIM))
+        col = (top, mix(top, mid, 0.5), mid, mix(mid, rim, 0.55), rim)[band]
+        px.put(x, y, (*col[:3], min(255, max(36, round(c[3] * 1.04 / 8) * 8))))
+    return px
+
+
+def mo_pearl(k, g, f):
+    """The healthy bell as nacre: lightness onto lilac-grey..white, an opal sheen in diagonal bands sliding with the pulse."""
+    src = species_body(k, g, f, "h")
+    px = Px()
+    for (x, y), c in src.d.items():
+        lum = mo_lum(c)
+        base = mo_ramp(MO_PEARL, lum, x, y)
+        phase = ((x * 0.7 + y * 1.1) / (22 if g >= 2 else 6) + f * 0.125 + bay(x, y) * 0.16) % 1  # finer on the little ones
+        opal = MO_OPAL[int(phase * 4) % 4]
+        # the sheen shows in the mid tones; shadows and the brightest highlights keep more of the nacre
+        s = 0.42 if 0.3 < lum < 0.9 else 0.22 if lum >= 0.9 else 0.0
+        col = mix(base, opal, s) if s else base
+        # a pearl is solid where the ghost is see-through
+        px.put(x, y, (*col[:3], min(255, max(70, round((c[3] * 1.15 + 20) / 8) * 8))))
+    return px
+
+
+def mo_body(k, g, f, pk):
+    return mo_dusk(k, g, f) if pk == "du" else mo_pearl(k, g, f)
+
+
+def mo_glint(k, g, f, pk):
+    """Dusk's first stars on the crown, or Pearl's opal glints round the bell: a different few lit in each frame set."""
+    y0, y1, inside = mo_ref(k, g)
+    r2 = random.Random((7100 if pk == "du" else 7300) + k * 10 + g)
+    px = Px()
+    big_ok = g >= 2
+    if pk == "du":
+        # inside the bell in every pulse frame, in its upper half, with room for a star's arms
+        spots = sorted(p for p in inside if p[1] < y0 + (y1 - y0) * 0.55 and all((p[0] + dx, p[1] + dy) in inside for dx, dy in ((2, 0), (-2, 0), (0, 2), (0, -2))))
+        n = 3 if big_ok else 2
+        picks = [spots[r2.randrange(len(spots))] for _ in range(n * 4)] if spots else []
+        for i, (sx, sy) in enumerate(picks):
+            if i % 4 != f:
+                continue
+            arm = 1 if (big_ok and i // 4 == 0) else 0
+            px.put(sx, sy, hx("fffbe8"))
+            for d in range(1, arm + 1):
+                for ax, ay in ((d, 0), (-d, 0), (0, d), (0, -d)):
+                    px.put(sx + ax, sy + ay, hx("ffe2a0", 190))
+    else:
+        b = species_body(k, g, 0, "h")
+        x0, by0, x1, by1 = b.bbox()
+        n = 3 if big_ok else 2
+        for i in range(n * 4):
+            gx = r2.randint(x0 - 2, x1 + 2)
+            gy = r2.randint(by0 - 3, max(by0, min(by1, 0)))
+            if i % 4 != f:
+                continue
+            big = (i // 4) % 2 == 0 and big_ok
+            arm = 2 if big else 1
+            opal = MO_OPAL[(i + k) % 4]
+            for d in range(-arm, arm + 1):
+                c = hx("ffffff") if abs(d) < arm else (*opal[:3], 220)
+                px.put(gx + d, gy, c)
+                px.put(gx, gy + d, c)
+    if not px.d:
+        px.put(0, y0, hx("ffffff", 1))
+    return px
+
+
+def mo_halo(pk, gcy, gw, gh):
+    """A soft glow round the bell while the colour shows: rose-violet for Dusk, pearly white for Pearl."""
+    inner, outer = (("ffb8d8", "b48cff") if pk == "du" else ("ffffff", "dce6ff"))
+    return ellipse_shape(f"{'Dusk' if pk == 'du' else 'Pearl'}Glow", 0, gcy, round(gw * 0.92), round(gh * 0.92),
+                         rad_grad(0, 0, round(gw * 0.46), [(0, hx(inner, 115)), (0.45, hx(outer, 48)), (1, hx(outer, 0))]),
+                         blend="screen", opacity=0, binds=[bind(jprop("dusk" if pk == "du" else "pearl"), 18)])
+
+
+def mo_pair_spark(f):
+    """The tiny sparkle a pair shares: two little stars (rose and gold) and, at its brightest, a pixel heart between."""
+    px = Px()
+    white, rose, gold = hx("ffffff"), hx("ffa6cc"), hx("ffd870")
+    arm = (0, 1, 2)[f]
+    for sx, col in ((-5, rose), (5, gold)):
+        px.put(sx, 0, white if arm else col)
+        for d in range(1, arm + 1):
+            c = white if d < arm else col
+            for ax, ay in ((d, 0), (-d, 0), (0, d), (0, -d)):
+                px.put(sx + ax, ay, c)
+    if f >= 1:  # the heart: 5 x 4, faint at first
+        a = 150 if f == 1 else 255
+        for x, y in ((-1, -3), (1, -3), (-2, -2), (-1, -2), (0, -2), (1, -2), (2, -2), (-1, -1), (0, -1), (1, -1), (0, 0)):
+            px.put(x, y - 4, (*(hx("ff6c9c") if (x, y) != (-1, -2) else hx("ffd6e6"))[:3], a))
+    return px
+
+
 # the jellies: seven slots (v5; three before). Slot node (x, y, on) > species k > stage g > tentacles (tf) + palettes (bf).
 # Origins: swimmers = centre of the bell rim; polyp = base of stalk; settled upside-down = underside centre;
 # comb = body centre. Sprites are shared between slots (one ImageAsset each).
 SLOT_XY = [(360, 540), (204, 420), (516, 690), (870, 600), (1020, 450), (1269, 630), (780, 780)]
 # palette groups, back to front: flush is drawn over the others. v7 adds Morph (j{s}morph): the logic writes
 # healthy = 0, morph = 1 for a morph that is neither pale nor flushed.
-PAL_NAMES = (("h", "Healthy", "healthy"), ("p", "Pale", "pale"), ("m", "Morph", "morph"), ("g", "Ghost", "ghost"), ("r", "Flush", "flush"))
+PAL_NAMES = (("h", "Healthy", "healthy"), ("p", "Pale", "pale"), ("m", "Morph", "morph"), ("g", "Ghost", "ghost"),
+             *MO_PALS, ("r", "Flush", "flush"))  # ---- pair colours ---- MO_PALS: Dusk (dusk), Pearl (pearl)
 # (Ghost: the Halloween ghost-pale morph, j{s}ghost; its sprites are hw_*, see the Halloween event block)
 INVERT_CONV = nid()  # DataConverterRangeMapper 0..1 -> 1..0: "not a morph" (the usual tentacles, the green ring)
 bodies = [[None] * 4 for _ in range(len(SPECIES))]
@@ -8133,6 +8279,8 @@ bodies = [[None] * 4 for _ in range(len(SPECIES))]
 def sprite_name(k, g, part):
     if part == "Ghost":  # Halloween event art: hw_ prefix
         return f"hw_{SPECIES[k].capitalize()}{STAGES[g].capitalize()}Ghost"
+    if part in MO_PARTS:  # ---- pair colours ---- mo_dusk_ / mo_pearl_ prefix (their own groups)
+        return f"{MO_PARTS[part][0]}{SPECIES[k].capitalize()}{STAGES[g].capitalize()}{MO_PARTS[part][1]}"
     if k == 0 and g == 3:  # the v1 moon jelly keeps its asset names
         return {"Tent": "Tent", "Healthy": "BellHealthy", "Pale": "BellPale", "Flush": "BellFlush", "Morph": "BellMorph",
                 "MorphTent": "TentMorph", "Glint": "BellGlint"}[part]
@@ -8253,10 +8401,15 @@ def stage_node(k, g):
     for pk, pn, pprop in PAL_NAMES:
         # v10: 8 pulse frames for juvenile/adult bells; the pale palette keeps 4 drawn ones (PALE_OF)
         fmap = PALE_OF if (NB == 8 and pk == "p") else list(range(NB))
-        frames = [frame_image(f"{sprite_name(k, g, pn)}{fmap[f]}", lambda f=fmap[f], pk=pk: species_body(k, g, f, pk),
+        body = mo_body if pk in ("du", "pe") else species_body  # ---- pair colours ---- recoloured healthy bells
+        frames = [frame_image(f"{sprite_name(k, g, pn)}{fmap[f]}", lambda f=fmap[f], pk=pk, body=body: body(k, g, f, pk),
                               **on(f"bf{f}", 1 if f == 0 else 0)) for f in range(NB)]
         if pk == "m":  # the morph's glints twinkle with the pulse frames (4 sets, cycling)
             frames += [frame_image(f"{sprite_name(k, g, 'Glint')}{f % 4}", lambda f=f % 4: glint_art(k, g, f), blend="screen",
+                                   **on(f"bf{f}", 1 if f == 0 else 0)) for f in range(NB)]
+        if pk in ("du", "pe") and g == 3:  # ---- pair colours ---- an adult Dusk's first stars, Pearl's opal glints (4 sets, cycling)
+            gl = "DuskStar" if pk == "du" else "PearlOpal"
+            frames += [frame_image(f"{sprite_name(k, g, gl)}{f % 4}", lambda f=f % 4, pk=pk: mo_glint(k, g, f, pk), blend="screen",
                                    **on(f"bf{f}", 1 if f == 0 else 0)) for f in range(NB)]
         parts.append(node(pn, list(reversed(frames)), **on(pprop, 1 if pk == "h" else 0), **SCALED))
     # v10: a drifting caustic sheen over the bell, clipped to it (shared sprite, one timeline for every slot)
@@ -8299,6 +8452,7 @@ def stage_node(k, g):
                              rad_grad(0, 0, round(gw * 0.45), [(0, hx("fff6d0", 110)), (0.45, hx("ffd86a", 45)), (1, hx("ffd86a", 0))]),
                              blend="screen", opacity=0, binds=[bind(morph, 18)])
     parts.insert(2, hw_ghost_halo(gcy, gw, gh))  # Halloween: the ghost's pale halo, behind the tentacles
+    parts[3:3] = [mo_halo(pk, gcy, gw, gh) for pk, _, _ in MO_PALS]  # ---- pair colours ---- their halos, behind the tentacles
     parts.append(night_bell_glow(k, g, gcy, gw, gh))  # quiet nights: the bell's own soft light
     if k == CRYSTAL and g >= 2:
         sc = 1.0 if g == 3 else 0.6
@@ -8349,6 +8503,11 @@ def jelly_slot(s_):
 
 for s_ in range(SLOTS):
     mid.append(jelly_slot(s_))
+# ---- pair colours ---- the tiny sparkle a pair shares, over the jellies (world): src/sim.ts view() pairX/Y, pairO and
+# the twinkle's frames pairF0..2 (small, bright with a heart, small again; reduce motion holds the middle one)
+mid.append(node("PairSpark", [image(f"PairSpark{f}", lambda f=f: mo_pair_spark(f), opacity=1 if f == 0 else 0,
+                                    binds=[bind(prop(f"pairF{f}", default=1 if f == 0 else 0), 18)]) for f in range(3)],
+                opacity=0, binds=[bind(prop("pairX"), 13), bind(prop("pairY"), 14), bind(prop("pairO"), 18)]))
 sheen_anim = (f'<LinearAnimation loopValue="loop" duration="{SHEEN_DUR}" name="Sheen" id="{JSHEEN}">'
               + "".join(keys(i, 13, [(0, x), (SHEEN_DUR, x + CAUSTIC_PERIOD * P)], "linear") for i, x in sheen_keys)
               + "</LinearAnimation>")
@@ -9340,6 +9499,8 @@ for k in range(len(SPECIES)):
     journal_art[str(k)] = data_url(port)
     journal_art[f"{k}m"] = data_url(journal_portrait(k, "m"))
     journal_art[f"{k}g"] = data_url(hw_ghost_portrait(k))  # ---- Halloween event ---- the journal's ghost row
+    for pk, key in (("du", "d"), ("pe", "p")):  # ---- pair colours ---- the journal's dusk and pearl rows
+        journal_art[f"{k}{key}"] = data_url(mo_body(k, 3, 0, pk))  # just the bell: the Colours row shows only its top
     sil = Px()  # a dark silhouette: the body solid (even glassy ones), strands as they are, a touch firmer
     body = species_body(k, 3, 0, "h")
     for (x, y), c in port.d.items():

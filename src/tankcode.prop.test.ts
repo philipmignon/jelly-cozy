@@ -32,7 +32,8 @@ const jellyArb = fc.record({
   slot: fc.integer({ min: 0, max: MAX_SLOTS - 1 }),
   k: fc.integer({ min: 0, max: SPECIES_N - 1 }),
   g: fc.integer({ min: 0, max: 3 }),
-  morph: fc.integer({ min: 0, max: 2 }),
+  // v16: a pair's dusk (4) and pearl (5) too (3 is reserved for another feature's morph)
+  morph: fc.constantFrom(0, 0, 1, 2, 4, 5),
   trait: fc.option(fc.integer({ min: 0, max: 3 }), { nil: undefined }),
   name: nameArb,
   pick: fc.nat(),
@@ -61,7 +62,9 @@ const tankArb = fc
         place = take(g === 0 ? anchors : spots, pick);
         if (place < 0) g = 1; // no free rock or spot: an ephyra, which has no place
       }
-      return { ...j, g, place, ...(trait === undefined || legacy ? {} : { trait }) };
+      // a legacy tank's colours are ones versions 1..4 can say (dusk -> classic, pearl -> ghost)
+      const morph = legacy && j.morph > 2 ? j.morph - 3 : j.morph;
+      return { ...j, g, place, morph, ...(trait === undefined || legacy ? {} : { trait }) };
     });
     const t: TankCode = {
       tier,
@@ -135,6 +138,16 @@ describe("share codes", () => {
         );
       }),
       { numRuns: runs(200) },
+    );
+  });
+
+  it("v16: version 6 only for a tank with a morph id of 3 or more; every other tank's code is what versions 1..5 wrote", () => {
+    fc.assert(
+      fc.property(tankArb, (t) => {
+        const version = Buffer.from(encodeTank(t), "base64url")[0]! >> 4;
+        expect(version === 6).toBe(t.jellies.some((j) => j.morph >= 3));
+      }),
+      { numRuns: runs(300) },
     );
   });
 
@@ -235,14 +248,15 @@ describe("backup codes", () => {
 
 // sanity: the layouts generated reach the interesting cases (every version, places, ghosts, custom names)
 describe("the tank arbitrary", () => {
-  it("covers versions 1..5, polyps on rocks, settled upside-downs, ghosts and custom names", () => {
+  it("covers versions 1..6, polyps on rocks, settled upside-downs, ghosts, dusk, pearl and custom names", () => {
     const sample = fc.sample(tankArb, { numRuns: 400, seed: 7 });
     const versions = new Set(sample.map((t) => Buffer.from(encodeTank(t), "base64url")[0]! >> 4));
-    expect([...versions].sort()).toEqual([1, 2, 3, 4, 5]);
+    expect([...versions].sort()).toEqual([1, 2, 3, 4, 5, 6]);
     const js = sample.flatMap((t) => t.jellies);
     expect(js.some((j) => j.g === 0 && j.place >= 0)).toBe(true);
     expect(js.some((j) => j.k === UPSIDE && j.g >= 2 && j.place >= 0)).toBe(true);
     expect(js.some((j) => j.morph === 2)).toBe(true);
+    expect(js.some((j) => j.morph === 4) && js.some((j) => j.morph === 5)).toBe(true);
     expect(js.some((j) => !NAMES.includes(j.name))).toBe(true);
   });
 });

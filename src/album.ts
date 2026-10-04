@@ -151,7 +151,8 @@ export async function idbBackend(factory: IDBFactory | undefined = globalThis.in
   try {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       const open = factory.open(DB, 1);
-      const timer = setTimeout(() => reject(new Error("album: IndexedDB didn't open")), 4000);
+      // generous: a busy page (first load, a slow GPU) can take seconds to get the success event dispatched
+      const timer = setTimeout(() => reject(new Error("album: IndexedDB didn't open")), 10_000);
       open.onupgradeneeded = () => {
         if (!open.result.objectStoreNames.contains(STORE)) open.result.createObjectStore(STORE, { keyPath: "id", autoIncrement: true });
       };
@@ -165,10 +166,9 @@ export async function idbBackend(factory: IDBFactory | undefined = globalThis.in
         clearTimeout(timer);
         reject(open.error);
       };
-      open.onblocked = () => {
-        clearTimeout(timer);
-        reject(new Error("album: IndexedDB blocked"));
-      };
+      // blocked: another tab still holds an older connection; it lets go on versionchange, so keep waiting (the
+      // timer still bounds it)
+      open.onblocked = () => {};
     });
     const store = (mode: IDBTransactionMode) => db.transaction(STORE, mode).objectStore(STORE);
     return {
@@ -184,8 +184,12 @@ export async function idbBackend(factory: IDBFactory | undefined = globalThis.in
 }
 
 let opened: Promise<Album | null> | null = null;
-/** The page's album (opened once), or null when the browser won't keep one. */
+/** The page's album (opened once it works), or null when the browser won't keep one right now. A failed open
+ *  isn't remembered: a slow first try (a busy page) mustn't leave the album unavailable until a reload. */
 export function openAlbum(): Promise<Album | null> {
-  opened ??= idbBackend().then((b) => (b ? createAlbum(b) : null), () => null);
-  return opened;
+  const p = (opened ??= idbBackend().then((b) => (b ? createAlbum(b) : null), () => null));
+  void p.then((a) => {
+    if (!a && opened === p) opened = null;
+  });
+  return p;
 }

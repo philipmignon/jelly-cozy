@@ -168,12 +168,13 @@ describe("lamp gels in the tank", () => {
     expect([v.gel0, v.gel1, v.gel2, v.gel3]).toEqual([0, 0, 0, 1]);
     expect([v.use33, v.own33, v.own31, v.use31, v.lock31]).toEqual([1, 0, 1, 0, 0]);
     expect(v.uvLight).toBe(1);
-    expect([v.j0uv, v.j1uv, v.j2uv]).toEqual([1, 0, 1]); // slot 1 is empty
+    // every jelly reads uvLight from the World global view model: no per-slot copies any more
+    expect([v.j0uv, v.j1uv, v.j2uv]).toEqual([undefined, undefined, undefined]);
+    expect(K.globals?.props).toContain("uvLight");
     toggleLamp(s); // lights off: moonlight, no UV
     run(s, 2);
     v = view(s);
     expect(v.uvLight).toBe(0);
-    expect(v.j0uv).toBe(0);
     expect(v.gel3).toBe(1); // still on the lamp (the .riv fades its layers with daylight)
     useGel(s, GEL_WARM);
     toggleLamp(s);

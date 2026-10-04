@@ -303,11 +303,19 @@ props = {}
 _order = []
 
 
+# ---- world ---- the tank-wide signals that any artboard binds, the jelly component included, live in one global
+# view model (World, viewModelType="global") instead of Tank: a component can't reach Tank, so a signal it needed
+# (the UV gel) used to be copied into every slot. The host writes these through rive.globalViewModelInstance
+# ("World") (contract.globals); their names stay in contract.props, so the sim's view() is unchanged.
+GVM, GVMI = nid(), nid()
+GLOBAL_PROPS = ("nightShade", "calm", "uvLight", "evHalloween", "evWinter", "gel0", "gel1", "gel2", "gel3")
+
+
 def prop(name, kind="number", default=0):
     if name not in props:
         props[name] = (nid(), kind, default)
         _order.append(name)
-    return f"{VM}-{props[name][0]}"
+    return f"{GVM if name in GLOBAL_PROPS else VM}-{props[name][0]}"
 
 
 # v12: the jelly is drawn once, as the JellyComp component, bound to its own view model (Jelly). The host's flat
@@ -8520,10 +8528,10 @@ def gel_fluo(px, col, hot, floor=0.35):
 
 
 def gel_uv_parts(k, g, gcy, gw, gh):
-    """In the jelly component, one stage's UV look (all bound to j{s}uv): a crystal or comb jelly's body fluorescing
-    frame by frame with a halo (the crystal's photophore ring too: the night ring's own sprites); any other jelly a
-    faint violet rim."""
-    uv = jprop("uv")
+    """In the jelly component, one stage's UV look (all bound to World's uvLight, the global): a crystal or comb
+    jelly's body fluorescing frame by frame with a halo (the crystal's photophore ring too: the night ring's own
+    sprites); any other jelly a faint violet rim."""
+    uv = prop("uvLight")  # ---- world ---- the global, read straight from inside the component
     if k not in GEL_FLUO:
         rim = ellipse_shape("UvRim", 0, gcy, round(gw * 0.78), round(gh * 0.78),
                             rad_grad(0, 0, round(gw * 0.39), [(0, hx(GEL_RIM, 0)), (0.6, hx(GEL_RIM, 0)), (0.82, hx(GEL_RIM, 70)), (1, hx(GEL_RIM, 0))]),
@@ -8549,10 +8557,10 @@ def gel_uv_parts(k, g, gcy, gw, gh):
 
 def gel_dim(k, parts):
     """A jelly that doesn't fluoresce lets the violet through under UV: its stage's parts (back to front) in a node
-    faded by j{s}uv."""
+    faded by World's uvLight (the global)."""
     if k in GEL_FLUO:
         return parts
-    return [node("UvDim", parts[::-1], binds=[bind(jprop("uv"), 18, GEL_DIM_CONV)])]
+    return [node("UvDim", parts[::-1], binds=[bind(prop("uvLight"), 18, GEL_DIM_CONV)])]
 
 
 def gel_uv_decor(n, name, light, halo_y, halo_w, halo_h, col, hot):
@@ -10993,9 +11001,14 @@ for hid, t in hit_ids + shop_hits:
 sm = f'<StateMachine name="Tank" id="{SM}">{"".join(listeners)}{"".join(layers)}</StateMachine>'
 
 vm_props, vm_vals = [], []
+w_props, w_vals = [], []  # ---- world ---- the global's properties and their values
 for name in _order:
     pid, kind, default = props[name]
     if kind == "jelly":  # lives in the slot's nested Jelly instance (below)
+        continue
+    if name in GLOBAL_PROPS:  # ---- world ---- lives in the global view model (below), not in Tank
+        w_props.append(f'<ViewModelPropertyNumber name="{name}" id="{pid}"/>')
+        w_vals.append(f'<ViewModelInstanceNumber propertyValue="{default}" viewModelPropertyId="{pid}"/>')
         continue
     if kind == "trigger":
         vm_props.append(f'<ViewModelPropertyTrigger name="{name}" id="{pid}"/>')
@@ -11011,6 +11024,9 @@ for _n in range(NUR_CAP):  # ---- nursery ---- nj0..nj3
     vm_vals.append(f'<ViewModelInstanceViewModel propertyValue="{nurslot_vmi[_n]}" viewModelPropertyId="{nurslot_pid[_n]}"/>')
 vm = (f'<ViewModel defaultInstanceId="{VMI}" name="Tank" id="{VM}">{"".join(vm_props)}'
       f'<ViewModelInstance exports="true" name="Default" id="{VMI}">{"".join(vm_vals)}</ViewModelInstance></ViewModel>')
+# ---- world ---- one shared instance, bound to no artboard: every artboard (and every placed component) reads it
+wvm = (f'<ViewModel viewModelType="global" defaultInstanceId="{GVMI}" name="World" id="{GVM}">{"".join(w_props)}'
+       f'<ViewModelInstance exports="true" name="Default" id="{GVMI}">{"".join(w_vals)}</ViewModelInstance></ViewModel>')
 
 
 def jelly_instance(name, iid, over):
@@ -11057,6 +11073,7 @@ doc = f'''<Rive version="1" kind="fragment">
 <DataConverterRangeMapper minInput="0" maxInput="1" minOutput="1" maxOutput="{WN_FROST_FADE}" clampLower="true" clampUpper="true" name="wn_FrostFade" id="{WN_FADE_CONV}"/>
 {jvm}
 {vm}
+{wvm}
 {nl.join(assets)}
 </Rive>
 '''
@@ -11074,6 +11091,8 @@ contract = {
     "tierRule": "polypAnchors, settleSpots, openSand and decorRange entries are available when s.tier >= their tier",
     "parallax": {k: f for k, f in PARALLAX.items()},
     "foodN": FOOD_N, "barW": BAR_W,
+    # ---- world ---- the props that live in the global view model (written through its instance, not Tank's)
+    "globals": {"name": "World", "props": [n for n in _order if n in GLOBAL_PROPS]},
     # v8: dirt spots on the glass (world, origin = the spot's middle) and the held items (screen)
     "spotN": SPOT_N, "spotR": SPOT_R * P, "spotKinds": [nm for nm, _ in SPOT_ART],
     "cursorOrigin": {"can": "the spout (middle of the cap's top face)", "sponge": "the sponge's middle",

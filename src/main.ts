@@ -164,12 +164,19 @@ function persist(s: State): void {
 
 /** Writes only the values that changed since the last frame. The logic speaks flat names; a jelly slot's
  *  (j3k5) lives in that slot's nested Jelly instance, at the path j3/k5 (contract `nested`). */
-function makeWriter(vmi: ViewModelInstance) {
+function makeWriter(vmi: ViewModelInstance, world: ViewModelInstance | null) {
   const last = new Map<string, number>();
   const handles = new Map<string, ReturnType<ViewModelInstance["number"]>>();
   const slotProp = /^j([0-6])(.+)$/;
   const nurProp = /^nj([0-3])(.+)$/; // ---- nursery ---- nj2k5 lives at nj2/k5 (contract nursery.nested)
+  const global = new Set(K.globals?.props ?? []);
   for (const name of K.props) {
+    if (global.has(name)) {
+      // ---- world ---- a tank-wide signal: one value in the global view model, read by every artboard
+      const h = world?.number(name);
+      if (h) handles.set(name, h);
+      continue;
+    }
     const m = slotProp.exec(name);
     const nm = m ? null : nurProp.exec(name);
     const h = vmi.number(m ? `j${m[1]}/${m[2]}` : nm ? `nj${nm[1]}/${nm[2]}` : name);
@@ -378,7 +385,18 @@ async function main() {
 
   const vmi = rive.viewModelInstance;
   if (!vmi) throw new Error("Tank view model not bound");
-  const write = makeWriter(vmi);
+  // ---- world ---- the global view model's instance (auto-bind usually made it; otherwise make and bind one)
+  const worldName = K.globals?.name;
+  let world = worldName ? rive.globalViewModelInstance(worldName) : null;
+  if (worldName && !world) {
+    const made = rive.viewModelByName(worldName)?.defaultInstance() ?? null;
+    if (made && rive.setGlobalViewModelInstance(worldName, made)) {
+      rive.bind();
+      world = made;
+    }
+  }
+  if (worldName && !world) throw new Error(`${worldName} global view model not bound`);
+  const write = makeWriter(vmi, world);
   const on = (name: string, cb: () => void) => vmi.trigger(name)?.on(cb);
   const client = (x: number, y: number) => artToClient(canvas, x, y);
   /** world coordinates (inside the panning World node) -> client */

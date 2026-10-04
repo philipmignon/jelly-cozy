@@ -4401,10 +4401,8 @@ function viewGels(v: View, s: State, night: number): void {
   for (let g = 0; g < GEL_N; g++) v[`gel${g}`] = g === s.gels.on ? 1 : 0;
   v.haveGel = anyGel(s.gels) ? 1 : 0;
   v.gelPress = s.t < s.gels.pressUntil ? P : 0;
+  // the jellies (tank and nursery bowl alike) read this one value: it lives in the World global view model
   v.uvLight = uvLightOf(s.gels, 1 - night);
-  for (let i = 0; i < MAX_SLOTS; i++) v[`j${i}uv`] = s.slots[i] ? v.uvLight : 0;
-  // ---- nursery ---- the bowl hangs in the tank, under the same lamp
-  for (let n = 0; n < NUR_CAP; n++) v[`nj${n}uv`] = s.nursery?.slots[n] ? v.uvLight : 0;
 }
 
 // ---- temperature ----

@@ -32,6 +32,8 @@ export interface Contract {
   foodN: number;
   barW: number;
   props: string[];
+  /** the props that live in the global view model (World): written through its instance, not the artboard's */
+  globals?: { name: string; props: string[] };
   polypAnchors?: unknown;
   settleSpots?: unknown;
   bodies?: unknown;
@@ -886,8 +888,7 @@ export const JELLY_KEYS: readonly string[] = (() => {
   out.push("ghost", "nglow", "frost");
   // v16 (pairs): the two colours only a pair's baby can have (in the nursery too: a pair's baby can be born there)
   out.push("dusk", "pearl");
-  // ---- lamp gels ---- how strongly the jelly fluoresces under the UV gel (the nursery bowl hangs in the same light)
-  out.push("uv");
+  // (the UV gel's strength isn't per jelly: every jelly reads uvLight from the World global view model)
   return out;
 })();
 

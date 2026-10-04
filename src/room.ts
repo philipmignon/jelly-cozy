@@ -110,12 +110,14 @@ async function loadRoom(url: string): Promise<{ layout: RoomLayout; sprites: Rec
   const res = await fetch(url);
   if (!res.ok) throw new Error(`room: HTTP ${res.status}`);
   const data = (await res.json()) as { layout: RoomLayout; sprites: Record<string, SpriteData> };
+  // decode in parallel, but fill the map in the file's order: drawing walks the map, so its order is the layering
+  // (filled as each decode finished, the Halloween moon's face could land behind the sky)
+  const entries = Object.entries(data.sprites);
+  const imgs = await Promise.all(entries.map(([, s]) => decode(s.png)));
   const sprites: Record<string, Sprite> = {};
-  await Promise.all(
-    Object.entries(data.sprites).map(async ([name, s]) => {
-      sprites[name] = { x: s.x, y: s.y, img: await decode(s.png), season: s.season, when: s.when };
-    }),
-  );
+  entries.forEach(([name, s], i) => {
+    sprites[name] = { x: s.x, y: s.y, img: imgs[i]!, season: s.season, when: s.when };
+  });
   return { layout: data.layout, sprites };
 }
 

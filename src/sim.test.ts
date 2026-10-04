@@ -1493,15 +1493,18 @@ describe("while you were away", () => {
   });
 
   it("at most 4 lines, hunger kept; a quiet absence still gets one", () => {
+    // one fixed instant in every time zone: the away dirt is seeded from lastSeen, so a local clock time would
+    // give each zone different dirt (and in some, water too cloudy for anyone to grow)
+    const left = Date.UTC(2026, 9, 1, 9);
     const busy = tank(
       [
         jelly(0, 0, { anchor: 0, gp: 3, fullness: 0.32, name: "Mochi" }),
         jelly(1, 1, { gp: 11, fullness: 0.32, name: "Bloop" }),
         jelly(2, 2, { gp: 29, fullness: 0.9, name: "Pip" }),
       ],
-      { murk: 0.45, owned: [false, false, false, true, false], pearlDay: dayKey(at(20, 0, 1)), lastSeen: at(20, 0, 1) },
+      { murk: 0.45, owned: [false, false, false, true, false], pearlDay: dayKey(left), lastSeen: left },
     );
-    const lines = loadGame(JSON.stringify(busy), at(9, 0, 2)).away!.lines;
+    const lines = loadGame(JSON.stringify(busy), left + 13 * 3600_000).away!.lines;
     // three stage-ups, hunger, cloudy water and a pearl: hunger is kept, the lowest priorities drop
     expect(lines).toEqual(["Mochi budded into an ephyra.", "Bloop grew into a juvenile.", "Pip grew into an adult.", "Mochi, Bloop and Pip got hungry."]);
     const quiet = back(tank([jelly(0, 3, { fullness: 0.9, name: "Mochi" })], { murk: 0.05, helpers: [true, false, false], lastSeen: T0 }), 30 * MIN).away!;

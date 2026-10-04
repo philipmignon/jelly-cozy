@@ -6892,7 +6892,7 @@ SG_RUST = hx("8a3a1c")
 SG_CORD = hx("d8c8a4")
 SG_DRIFT = ramp("2e2018", "5a4232", "86684e", "b0947a", "d6c2a8")
 # where the jar sits in the hood strip (logical): between the meters (x 49..164) and the HTML requests note
-SG_JAR_X, SG_JAR_BASE = 178, 13
+SG_JAR_X, SG_JAR_BASE = 160, 13  # v16: just right of the narrower meters, clear of the requests note on phones
 SG_JAR_HIT = nid()  # the jar's click target (trigger `finds`)
 
 
@@ -10731,8 +10731,9 @@ btf.append(node("Lamp", gel_lamp_parts() + [image("LampStrip", lamp),  # ---- la
 btf.extend(nursery_nodes())  # ---- nursery ---- over the frame (its hook rides the hood's lip), under the cabinet
 btf.append(image("Cabinet", cabinet_art()))
 # v9: the meters live in the hood strip (logical x 50..166, y 1..11), between the counter and the HTML hood buttons
-BAR_W = 21
-METER_X0, METER_PITCH = 52, 38
+# v16: bars 15 wide (were 21) so the sea-glass jar fits left of the HTML requests note even on a 360 px phone
+BAR_W = 15
+METER_X0, METER_PITCH = 52, 32
 meter_plate = Px()
 for y in range(1, 12):
     for x in range(METER_X0 - 3, METER_X0 + 3 * METER_PITCH - 1):

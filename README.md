@@ -41,17 +41,47 @@ npx tsc --noEmit
 npm test         # unit tests (vitest): the sim, saves, requests, keepsakes, sharing, audio, pacing...
 ```
 
-The browser checks drive headless Chrome (puppeteer-core with the installed Chrome). Each takes its port from an environment variable, so several can run side by side:
+The browser checks drive headless Chrome (puppeteer-core with the installed Chrome). They test the built files in `dist/`, served the way GitHub Pages serves them. Each takes its port from an environment variable, so several can run side by side:
 
 | Command | What it checks | Port |
 | --- | --- | --- |
-| `node tools/e2e.mjs` (`npm run e2e`) | clicks through the dev build: buttons, tools, shop, cards, put away, keyboard play, keepsakes, the room, night visitors and the album, a hidden tab catching up, battery pacing | `E2E_PORT` (5198) |
+| `npm run e2e` (`node tools/e2e.mjs`) | real presses on the tank, flow by flow: buttons, tools, the shop, cards, decor and the drawer, keyboard play, the journal, keepsakes, the album, share and backup codes, the room, seasons and night visitors, a hidden tab catching up, battery pacing | `E2E_PORT` (5198) |
 | `node tools/offline.mjs` | the Pages build's service worker: repeat visits, offline play, the update chip | `OFFLINE_PORT` (5197) |
 | `node tools/phones.mjs` | screenshots at common phone and tablet sizes into `shots/`; fails if a phone fetches the room or the settings menu runs off the screen | `PHONES_PORT` (5195) |
 | `node tools/loadtime.mjs` | time to first frame over fast and slow 4G, for a new and a full tank, with and without the Halloween art | `LOAD_PORT` (5196) |
 | `node tools/battery.mjs` | CPU time and frame rate of an idle, a busy and a hidden tank, at full speed and with 4x CPU throttling | `BATTERY_PORT` (5199) |
 
-All but `e2e.mjs` test the built files in `dist/`, served the way GitHub Pages serves them: run `npm run build` first.
+`npm run e2e` rebuilds `dist/` first when the sources are newer; the others need `npm run build` first.
+
+### The e2e flows
+
+Each file in `tools/e2e/flows/` is one flow: it opens the tank in a fresh browser context with a save of its own, drives it, and reports its own checks. A flow that throws fails alone. The runner (`tools/e2e.mjs`) runs several flows at once, retries a failed one on a fresh browser, and prints a table. A flow that passes on the retry is FLAKY: the run still exits 0 and names it in a warning. A flow that fails twice fails the run. The runner writes the whole run to `shots/e2e-report.json` and the screenshots to `shots/e2e-*.png`.
+
+```sh
+npm run e2e                    # every flow, on this machine's GPU
+npm run e2e -- shop keyboard   # just these
+npm run e2e:ci                 # what CI runs after `npm run build`: software GL, no build
+```
+
+| Variable | Default | |
+| --- | --- | --- |
+| `E2E_PORT` | 5198 | the static server's port (0 picks a free one) |
+| `E2E_WORKERS` | half the CPUs, at most 4 | flows at once, one browser each |
+| `E2E_GPU` | the machine's GPU; `swiftshader` when `CI` is set | `swiftshader` for software GL |
+| `E2E_BUILD` | rebuild when stale; never in CI | `1` always rebuilds, `0` never does |
+| `E2E_FLOW_TIMEOUT` | 150000 (300000 with software GL) | ms one attempt may take |
+| `E2E_RETRIES` | 1 | retries for a failed flow |
+| `E2E_FLOWS` | all | a comma-separated list of flows |
+| `E2E_CHROME` | the installed Google Chrome | a Chrome binary to drive instead |
+| `E2E_STATE` | off | `1` writes the tank's state beside each screenshot (`shots/e2e-*.json`) |
+
+The flows drive the tank through a test API, `window.__jt` (`src/testapi.ts`). It loads only when the URL asks for test mode, as a separate chunk that players never download:
+
+- `?test=1` turns it on.
+- `?seed=N` seeds every random stream the sim uses (and turns on test mode).
+- `?clock=virtual` stops the frame loop: frames come only when the test calls `__jt.advance(ms)`, in fixed steps, and `Date.now()` moves with them. Run the same steps from the same save and you get the same pixels. `?now=` sets where that clock starts.
+
+`__jt` has `ready()`, `idle()`, `advance(ms)`, `frames(n)`, `setTime(ms)`, `passTime(ms)`, `seed(n)`, `place(slot, x, y)`, `spawnVisitor(kind)`, `setNight(on)`, `setSeason(id)`, `addSpot(x, y)`, `spotDirt(i)`, `loadSave(save)`, `state()` and `toClient(x, y)`; `src/testapi.ts` documents each. Most flows run on the virtual clock. The hidden-tab and battery flows run on the real one, since frame timing is what they test.
 
 ## Redraw the art
 
@@ -84,5 +114,6 @@ GitHub Pages is the game's only home. `.github/workflows/pages.yml` runs the uni
 - `src/share.ts`, `src/tankcode.ts`: share codes and save backups
 - `src/season.ts`, `src/photo.ts`, `src/spritegroups.ts`: seasons, photo mode, on-demand sprite groups
 - `src/sw.js`, `src/offline.ts`: the Pages service worker and its registration
-- `tools/`: the browser checks above
+- `tools/`: the browser checks above (`tools/e2e/`: the e2e flows and their shared helpers)
+- `src/testmode.ts`, `src/testapi.ts`: test mode and `window.__jt` (loaded only with `?test=1`, `?seed=` or `?clock=virtual`)
 - `docs/`: feature specs from earlier versions

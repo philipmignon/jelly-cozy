@@ -18,6 +18,8 @@ import { registerOffline, updateChip } from "./offline";
 import { activeSeason, readSeasonDecor, seasonalMorph, writeSeasonDecor } from "./season";
 import { createRequestNote, type RequestNote } from "./requestnote";
 import { attachRoom, type Room } from "./roomfit";
+import { testQuery } from "./testmode";
+import type { TestHost } from "./testapi";
 import { SPECIES_NAMES, TAB_N, keepsakeOf } from "./species";
 import { createSpriteGroups, eventGroup, groupsFor, jellyGroups, speciesGroup, useSpriteGroups } from "./spritegroups";
 import {
@@ -111,6 +113,8 @@ const VISIT_CODE = DEMO ? null : pendingVisit();
 const VISIT_SAVE = VISIT_CODE ? importTank(VISIT_CODE) : null;
 const READ_ONLY = DEMO || VISIT_SAVE !== null;
 const TIPS_KEY = "jellytank:tips";
+/** Test mode (?test=1, ?seed=N, ?clock=virtual: src/testmode.ts), null in normal play. */
+const TEST_Q = testQuery(location.search);
 
 /** Set while a restored save is being written: the reload's own pagehide save must not overwrite it. */
 let savesSuspended = false;
@@ -174,6 +178,8 @@ function artToClient(canvas: HTMLCanvasElement, x: number, y: number) {
 async function main() {
   RuntimeLoader.setWasmUrl(wasmUrl);
   void RuntimeLoader.awaitInstance(); // start fetching + compiling the engine before anything else
+  // tests only: window.__jt, seeded randomness, the virtual clock (src/testapi.ts, a chunk normal play never loads)
+  const T: TestHost | null = TEST_Q ? (await import("./testapi")).createTestHost(TEST_Q) : null;
   const canvas = document.getElementById("tank") as HTMLCanvasElement;
   const growthMultiplier = new URLSearchParams(location.search).get("fast") === "1" ? 20 : 1;
   const raw = READ_ONLY ? null : readSave();
@@ -183,7 +189,8 @@ async function main() {
       ? { save: demoSave(Date.now()), away: null }
       : loadGame(raw, Date.now(), { growthMultiplier });
   // daily requests and seasonal (ghost) births only in the player's own tank: not the demo, not someone else's
-  const state = createState(loaded.save, Math.random, {
+  const state = createState(loaded.save, T ? T.rand : Math.random, {
+    ...(T?.seed != null ? { seed: T.seed } : {}),
     growthMultiplier: DEMO ? 1 : growthMultiplier,
     requests: !READ_ONLY,
     keepsakes: !READ_ONLY, // v13: milestones only count (and keepsakes only unlock) in the player's own tank
@@ -258,7 +265,7 @@ async function main() {
   applyMotion(readReducedMotion(store, !!osCalm?.matches));
   osCalm?.addEventListener?.("change", () => applyMotion(readReducedMotion(store, osCalm.matches))); // unless the player chose
   /** the event the calendar, ?season= and the decor setting ask for (its art may still be on the way) */
-  const wantedEvent = () => activeSeason(Date.now(), location.search, seasonDecor)?.id ?? null;
+  const wantedEvent = () => (T && T.season !== undefined ? T.season : activeSeason(Date.now(), location.search, seasonDecor)?.id ?? null);
   /** the jellies' groups (species, and a ghost's event art) plus the wanted event's; `near` = only those on screen */
   const tankGroups = (near = Infinity) => {
     const { x0, x1 } = viewSpan(state);
@@ -314,12 +321,14 @@ async function main() {
 
   // frames come from our own loop (src/pace.ts): every display frame while something is happening, 30 a
   // second once the tank has been quiet a few seconds, or always with the battery saver on. Any input wakes it.
-  const pacer = createPacer(rive, {
-    raf: (cb) => requestAnimationFrame(cb),
-    caf: (id) => cancelAnimationFrame(id),
-    now: () => performance.now(),
-    reduced: () => reduceMotion,
-  });
+  const realPacer = () =>
+    createPacer(rive, {
+      raf: (cb) => requestAnimationFrame(cb),
+      caf: (id) => cancelAnimationFrame(id),
+      now: () => performance.now(),
+      reduced: () => reduceMotion,
+    });
+  const pacer = T ? T.pacer(rive, realPacer) : realPacer(); // a virtual clock draws only when the test asks
   pacer.saver = readBatterySaver(store);
   for (const type of ["pointerdown", "pointermove", "wheel", "keydown"] as const) window.addEventListener(type, () => pacer.wake(), { capture: true, passive: true });
   pacer.start();
@@ -639,7 +648,7 @@ async function main() {
   let photoBusy = false;
   /** n frames drawn (not display frames: at the calm rate only every other one is) */
   const frames = (n: number) =>
-    new Promise<void>((resolve) => {
+    T?.virtual ? T.frames(n) : new Promise<void>((resolve) => {
       const until = pacer.drawn + n;
       const f = () => (pacer.drawn >= until ? resolve() : requestAnimationFrame(f));
       requestAnimationFrame(f);
@@ -765,7 +774,8 @@ async function main() {
   let room: Room | null = null; // v15: the room beside the tank on wide screens
   let cardTick = 0;
   let reqTick = 0;
-  rive.on(EventType.Advance, () => {
+  rive.on(EventType.Advance, (e) => {
+    if (T?.virtual && T.frameDt(e) === 0) return; // a virtual clock's redraw (a resize, the photo): no time passed
     if (!loadedFrame && groupsSettled) {
       loadedFrame = true;
       groups.prefetch(affordableGroups());
@@ -788,8 +798,8 @@ async function main() {
     }
     overlay.placeTip();
     kb.frame();
-    const now = performance.now();
-    const dt = Math.min(0.1, (now - last) / 1000);
+    const now = T ? T.frameNow() : performance.now();
+    const dt = T?.virtual ? T.frameDt(e) : Math.min(0.1, (now - last) / 1000);
     last = now;
 
     let lastKind = "";
@@ -914,6 +924,24 @@ async function main() {
     if (overlay.cardSlot !== null && (cardTick = (cardTick + 1) % 15) === 0) overlay.updateCard(cardInfo(overlay.cardSlot));
     // v12: the note follows the requests' progress (and a new day's list after midnight)
     if (reqNote && (reqTick = (reqTick + 1) % 12) === 0) reqNote.update(requests(state)?.items ?? null);
+  });
+
+  T?.attach({
+    state,
+    rive,
+    saveKey: SAVE_KEY,
+    suspendSaves: () => (savesSuspended = true),
+    groups,
+    tankGroups: () => tankGroups(),
+    applySeason,
+    loaded: () => loadedFrame,
+    groupsSettled: () => groupsSettled,
+    fading: () => {
+      const now = T.frameNow();
+      return state.slots.some((j) => j && jellyGroups(j).some((g) => !groups.isReady(g) || (hiddenFor.has(g) && (!arrivedAt.has(g) || now - arrivedAt.get(g)! < FADE_IN_MS))));
+    },
+    client,
+    wclient,
   });
 
   // not while hidden: nothing changes then (no frames, no steps), and hiding saved already

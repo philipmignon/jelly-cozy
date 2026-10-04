@@ -7,7 +7,8 @@ import { defineConfig } from "vitest/config";
  * the hashed bundle (JS, wasm, .riv), the manifest and icons. Sprite groups are cached as the tank fetches them
  * (keyed by their ?v= hash); the list here only tells an update which cached groups are still current.
  * The room (src/room.ts, its chunk and sprites/room.json) is only for wide screens: cached like a sprite group when
- * it is fetched, never precached, so a phone never downloads it.
+ * it is fetched, never precached, so a phone never downloads it. The test API's chunk (src/testapi.ts, loaded only
+ * with ?test=1) is never precached: a player never downloads it.
  */
 function serviceWorker() {
   return {
@@ -20,7 +21,8 @@ function serviceWorker() {
       };
       const icons = readdirSync("public/icons").filter((f) => f.endsWith(".png")).map((f) => `icons/${f}`);
       const wideOnly = (f: string) => /^assets\/room-[^/]*\.js$/.test(f);
-      const assets = Object.keys(bundle).filter((f) => f.startsWith("assets/"));
+      const testOnly = (f: string) => /^assets\/testapi-[^/]*\.js$/.test(f);
+      const assets = Object.keys(bundle).filter((f) => f.startsWith("assets/") && !testOnly(f));
       const precache = ["./", ...assets.filter((f) => !wideOnly(f)).sort(), "manifest.webmanifest", ...icons];
       const groups = [...Object.values(contract.assetGroups ?? {}), ...(contract.room ? [contract.room] : [])];
       const versioned = [...groups.map((g) => `${g.file}?v=${g.v}`), ...assets.filter(wideOnly)].sort();

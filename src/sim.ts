@@ -619,6 +619,11 @@ export interface SimOptions {
   requests?: boolean;
   /** v13: evaluate the journal's milestones and grant keepsakes (the host's own tank). Off by default, like requests. */
   keepsakes?: boolean;
+  /**
+   * Tests (?seed=N, src/testmode.ts): the dirt's and the traits' own random streams start from this instead of the
+   * save's clock, so a seeded tank (with `rand` seeded too) plays out the same whenever it is loaded.
+   */
+  seed?: number;
 }
 
 /** v1 geometry, kept for reference: the moon adult. */
@@ -1235,8 +1240,9 @@ export function createState(save: Save, rand: () => number = Math.random, opts: 
   const nightNow = lamp ? lamp.night : isNightByClock(clock);
   // the glass: the saved spots (older hand-made saves: spots for their murk)
   // the dirt has its own random stream, so it doesn't shift everything else's
-  const dirtRand = rng(Math.floor(clock / 1000) + 11);
-  const spots = spotSlots(Array.isArray(save.spots) ? spotsFromSave(save.spots, right) : spotsForMurk(finite(save.murk, 0.1), right, rng(clock)));
+  const seed = opts.seed !== undefined && Number.isFinite(opts.seed) ? Math.floor(opts.seed) : null;
+  const dirtRand = rng((seed ?? Math.floor(clock / 1000)) + 11);
+  const spots = spotSlots(Array.isArray(save.spots) ? spotsFromSave(save.spots, right) : spotsForMurk(finite(save.murk, 0.1), right, rng(seed ?? clock)));
   const state: State = {
     t: 0,
     rand,
@@ -1293,7 +1299,7 @@ export function createState(save: Save, rand: () => number = Math.random, opts: 
     requests: requestsOf(save.requests),
     requestsOn: opts.requests === true,
     seasonalMorph: opts.seasonalMorph ?? null,
-    traitRand: rng(Math.floor(clock / 1000) + 23),
+    traitRand: rng((seed ?? Math.floor(clock / 1000)) + 23),
     cursorTravel: 0,
     cursorSpeed: 0,
     keep: keepOf(save.keep),
@@ -2467,6 +2473,30 @@ function tapVisitor(s: State, v: Visit): void {
 }
 
 /**
+ * Visitor kind k (index into VISITORS) comes in now, if a path for it fits the view: the sighting is noted and the
+ * curious jellies go to say hello. False (and nothing drawn from s.rand beyond planning) if it doesn't fit.
+ * stepVisitors calls it for the kinds it picks; tests call it directly (__jt.spawnVisitor), with events going to
+ * s.queued for the next step.
+ */
+export function arriveVisitor(s: State, k: number, events: SimEvent[] = s.queued): boolean {
+  if (!Number.isInteger(k) || k < 0 || k >= VISITORS.length) return false;
+  const v = planVisit(k, visitStretch(s), s.tier, s.rand, { home: hermitHome(s) });
+  if (!v) return false;
+  s.visit = v;
+  s.lastVisitor = k;
+  const first = noteSighting(s.visitorsSeen, VISITORS[k]!, s.clock);
+  events.push(first ? { type: "visitorArrived", kind: VISITORS[k]!, first } : { type: "visitorArrived", kind: VISITORS[k]! });
+  // v13: curious jellies are the first to say hello
+  for (const j of jellies(s)) {
+    if (j.mode !== "swim" || j.trait !== CURIOUS || j.targetKind === "food" || j.targetKind === "tap") continue;
+    j.targetKind = "visit";
+    j.targetUntil = s.t + CURIOUS_VISIT;
+    j.ride = 0;
+  }
+  return true;
+}
+
+/**
  * Schedule and run the visitors. One every 3-6 minutes, never while the shop is up (nor during a
  * jelly's close-up or the wall sliding out): it waits until those are done. While the shop is up an
  * ongoing visit holds still (the panel covers it). The diver cleans the glass while it works.
@@ -2486,22 +2516,7 @@ function stepVisitors(s: State, dt: number, events: SimEvent[]): void {
     // v14: deep in the night, now and then a night visitor comes instead (a day one if none fits the view)
     if (nightVisitTime(s) && s.rand() < NIGHT_VISIT_CHANCE)
       kinds = [...shuffled(VISITORS.map((_, k) => k).filter((k) => k !== s.lastVisitor && nightVisitor(k) && visitsDuring(k, s.event))), ...kinds];
-    for (const k of kinds) {
-      const v = planVisit(k, visitStretch(s), s.tier, s.rand, { home: hermitHome(s) });
-      if (!v) continue;
-      s.visit = v;
-      s.lastVisitor = k;
-      const first = noteSighting(s.visitorsSeen, VISITORS[k]!, s.clock);
-      events.push(first ? { type: "visitorArrived", kind: VISITORS[k]!, first } : { type: "visitorArrived", kind: VISITORS[k]! });
-      // v13: curious jellies are the first to say hello
-      for (const j of jellies(s)) {
-        if (j.mode !== "swim" || j.trait !== CURIOUS || j.targetKind === "food" || j.targetKind === "tap") continue;
-        j.targetKind = "visit";
-        j.targetUntil = s.t + CURIOUS_VISIT;
-        j.ride = 0;
-      }
-      break;
-    }
+    for (const k of kinds) if (arriveVisitor(s, k, events)) break;
     if (!s.visit) s.nextVisit = s.t + 10; // nothing fits this view: try again shortly
     return;
   }

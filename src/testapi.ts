@@ -21,6 +21,7 @@ import type { Pacer } from "./pace";
 import type { SeasonId } from "./season";
 import { clearVisit } from "./share";
 import { eventGroup, type SpriteGroups } from "./spritegroups";
+import { loadJournalArt } from "./journalart";
 import { VIRTUAL_EPOCH, type TestQuery } from "./testmode";
 import { VISITORS, arriveVisitor, camMoving, murkOf, shopY, toggleLamp, type State } from "./sim";
 
@@ -235,6 +236,7 @@ export function createTestHost(q: TestQuery): TestHost {
         await until(() => c.loaded(), "the first frame", 30_000);
         if (!virtual) await until(() => !c.fading(), "the jellies' art", 15_000);
         await until(() => !document.getElementById("loading"), "the loading screen to go");
+        await loadJournalArt(); // the journal's portraits (prefetched after the first frame)
       },
       /** Resolves when nothing is mid-way: the shop, the drawer, the close-up, the nursery bowl, the camera, the wall, the night fade,
        *  the pan hints, a jelly fading in, and the HTML overlays' CSS transitions. Virtual: steps frames until then. */

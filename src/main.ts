@@ -7,6 +7,7 @@ import { attachKeyboard, type ButtonName, type Keyboard } from "./keyboard";
 import { readReducedMotion, writeReducedMotion } from "./a11y";
 import { createSettings } from "./hud";
 import { createJournal } from "./journal";
+import { loadJournalArt } from "./journalart";
 import { openAlbum, shrink } from "./album";
 import { createAlbumPage } from "./albumpage";
 import { createKeepNote, type KeepNoteEntry } from "./keepnote";
@@ -1059,6 +1060,7 @@ async function main() {
     if (!loadedFrame && groupsSettled) {
       loadedFrame = true;
       groups.prefetch(affordableGroups());
+      void loadJournalArt(); // v16: the journal's portraits, off the first-frame path but in before anyone opens it
       const el = document.getElementById("loading");
       el?.classList.add("done");
       setTimeout(() => el?.remove(), 600);

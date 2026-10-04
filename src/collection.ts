@@ -8,6 +8,7 @@
  * the drawer (a polite live region). The page scrolls on short screens (the scroll area takes focus).
  */
 import type { JournalExtraPage } from "./journal";
+import { journalArt } from "./journalart";
 
 /** What the page shows (sim.ts collection(s)). */
 export interface CollectionData {
@@ -16,10 +17,8 @@ export interface CollectionData {
   total: number;
 }
 
-const ART: Record<string, string> = (() => {
-  const mods = import.meta.glob("./journal-art.json", { eager: true, import: "default" }) as Record<string, Record<string, string>>;
-  return Object.values(mods)[0] ?? {};
-})();
+// the portraits load on first need (./journalart.ts); the journal draws this page again once they're in
+const ART = new Proxy({} as Record<string, string>, { get: (_, key) => journalArt()[key as string] });
 
 const FONT = `"Silkscreen", ui-monospace, Menlo, monospace`;
 const COLS = 5;

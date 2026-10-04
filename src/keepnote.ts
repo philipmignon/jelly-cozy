@@ -1,4 +1,5 @@
 import { focusReturn } from "./a11y";
+import { journalArt, loadJournalArt } from "./journalart";
 
 /**
  * Keepsake notes (v13): a small card over the tank when a journal milestone leaves something in it: the
@@ -27,10 +28,8 @@ export interface KeepNote {
   readonly isOpen: boolean;
 }
 
-const ART: Record<string, string> = (() => {
-  const mods = import.meta.glob("./journal-art.json", { eager: true, import: "default" }) as Record<string, Record<string, string>>;
-  return Object.values(mods)[0] ?? {};
-})();
+// the portraits load on first need (./journalart.ts); show() waits for them
+const ART = new Proxy({} as Record<string, string>, { get: (_, key) => journalArt()[key as string] });
 
 const FONT = `"Silkscreen", ui-monospace, Menlo, monospace`;
 const CSS = `
@@ -104,7 +103,8 @@ export function createKeepNote(journal: (place?: string) => void): KeepNote {
   });
 
   return {
-    show(entries) {
+    async show(entries) {
+      await loadJournalArt(); // the keepsake's portrait (a note can come up before the prefetch is in)
       return new Promise((resolve) => {
         const one = entries.length === 1;
         card.replaceChildren();

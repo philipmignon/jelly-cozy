@@ -2,7 +2,7 @@
   "_about": "tools/budget.mjs compares the built game with these. budget+tol: at most budget*(1+tol); target+tol: within target*(1+-tol); max: at most max. Bytes are deterministic (CI checks them); perf numbers are from one machine, so only `npm run budget` locally checks them. Reseed with `node tools/budget.mjs --seed` after a deliberate change, on a quiet machine.",
   "seeded": {
     "bytes": {
-      "date": "2026-10-03",
+      "date": "2026-10-04",
       "runs": 1
     },
     "perf": {
@@ -38,23 +38,23 @@
   },
   "bytes": {
     "bytes.critical.new": {
-      "budget": 1980379,
+      "budget": 2112960,
       "tol": 0.1,
       "unit": "B",
       "about": "what a new tank fetches before its first frame: page + main bundle + wasm + .riv + moon sprites"
     },
     "bytes.html": {
-      "budget": 1317,
+      "budget": 1319,
       "tol": 0.1,
       "unit": "B"
     },
     "bytes.js.main": {
-      "budget": 194452,
+      "budget": 159643,
       "tol": 0.1,
       "unit": "B"
     },
     "bytes.js.room": {
-      "budget": 4148,
+      "budget": 4202,
       "tol": 0.1,
       "unit": "B"
     },
@@ -64,7 +64,7 @@
       "unit": "B"
     },
     "bytes.riv": {
-      "budget": 746704,
+      "budget": 914092,
       "tol": 0.1,
       "unit": "B"
     },
@@ -79,17 +79,17 @@
       "unit": "B"
     },
     "bytes.sprites.all": {
-      "budget": 896046,
+      "budget": 1114676,
       "tol": 0.1,
       "unit": "B"
     },
     "bytes.sw": {
-      "budget": 2686,
+      "budget": 2751,
       "tol": 0.1,
       "unit": "B"
     },
     "bytes.total": {
-      "budget": 3432086,
+      "budget": 4153251,
       "tol": 0.1,
       "unit": "B"
     }

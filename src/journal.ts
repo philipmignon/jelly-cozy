@@ -8,6 +8,7 @@
  * page too) comes straight after the Keepsakes.
  */
 import { focusReturn } from "./a11y";
+import { journalArt, loadJournalArt } from "./journalart";
 import { captionDate } from "./photo";
 import type { VisitorRow } from "./visitlog";
 import { SPECIES_NAMES } from "./species";
@@ -88,11 +89,8 @@ const MORPH_ROWS = [
 /** v16: what an unfound pair colour's row says (how is a secret until one is raised) */
 const PAIR_HINT = "Only a pair's baby";
 
-// the portraits are generated; until they exist the book shows a placeholder dot
-const ART: Record<string, string> = (() => {
-  const mods = import.meta.glob("./journal-art.json", { eager: true, import: "default" }) as Record<string, Record<string, string>>;
-  return Object.values(mods)[0] ?? {};
-})();
+// the portraits are generated and load on first need (./journalart.ts); until then the book shows a placeholder dot
+const ART = new Proxy({} as Record<string, string>, { get: (_, key) => journalArt()[key as string] });
 
 const FONT = `"Silkscreen", ui-monospace, Menlo, monospace`;
 const CSS = `
@@ -462,6 +460,11 @@ export function createJournal(pages: () => JournalPage[], keepsakes?: () => Keep
     open(at?: JournalPlace) {
       if (at && after.includes(at)) page = speciesCount() + after.indexOf(at);
       render();
+      // the portraits (usually prefetched by now): once they're in, draw the page again with them
+      const had = journalArt();
+      void loadJournalArt().then((a) => {
+        if (a !== had && !book.hidden) render();
+      });
       if (book.hidden) back.opened();
       book.hidden = false;
       $<HTMLButtonElement>(".next").focus({ preventScroll: true });
